@@ -4,6 +4,7 @@ package core
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"sync"
 
@@ -119,10 +120,26 @@ func NewConfigManager(filePath string, bus *EventBus) *ConfigManager {
 	}
 }
 
+// defaultConfig returns an empty but valid configuration.
+func defaultConfig() Config {
+	return Config{}
+}
+
 // Load reads and parses the configuration from disk.
+// If the config file does not exist, it creates one with default values.
 func (cm *ConfigManager) Load() error {
 	data, err := os.ReadFile(cm.filePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("[Core] Config %s not found, creating default config", cm.filePath)
+			cm.mu.Lock()
+			cm.config = defaultConfig()
+			cm.mu.Unlock()
+			if saveErr := cm.Save(); saveErr != nil {
+				return fmt.Errorf("[Core] failed to create default config: %w", saveErr)
+			}
+			return nil
+		}
 		return fmt.Errorf("[Core] failed to read config %s: %w", cm.filePath, err)
 	}
 

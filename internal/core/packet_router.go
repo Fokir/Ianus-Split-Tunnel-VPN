@@ -40,6 +40,10 @@ type PacketRouter struct {
 	natMu sync.RWMutex
 	nat   map[string]NATEntry
 
+	// Proxy port set for O(1) lookup on hot path.
+	proxyPortsMu sync.RWMutex
+	proxyPorts   map[uint16]struct{}
+
 	// Pre-allocated gopacket layers for zero-alloc parsing.
 	// These are ONLY used inside the filter callback — single-threaded.
 	eth     layers.Ethernet
@@ -49,6 +53,10 @@ type PacketRouter struct {
 	payload gopacket.Payload
 	parser  *gopacket.DecodingLayerParser
 	decoded []gopacket.LayerType
+
+	// Pre-allocated serialize buffer for zero-alloc packet serialization.
+	// ONLY used inside the filter callback — single-threaded.
+	serBuf gopacket.SerializeBuffer
 
 	adapterIndex int
 }
@@ -72,7 +80,9 @@ func NewPacketRouter(
 		rules:        rules,
 		bus:          bus,
 		nat:          make(map[string]NATEntry),
+		proxyPorts:   make(map[uint16]struct{}),
 		decoded:      make([]gopacket.LayerType, 0, 4),
+		serBuf:       gopacket.NewSerializeBuffer(),
 		adapterIndex: adapterIndex,
 	}
 
@@ -299,33 +309,47 @@ func (pr *PacketRouter) handleExistingConnection(
 	return A.FilterActionRedirect
 }
 
+// RegisterProxyPort adds a port to the proxy port set for O(1) hot-path lookup.
+func (pr *PacketRouter) RegisterProxyPort(port uint16) {
+	pr.proxyPortsMu.Lock()
+	pr.proxyPorts[port] = struct{}{}
+	pr.proxyPortsMu.Unlock()
+}
+
+// UnregisterProxyPort removes a port from the proxy port set.
+func (pr *PacketRouter) UnregisterProxyPort(port uint16) {
+	pr.proxyPortsMu.Lock()
+	delete(pr.proxyPorts, port)
+	pr.proxyPortsMu.Unlock()
+}
+
 // isProxySourcePort checks if the source port belongs to one of our tunnel proxies.
+// O(1) map lookup — safe for the hot path.
 func (pr *PacketRouter) isProxySourcePort(port uint16) bool {
-	for _, entry := range pr.registry.All() {
-		if entry.ProxyPort == port {
-			return true
-		}
-	}
-	return false
+	pr.proxyPortsMu.RLock()
+	_, ok := pr.proxyPorts[port]
+	pr.proxyPortsMu.RUnlock()
+	return ok
 }
 
 // serializePacket recomputes checksums and writes the modified packet back.
+// Uses pre-allocated serialize buffer — zero allocations on hot path.
 func (pr *PacketRouter) serializePacket(b *A.IntermediateBuffer) {
 	pr.tcp.SetNetworkLayerForChecksum(&pr.ip4)
 
-	buf := gopacket.NewSerializeBuffer()
+	pr.serBuf.Clear()
 	opts := gopacket.SerializeOptions{
 		FixLengths:       false,
 		ComputeChecksums: true,
 	}
 
-	if err := gopacket.SerializeLayers(buf, opts,
+	if err := gopacket.SerializeLayers(pr.serBuf, opts,
 		&pr.eth, &pr.ip4, &pr.tcp, gopacket.Payload(pr.tcp.Payload),
 	); err != nil {
 		return
 	}
 
-	data := buf.Bytes()
+	data := pr.serBuf.Bytes()
 	copy(b.Buffer[:len(data)], data)
 	b.Length = uint32(len(data))
 }

@@ -5,9 +5,11 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"awg-split-tunnel/internal/core"
@@ -17,17 +19,32 @@ import (
 	"awg-split-tunnel/internal/proxy"
 )
 
+// Build info — injected via ldflags at compile time.
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildDate = "unknown"
+)
+
 func main() {
 	configPath := flag.String("config", "config.yaml", "Path to configuration file")
+	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
+	if *showVersion {
+		fmt.Printf("awg-split-tunnel %s (commit=%s, built=%s)\n", version, commit, buildDate)
+		os.Exit(0)
+	}
+
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	log.Println("[Core] AWG Split Tunnel starting...")
+	log.Printf("[Core] AWG Split Tunnel %s starting...", version)
 
 	// --- Initialize core components ---
 	bus := core.NewEventBus()
 
-	cfgManager := core.NewConfigManager(*configPath, bus)
+	// Resolve config path relative to executable location if not absolute.
+	resolvedConfigPath := resolveRelativeToExe(*configPath)
+	cfgManager := core.NewConfigManager(resolvedConfigPath, bus)
 	if err := cfgManager.Load(); err != nil {
 		log.Fatalf("[Core] Failed to load config: %v", err)
 	}
@@ -66,8 +83,14 @@ func main() {
 
 		switch tcfg.Protocol {
 		case "amneziawg":
+			configFile := getStringSetting(tcfg.Settings, "config_file", "")
+			if configFile != "" {
+				configFile = resolveRelativeToExe(configFile)
+			}
 			awgCfg := amneziawg.Config{
-				AdapterIP: getStringSetting(tcfg.Settings, "adapter_ip", "10.8.1.2"),
+				ConfigFile:  configFile,
+				AdapterName: getStringSetting(tcfg.Settings, "adapter_name", ""),
+				AdapterIP:   getStringSetting(tcfg.Settings, "adapter_ip", "10.8.1.2"),
 			}
 			p, err := amneziawg.New(tcfg.Name, awgCfg)
 			if err != nil {
@@ -88,6 +111,9 @@ func main() {
 		}
 
 		providers[tcfg.ID] = prov
+
+		// Register proxy port for O(1) hot-path lookup.
+		router.RegisterProxyPort(proxyPort)
 
 		// Create transparent proxy for this tunnel.
 		tp := proxy.NewTunnelProxy(proxyPort, router.LookupNAT, providerLookup)
@@ -150,4 +176,18 @@ func getStringSetting(settings map[string]any, key, defaultVal string) string {
 		}
 	}
 	return defaultVal
+}
+
+// resolveRelativeToExe resolves a relative path against the directory containing
+// the running executable. Absolute paths are returned unchanged.
+func resolveRelativeToExe(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("[Core] Cannot determine executable path, using %q as-is: %v", path, err)
+		return path
+	}
+	return filepath.Join(filepath.Dir(exe), path)
 }
