@@ -20,11 +20,26 @@ import (
 	"github.com/google/gopacket/layers"
 )
 
+// natKey is a compact, allocation-free key for NAT maps.
+// Layout: 4 bytes IPv4 address + 2 bytes port (big-endian).
+// Used instead of netip.AddrPort.String() to eliminate per-packet string allocations.
+type natKey [6]byte
+
+func makeNATKey(ip netip.Addr, port uint16) natKey {
+	var k natKey
+	ip4 := ip.As4()
+	copy(k[:4], ip4[:])
+	k[4] = byte(port >> 8)
+	k[5] = byte(port)
+	return k
+}
+
 // NATEntry maps a redirected TCP connection back to its original destination.
 type NATEntry struct {
 	OriginalDstIP   netip.Addr
 	OriginalDstPort uint16
 	TunnelID        string
+	ProxyPort       uint16 // cached to avoid per-packet registry lookup
 }
 
 // UDPNATEntry maps a redirected UDP flow back to its original destination.
@@ -35,6 +50,7 @@ type UDPNATEntry struct {
 	OriginalDstIP   netip.Addr
 	OriginalDstPort uint16
 	TunnelID        string
+	UDPProxyPort    uint16 // cached to avoid per-packet registry lookup
 }
 
 // PacketRouter intercepts network packets via NDISAPI, performs process-based
@@ -49,18 +65,18 @@ type PacketRouter struct {
 	rules    *RuleEngine
 	bus      *EventBus
 
-	// TCP NAT table: key = "dstIP:srcPort" (invariant across hairpin redirect).
+	// TCP NAT table: key = dstIP:srcPort as [6]byte (invariant across hairpin redirect).
 	natMu sync.RWMutex
-	nat   map[string]NATEntry
+	nat   map[natKey]NATEntry
 
 	// TCP proxy port set for O(1) lookup on hot path.
 	proxyPortsMu sync.RWMutex
 	proxyPorts   map[uint16]struct{}
 
-	// UDP NAT table: key = "dstIP:srcPort" (invariant across hairpin redirect).
+	// UDP NAT table: key = dstIP:srcPort as [6]byte (invariant across hairpin redirect).
 	// Stores pointers for lock-free atomic LastActivity updates on hot path.
 	udpNatMu sync.RWMutex
-	udpNat   map[string]*UDPNATEntry
+	udpNat   map[natKey]*UDPNATEntry
 
 	// UDP proxy port set for O(1) lookup on hot path.
 	udpProxyPortsMu sync.RWMutex
@@ -101,9 +117,9 @@ func NewPacketRouter(
 		registry:      registry,
 		rules:         rules,
 		bus:           bus,
-		nat:           make(map[string]NATEntry),
+		nat:           make(map[natKey]NATEntry),
 		proxyPorts:    make(map[uint16]struct{}),
-		udpNat:        make(map[string]*UDPNATEntry),
+		udpNat:        make(map[natKey]*UDPNATEntry),
 		udpProxyPorts: make(map[uint16]struct{}),
 		decoded:       make([]gopacket.LayerType, 0, 4),
 		serBuf:        gopacket.NewSerializeBuffer(),
@@ -321,12 +337,13 @@ func (pr *PacketRouter) handleSYN(
 
 	// Tunnel is UP — redirect through proxy via NAT hairpin.
 	// Key = dstIP:srcPort — invariant across hairpin (proxy sees same key via RemoteAddr).
-	natKey := netip.AddrPortFrom(dst.Addr(), src.Port()).String()
+	nk := makeNATKey(dst.Addr(), src.Port())
 	pr.natMu.Lock()
-	pr.nat[natKey] = NATEntry{
+	pr.nat[nk] = NATEntry{
 		OriginalDstIP:   dst.Addr(),
 		OriginalDstPort: dst.Port(),
 		TunnelID:        result.TunnelID,
+		ProxyPort:       entry.ProxyPort,
 	}
 	pr.natMu.Unlock()
 
@@ -341,10 +358,10 @@ func (pr *PacketRouter) handleSYN(
 
 // handleProxyResponse handles packets from a tunnel proxy back to the client.
 func (pr *PacketRouter) handleProxyResponse(b *A.IntermediateBuffer, dst netip.AddrPort) A.FilterAction {
-	natKey := dst.String()
+	nk := makeNATKey(dst.Addr(), dst.Port())
 
 	pr.natMu.RLock()
-	entry, ok := pr.nat[natKey]
+	entry, ok := pr.nat[nk]
 	pr.natMu.RUnlock()
 	if !ok {
 		return A.FilterActionPass
@@ -353,7 +370,7 @@ func (pr *PacketRouter) handleProxyResponse(b *A.IntermediateBuffer, dst netip.A
 	// Clean up NAT entry on FIN/RST.
 	if pr.tcp.FIN || pr.tcp.RST {
 		pr.natMu.Lock()
-		delete(pr.nat, natKey)
+		delete(pr.nat, nk)
 		pr.natMu.Unlock()
 	}
 
@@ -374,10 +391,10 @@ func (pr *PacketRouter) handleExistingConnection(
 	b *A.IntermediateBuffer,
 	src, dst netip.AddrPort,
 ) A.FilterAction {
-	natKey := netip.AddrPortFrom(dst.Addr(), src.Port()).String()
+	nk := makeNATKey(dst.Addr(), src.Port())
 
 	pr.natMu.RLock()
-	entry, ok := pr.nat[natKey]
+	entry, ok := pr.nat[nk]
 	pr.natMu.RUnlock()
 	if !ok {
 		return A.FilterActionPass
@@ -386,20 +403,14 @@ func (pr *PacketRouter) handleExistingConnection(
 	// Clean up NAT entry on FIN/RST.
 	if pr.tcp.FIN || pr.tcp.RST {
 		pr.natMu.Lock()
-		delete(pr.nat, natKey)
+		delete(pr.nat, nk)
 		pr.natMu.Unlock()
 	}
 
-	// Get proxy port for this tunnel.
-	proxyPort, portOk := pr.registry.GetProxyPort(entry.TunnelID)
-	if !portOk {
-		return A.FilterActionPass
-	}
-
-	// Hairpin redirect to proxy.
+	// Hairpin redirect to proxy (proxy port cached in NAT entry — no registry lookup).
 	pr.eth.SrcMAC, pr.eth.DstMAC = pr.eth.DstMAC, pr.eth.SrcMAC
 	pr.ip4.DstIP, pr.ip4.SrcIP = pr.ip4.SrcIP.To4(), pr.ip4.DstIP.To4()
-	pr.tcp.DstPort = layers.TCPPort(proxyPort)
+	pr.tcp.DstPort = layers.TCPPort(entry.ProxyPort)
 
 	pr.serializePacket(b)
 	return A.FilterActionRedirect
@@ -453,8 +464,14 @@ func (pr *PacketRouter) serializePacket(b *A.IntermediateBuffer) {
 // LookupNAT returns the original destination for a NAT'd TCP connection.
 // addrKey must be the string form of the remote address (e.g. "1.2.3.4:5678").
 func (pr *PacketRouter) LookupNAT(addrKey string) (originalDst string, tunnelID string, ok bool) {
+	ap, err := netip.ParseAddrPort(addrKey)
+	if err != nil {
+		return "", "", false
+	}
+	nk := makeNATKey(ap.Addr(), ap.Port())
+
 	pr.natMu.RLock()
-	entry, exists := pr.nat[addrKey]
+	entry, exists := pr.nat[nk]
 	pr.natMu.RUnlock()
 	if !exists {
 		return "", "", false
@@ -488,26 +505,21 @@ func (pr *PacketRouter) handleUDPOutgoing(b *A.IntermediateBuffer, handle A.Hand
 		return pr.handleUDPProxyResponse(b, dst)
 	}
 
-	// NAT key: dstIP:srcPort — invariant across hairpin.
-	natKey := netip.AddrPortFrom(dst.Addr(), src.Port()).String()
+	// NAT key: dstIP:srcPort — invariant across hairpin. Zero-alloc binary key.
+	nk := makeNATKey(dst.Addr(), src.Port())
 
 	// Fast path: existing NAT entry — just update activity and redirect.
 	pr.udpNatMu.RLock()
-	entry, exists := pr.udpNat[natKey]
+	entry, exists := pr.udpNat[nk]
 	pr.udpNatMu.RUnlock()
 
 	if exists {
 		// Update last activity timestamp atomically — no write lock needed.
 		atomic.StoreInt64(&entry.LastActivity, time.Now().UnixNano())
 
-		udpProxyPort, ok := pr.registry.GetUDPProxyPort(entry.TunnelID)
-		if !ok {
-			return A.FilterActionPass
-		}
-
 		pr.eth.SrcMAC, pr.eth.DstMAC = pr.eth.DstMAC, pr.eth.SrcMAC
 		pr.ip4.DstIP, pr.ip4.SrcIP = pr.ip4.SrcIP.To4(), pr.ip4.DstIP.To4()
-		pr.udp.DstPort = layers.UDPPort(udpProxyPort)
+		pr.udp.DstPort = layers.UDPPort(entry.UDPProxyPort)
 
 		pr.serializeUDPPacket(b)
 		return A.FilterActionRedirect
@@ -547,19 +559,20 @@ func (pr *PacketRouter) handleUDPOutgoing(b *A.IntermediateBuffer, handle A.Hand
 	}
 
 	// Tunnel is UP — create NAT entry and redirect.
-	pr.udpNatMu.Lock()
-	pr.udpNat[natKey] = &UDPNATEntry{
-		LastActivity:    time.Now().UnixNano(),
-		OriginalDstIP:   dst.Addr(),
-		OriginalDstPort: dst.Port(),
-		TunnelID:        result.TunnelID,
-	}
-	pr.udpNatMu.Unlock()
-
 	udpProxyPort, ok := pr.registry.GetUDPProxyPort(result.TunnelID)
 	if !ok {
 		return A.FilterActionPass
 	}
+
+	pr.udpNatMu.Lock()
+	pr.udpNat[nk] = &UDPNATEntry{
+		LastActivity:    time.Now().UnixNano(),
+		OriginalDstIP:   dst.Addr(),
+		OriginalDstPort: dst.Port(),
+		TunnelID:        result.TunnelID,
+		UDPProxyPort:    udpProxyPort,
+	}
+	pr.udpNatMu.Unlock()
 
 	// Hairpin redirect to UDP proxy.
 	pr.eth.SrcMAC, pr.eth.DstMAC = pr.eth.DstMAC, pr.eth.SrcMAC
@@ -573,10 +586,10 @@ func (pr *PacketRouter) handleUDPOutgoing(b *A.IntermediateBuffer, handle A.Hand
 // handleUDPProxyResponse handles packets from a UDP proxy back to the client.
 // Restores the original server IP and port so the client sees the expected source.
 func (pr *PacketRouter) handleUDPProxyResponse(b *A.IntermediateBuffer, dst netip.AddrPort) A.FilterAction {
-	natKey := dst.String()
+	nk := makeNATKey(dst.Addr(), dst.Port())
 
 	pr.udpNatMu.RLock()
-	entry, ok := pr.udpNat[natKey]
+	entry, ok := pr.udpNat[nk]
 	pr.udpNatMu.RUnlock()
 	if !ok {
 		return A.FilterActionPass
@@ -639,8 +652,14 @@ func (pr *PacketRouter) isUDPProxySourcePort(port uint16) bool {
 // LookupUDPNAT returns the original destination for a NAT'd UDP flow.
 // addrKey must be the string form of the remote address (e.g. "1.2.3.4:5678").
 func (pr *PacketRouter) LookupUDPNAT(addrKey string) (originalDst string, tunnelID string, ok bool) {
+	ap, err := netip.ParseAddrPort(addrKey)
+	if err != nil {
+		return "", "", false
+	}
+	nk := makeNATKey(ap.Addr(), ap.Port())
+
 	pr.udpNatMu.RLock()
-	entry, exists := pr.udpNat[addrKey]
+	entry, exists := pr.udpNat[nk]
 	pr.udpNatMu.RUnlock()
 	if !exists {
 		return "", "", false

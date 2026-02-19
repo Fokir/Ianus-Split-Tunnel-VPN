@@ -20,6 +20,20 @@ var udpBufPool = sync.Pool{
 	},
 }
 
+// udpSessionKey is a compact, allocation-free key for the UDP session map.
+// Layout: 4 bytes IPv4 address + 2 bytes port (big-endian).
+type udpSessionKey [6]byte
+
+func makeUDPSessionKey(addr *net.UDPAddr) udpSessionKey {
+	var k udpSessionKey
+	if ip4 := addr.IP.To4(); ip4 != nil {
+		copy(k[:4], ip4)
+	}
+	k[4] = byte(addr.Port >> 8)
+	k[5] = byte(addr.Port)
+	return k
+}
+
 // UDPNATLookup resolves a hairpinned client address to its original destination
 // and tunnel ID via the UDP NAT table.
 type UDPNATLookup func(addrKey string) (originalDst string, tunnelID string, ok bool)
@@ -42,7 +56,7 @@ type UDPProxy struct {
 	providerLookup ProviderLookup
 
 	sessionsMu sync.RWMutex
-	sessions   map[string]*UDPSession
+	sessions   map[udpSessionKey]*UDPSession
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -54,7 +68,7 @@ func NewUDPProxy(port uint16, natLookup UDPNATLookup, providerLookup ProviderLoo
 		port:           port,
 		natLookup:      natLookup,
 		providerLookup: providerLookup,
-		sessions:       make(map[string]*UDPSession),
+		sessions:       make(map[udpSessionKey]*UDPSession),
 	}
 }
 
@@ -92,7 +106,7 @@ func (up *UDPProxy) Stop() {
 		sess.tunnelConn.Close()
 		sess.cancel()
 	}
-	up.sessions = make(map[string]*UDPSession)
+	up.sessions = make(map[udpSessionKey]*UDPSession)
 	up.sessionsMu.Unlock()
 
 	up.wg.Wait()
@@ -134,25 +148,26 @@ func (up *UDPProxy) readLoop(ctx context.Context) {
 
 // handleDatagram processes a single incoming datagram.
 func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr *net.UDPAddr) {
-	key := clientAddr.String()
+	sk := makeUDPSessionKey(clientAddr)
 
-	// Fast path: existing session.
+	// Fast path: existing session — zero-alloc binary key lookup.
 	up.sessionsMu.RLock()
-	sess, exists := up.sessions[key]
+	sess, exists := up.sessions[sk]
 	up.sessionsMu.RUnlock()
 
 	if exists {
 		atomic.StoreInt64(&sess.lastActive, time.Now().UnixNano())
 		if _, err := sess.tunnelConn.Write(data); err != nil {
-			log.Printf("[Proxy] UDP write to tunnel failed for %s: %v", key, err)
+			log.Printf("[Proxy] UDP write to tunnel failed for %s: %v", clientAddr, err)
 		}
 		return
 	}
 
-	// Slow path: create new session.
-	originalDst, tunnelID, ok := up.natLookup(key)
+	// Slow path: create new session (string allocation acceptable here).
+	addrStr := clientAddr.String()
+	originalDst, tunnelID, ok := up.natLookup(addrStr)
 	if !ok {
-		log.Printf("[Proxy] UDP no NAT entry for %s, dropping", key)
+		log.Printf("[Proxy] UDP no NAT entry for %s, dropping", addrStr)
 		return
 	}
 
@@ -177,26 +192,26 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 	}
 
 	up.sessionsMu.Lock()
-	up.sessions[key] = sess
+	up.sessions[sk] = sess
 	up.sessionsMu.Unlock()
 
 	// Send the first datagram.
 	if _, err := tunnelConn.Write(data); err != nil {
-		log.Printf("[Proxy] UDP write to tunnel failed for %s: %v", key, err)
-		up.removeSession(key)
+		log.Printf("[Proxy] UDP write to tunnel failed for %s: %v", clientAddr, err)
+		up.removeSession(sk)
 		return
 	}
 
 	// Start reading responses from the tunnel.
 	up.wg.Add(1)
-	go up.readFromTunnel(sessCtx, sess, key)
+	go up.readFromTunnel(sessCtx, sess, sk)
 }
 
 // readFromTunnel reads datagrams from the tunnel connection and sends them
 // back to the client through the hairpin path.
-func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, key string) {
+func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, sk udpSessionKey) {
 	defer up.wg.Done()
-	defer up.removeSession(key)
+	defer up.removeSession(sk)
 
 	bp := udpBufPool.Get().(*[]byte)
 	defer udpBufPool.Put(bp)
@@ -214,26 +229,26 @@ func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, key st
 			select {
 			case <-ctx.Done():
 			default:
-				log.Printf("[Proxy] UDP tunnel read error for %s: %v", key, err)
+				log.Printf("[Proxy] UDP tunnel read error for %s: %v", sess.clientAddr, err)
 			}
 			return
 		}
 
 		atomic.StoreInt64(&sess.lastActive, time.Now().UnixNano())
 		if _, err := up.conn.WriteToUDP(buf[:n], sess.clientAddr); err != nil {
-			log.Printf("[Proxy] UDP write to client %s failed: %v", key, err)
+			log.Printf("[Proxy] UDP write to client %s failed: %v", sess.clientAddr, err)
 			return
 		}
 	}
 }
 
 // removeSession closes and removes a session by key.
-func (up *UDPProxy) removeSession(key string) {
+func (up *UDPProxy) removeSession(sk udpSessionKey) {
 	up.sessionsMu.Lock()
-	if sess, ok := up.sessions[key]; ok {
+	if sess, ok := up.sessions[sk]; ok {
 		sess.tunnelConn.Close()
 		sess.cancel()
-		delete(up.sessions, key)
+		delete(up.sessions, sk)
 	}
 	up.sessionsMu.Unlock()
 }
@@ -251,22 +266,21 @@ func (up *UDPProxy) cleanupLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			now := time.Now()
-			var stale []string
+			var stale []udpSessionKey
 
 			up.sessionsMu.RLock()
-			for key, sess := range up.sessions {
+			for sk, sess := range up.sessions {
 				last := time.Unix(0, atomic.LoadInt64(&sess.lastActive))
 				if now.Sub(last) > 2*time.Minute {
-					stale = append(stale, key)
+					stale = append(stale, sk)
 				}
 			}
 			up.sessionsMu.RUnlock()
 
-			for _, key := range stale {
-				log.Printf("[Proxy] UDP session %s timed out, closing", key)
-				up.removeSession(key)
+			for _, sk := range stale {
+				log.Printf("[Proxy] UDP session timed out, closing")
+				up.removeSession(sk)
 			}
 		}
 	}
 }
-
