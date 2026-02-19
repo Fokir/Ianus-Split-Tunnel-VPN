@@ -143,6 +143,13 @@ func main() {
 			continue
 		}
 		registry.SetState(tcfg.ID, core.TunnelStateUp, nil)
+
+		// Add kernel-level static bypass for VPN server endpoint traffic.
+		if awgProv, ok := prov.(*amneziawg.Provider); ok {
+			for _, ep := range awgProv.GetPeerEndpoints() {
+				router.AddEndpointBypass(ep.Addr().AsSlice(), ep.Port())
+			}
+		}
 	}
 
 	// --- Start packet router ---

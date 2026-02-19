@@ -34,9 +34,10 @@ type Provider struct {
 	state  core.TunnelState
 	name   string
 
-	adapterIP netip.Addr
-	dev       *device.Device // amneziawg-go device
-	tnet      *netstack.Net  // userspace network stack
+	adapterIP     netip.Addr
+	peerEndpoints []netip.AddrPort
+	dev           *device.Device // amneziawg-go device
+	tnet          *netstack.Net  // userspace network stack
 }
 
 // New creates an AmneziaWG provider with the given configuration.
@@ -114,6 +115,7 @@ func (p *Provider) Connect(ctx context.Context) error {
 
 	p.dev = dev
 	p.tnet = tnet
+	p.peerEndpoints = parsed.PeerEndpoints
 	p.state = core.TunnelStateUp
 	log.Printf("[AWG] Tunnel %q is UP (ip=%s, mtu=%d)", p.name, p.adapterIP, parsed.MTU)
 	return nil
@@ -183,4 +185,10 @@ func (p *Provider) Name() string {
 // Protocol returns "amneziawg".
 func (p *Provider) Protocol() string {
 	return "amneziawg"
+}
+
+// GetPeerEndpoints returns the WireGuard server endpoints parsed from the config.
+// Used by PacketRouter to add kernel-level static bypass filters.
+func (p *Provider) GetPeerEndpoints() []netip.AddrPort {
+	return p.peerEndpoints
 }

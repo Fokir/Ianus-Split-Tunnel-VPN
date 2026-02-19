@@ -22,6 +22,8 @@ type ParsedConfig struct {
 	MTU int
 	// UAPIConfig is the UAPI-formatted string ready for device.IpcSet().
 	UAPIConfig string
+	// PeerEndpoints are the server endpoints from [Peer] sections (for static filter bypass).
+	PeerEndpoints []netip.AddrPort
 }
 
 // ParseConfigFile reads an AmneziaWG .conf file and produces a ParsedConfig.
@@ -68,7 +70,7 @@ func ParseConfigFile(path string) (*ParsedConfig, error) {
 				return nil, fmt.Errorf("[Interface] %s: %w", key, err)
 			}
 		case "peer":
-			if err := parsePeerKey(key, value, &uapi); err != nil {
+			if err := parsePeerKey(key, value, result, &uapi); err != nil {
 				return nil, fmt.Errorf("[Peer] %s: %w", key, err)
 			}
 		}
@@ -127,7 +129,7 @@ func parseInterfaceKey(key, value string, cfg *ParsedConfig, uapi *strings.Build
 	return nil
 }
 
-func parsePeerKey(key, value string, uapi *strings.Builder) error {
+func parsePeerKey(key, value string, cfg *ParsedConfig, uapi *strings.Builder) error {
 	switch strings.ToLower(key) {
 	case "publickey":
 		h, err := base64ToHex(value)
@@ -143,6 +145,10 @@ func parsePeerKey(key, value string, uapi *strings.Builder) error {
 		fmt.Fprintf(uapi, "preshared_key=%s\n", h)
 	case "endpoint":
 		fmt.Fprintf(uapi, "endpoint=%s\n", value)
+		// Store for static filter bypass.
+		if ap, err := netip.ParseAddrPort(value); err == nil {
+			cfg.PeerEndpoints = append(cfg.PeerEndpoints, ap)
+		}
 	case "allowedips":
 		for _, cidr := range splitCSV(value) {
 			fmt.Fprintf(uapi, "allowed_ip=%s\n", cidr)

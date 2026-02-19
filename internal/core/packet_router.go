@@ -5,8 +5,11 @@ package core
 import (
 	"context"
 	"log"
+	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	A "github.com/wiresock/ndisapi-go"
@@ -27,18 +30,20 @@ type NATEntry struct {
 // UDPNATEntry maps a redirected UDP flow back to its original destination.
 // Includes LastActivity for timeout-based cleanup (UDP has no FIN/RST).
 type UDPNATEntry struct {
+	// LastActivity is first for 64-bit alignment; accessed atomically (UnixNano).
+	LastActivity    int64
 	OriginalDstIP   netip.Addr
 	OriginalDstPort uint16
 	TunnelID        string
-	LastActivity    time.Time
 }
 
 // PacketRouter intercepts network packets via NDISAPI, performs process-based
 // routing decisions, and manages the NAT table for hairpin redirects.
 type PacketRouter struct {
-	api     *A.NdisApi
-	filter  *D.SimplePacketFilter
-	process *N.ProcessLookup
+	api           *A.NdisApi
+	filter        *D.QueuedPacketFilter
+	staticFilters *D.StaticFilters
+	process       *N.ProcessLookup
 
 	registry *TunnelRegistry
 	rules    *RuleEngine
@@ -53,8 +58,9 @@ type PacketRouter struct {
 	proxyPorts   map[uint16]struct{}
 
 	// UDP NAT table: key = "dstIP:srcPort" (invariant across hairpin redirect).
+	// Stores pointers for lock-free atomic LastActivity updates on hot path.
 	udpNatMu sync.RWMutex
-	udpNat   map[string]UDPNATEntry
+	udpNat   map[string]*UDPNATEntry
 
 	// UDP proxy port set for O(1) lookup on hot path.
 	udpProxyPortsMu sync.RWMutex
@@ -97,7 +103,7 @@ func NewPacketRouter(
 		bus:           bus,
 		nat:           make(map[string]NATEntry),
 		proxyPorts:    make(map[uint16]struct{}),
-		udpNat:        make(map[string]UDPNATEntry),
+		udpNat:        make(map[string]*UDPNATEntry),
 		udpProxyPorts: make(map[uint16]struct{}),
 		decoded:       make([]gopacket.LayerType, 0, 4),
 		serBuf:        gopacket.NewSerializeBuffer(),
@@ -110,6 +116,22 @@ func NewPacketRouter(
 		&pr.eth, &pr.ip4, &pr.tcp, &pr.udp, &pr.payload,
 	)
 	pr.parser.IgnoreUnsupported = true
+
+	// Initialize kernel-level static filters with caching.
+	sf, err := D.NewStaticFilters(api, true, true)
+	if err != nil {
+		log.Printf("[Router] Warning: static filters unavailable: %v", err)
+	} else {
+		pr.staticFilters = sf
+		// Pass ICMP in both directions (no need to process in callback).
+		sf.AddFilterBack(&D.Filter{
+			Action:             A.FilterActionPass,
+			Direction:          D.PacketDirectionBoth,
+			SourceAddress:      net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+			DestinationAddress: net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+			Protocol:           1, // ICMP
+		})
+	}
 
 	return pr, nil
 }
@@ -131,7 +153,7 @@ func (pr *PacketRouter) Start(ctx context.Context) error {
 
 	go pr.process.StartCleanup(ctx, time.Minute)
 
-	pr.filter, err = D.NewSimplePacketFilter(
+	pr.filter, err = D.NewQueuedPacketFilter(
 		ctx,
 		pr.api,
 		adapters,
@@ -157,10 +179,44 @@ func (pr *PacketRouter) Stop() {
 	if pr.filter != nil {
 		pr.filter.Close()
 	}
+	if pr.staticFilters != nil {
+		pr.staticFilters.Close()
+	}
 	if pr.api != nil {
 		pr.api.Close()
 	}
 	log.Printf("[Router] Packet filter stopped")
+}
+
+// AddEndpointBypass adds kernel-level static filters to pass VPN server
+// traffic directly, bypassing the packet callback. This prevents
+// double-processing of encrypted tunnel traffic and significantly improves throughput.
+func (pr *PacketRouter) AddEndpointBypass(ip net.IP, port uint16) {
+	if pr.staticFilters == nil {
+		return
+	}
+
+	// Outgoing UDP to VPN server endpoint.
+	pr.staticFilters.AddFilterBack(&D.Filter{
+		Action:             A.FilterActionPass,
+		Direction:          D.PacketDirectionOut,
+		SourceAddress:      net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+		DestinationAddress: net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)},
+		Protocol:           uint8(syscall.IPPROTO_UDP),
+		DestinationPort:    [2]uint16{port, port},
+	})
+
+	// Incoming UDP from VPN server endpoint.
+	pr.staticFilters.AddFilterBack(&D.Filter{
+		Action:             A.FilterActionPass,
+		Direction:          D.PacketDirectionIn,
+		SourceAddress:      net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)},
+		DestinationAddress: net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+		Protocol:           uint8(syscall.IPPROTO_UDP),
+		SourcePort:         [2]uint16{port, port},
+	})
+
+	log.Printf("[Router] Added static bypass for VPN endpoint %s:%d", ip, port)
 }
 
 // outgoingCallback is the NDISAPI filter callback for outgoing packets.
@@ -441,11 +497,8 @@ func (pr *PacketRouter) handleUDPOutgoing(b *A.IntermediateBuffer, handle A.Hand
 	pr.udpNatMu.RUnlock()
 
 	if exists {
-		// Update last activity timestamp.
-		pr.udpNatMu.Lock()
-		entry.LastActivity = time.Now()
-		pr.udpNat[natKey] = entry
-		pr.udpNatMu.Unlock()
+		// Update last activity timestamp atomically — no write lock needed.
+		atomic.StoreInt64(&entry.LastActivity, time.Now().UnixNano())
 
 		udpProxyPort, ok := pr.registry.GetUDPProxyPort(entry.TunnelID)
 		if !ok {
@@ -495,11 +548,11 @@ func (pr *PacketRouter) handleUDPOutgoing(b *A.IntermediateBuffer, handle A.Hand
 
 	// Tunnel is UP — create NAT entry and redirect.
 	pr.udpNatMu.Lock()
-	pr.udpNat[natKey] = UDPNATEntry{
+	pr.udpNat[natKey] = &UDPNATEntry{
+		LastActivity:    time.Now().UnixNano(),
 		OriginalDstIP:   dst.Addr(),
 		OriginalDstPort: dst.Port(),
 		TunnelID:        result.TunnelID,
-		LastActivity:    time.Now(),
 	}
 	pr.udpNatMu.Unlock()
 
@@ -615,7 +668,8 @@ func (pr *PacketRouter) udpNATCleanup(ctx context.Context) {
 				if entry.OriginalDstPort == 53 {
 					timeout = 10 * time.Second
 				}
-				if now.Sub(entry.LastActivity) > timeout {
+				last := time.Unix(0, atomic.LoadInt64(&entry.LastActivity))
+				if now.Sub(last) > timeout {
 					delete(pr.udpNat, key)
 				}
 			}

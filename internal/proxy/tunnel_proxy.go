@@ -13,6 +13,14 @@ import (
 	"awg-split-tunnel/internal/provider"
 )
 
+// fwdBufPool reuses 64KB buffers for bidirectional TCP forwarding.
+var fwdBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 64*1024)
+		return &b
+	},
+}
+
 // NATLookup is a function that resolves a client connection to its original
 // destination and tunnel ID via the NAT table.
 // addrKey is the string form of the remote address (e.g. "1.2.3.4:5678").
@@ -161,12 +169,13 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 	fwg.Wait()
 }
 
-// forward copies data from src to dst with buffered I/O.
+// forward copies data from src to dst with pooled buffered I/O.
 func forward(dst, src net.Conn, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	buf := make([]byte, 32*1024) // 32KB buffer
-	io.CopyBuffer(dst, src, buf)
+	bp := fwdBufPool.Get().(*[]byte)
+	io.CopyBuffer(dst, src, *bp)
+	fwdBufPool.Put(bp)
 
 	// Signal half-close.
 	if tc, ok := dst.(*net.TCPConn); ok {

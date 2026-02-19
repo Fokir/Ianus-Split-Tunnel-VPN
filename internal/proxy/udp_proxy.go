@@ -8,8 +8,17 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// udpBufPool reuses 65535-byte buffers for tunnel read goroutines.
+var udpBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 65535)
+		return &b
+	},
+}
 
 // UDPNATLookup resolves a hairpinned client address to its original destination
 // and tunnel ID via the UDP NAT table.
@@ -17,9 +26,9 @@ type UDPNATLookup func(addrKey string) (originalDst string, tunnelID string, ok 
 
 // UDPSession tracks a single client-to-tunnel UDP association.
 type UDPSession struct {
+	lastActive int64 // atomic; UnixNano timestamp
 	tunnelConn net.Conn
 	clientAddr *net.UDPAddr
-	lastActive time.Time
 	cancel     context.CancelFunc
 }
 
@@ -118,11 +127,8 @@ func (up *UDPProxy) readLoop(ctx context.Context) {
 			}
 		}
 
-		// Copy data before reuse of buf.
-		data := make([]byte, n)
-		copy(data, buf[:n])
-
-		up.handleDatagram(ctx, data, clientAddr)
+		// Safe: handleDatagram writes buf[:n] synchronously before returning.
+		up.handleDatagram(ctx, buf[:n], clientAddr)
 	}
 }
 
@@ -136,7 +142,7 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 	up.sessionsMu.RUnlock()
 
 	if exists {
-		sess.lastActive = time.Now()
+		atomic.StoreInt64(&sess.lastActive, time.Now().UnixNano())
 		if _, err := sess.tunnelConn.Write(data); err != nil {
 			log.Printf("[Proxy] UDP write to tunnel failed for %s: %v", key, err)
 		}
@@ -164,9 +170,9 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 
 	sessCtx, sessCancel := context.WithCancel(ctx)
 	sess = &UDPSession{
+		lastActive: time.Now().UnixNano(),
 		tunnelConn: tunnelConn,
 		clientAddr: clientAddr,
-		lastActive: time.Now(),
 		cancel:     sessCancel,
 	}
 
@@ -192,7 +198,10 @@ func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, key st
 	defer up.wg.Done()
 	defer up.removeSession(key)
 
-	buf := make([]byte, 65535)
+	bp := udpBufPool.Get().(*[]byte)
+	defer udpBufPool.Put(bp)
+	buf := *bp
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -210,7 +219,7 @@ func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, key st
 			return
 		}
 
-		sess.lastActive = time.Now()
+		atomic.StoreInt64(&sess.lastActive, time.Now().UnixNano())
 		if _, err := up.conn.WriteToUDP(buf[:n], sess.clientAddr); err != nil {
 			log.Printf("[Proxy] UDP write to client %s failed: %v", key, err)
 			return
@@ -246,7 +255,8 @@ func (up *UDPProxy) cleanupLoop(ctx context.Context) {
 
 			up.sessionsMu.RLock()
 			for key, sess := range up.sessions {
-				if now.Sub(sess.lastActive) > 2*time.Minute {
+				last := time.Unix(0, atomic.LoadInt64(&sess.lastActive))
+				if now.Sub(last) > 2*time.Minute {
 					stale = append(stale, key)
 				}
 			}
