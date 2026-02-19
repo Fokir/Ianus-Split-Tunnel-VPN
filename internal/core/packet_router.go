@@ -121,7 +121,15 @@ func (pr *PacketRouter) Start(ctx context.Context) error {
 		return err
 	}
 
-	pr.process.StartCleanup(ctx, time.Minute)
+	// Log available adapters for debugging adapter_index.
+	log.Printf("[Router] Found %d adapters:", adapters.AdapterCount)
+	for i := 0; i < int(adapters.AdapterCount); i++ {
+		name := string(adapters.AdapterNameList[i][:])
+		friendly := pr.api.ConvertWindows2000AdapterName(name)
+		log.Printf("[Router]   [%d] %s", i, friendly)
+	}
+
+	go pr.process.StartCleanup(ctx, time.Minute)
 
 	pr.filter, err = D.NewSimplePacketFilter(
 		ctx,

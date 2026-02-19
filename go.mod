@@ -20,3 +20,5 @@ require (
 )
 
 replace github.com/amnezia-vpn/amneziawg-go => ./refs/amneziawg-go
+
+replace github.com/wiresock/ndisapi-go => ./refs/ndisapi-go

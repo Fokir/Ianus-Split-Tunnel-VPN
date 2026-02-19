@@ -1,6 +1,8 @@
 # AWG Split Tunnel — Example Configuration
 
-adapter_index: 0  # NDIS adapter index (0 = first network adapter)
+# NDIS adapter index — check startup log for "[Router] Found N adapters"
+# to find the correct index for your internet-facing adapter (e.g. Ethernet, Wi-Fi).
+adapter_index: 0
 
 tunnels:
   - id: awg-germany
