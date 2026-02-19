@@ -1,0 +1,111 @@
+//go:build windows
+
+package core
+
+import (
+	"log"
+	"sync"
+
+	"awg-split-tunnel/internal/process"
+)
+
+// MatchResult holds the routing decision for a process.
+type MatchResult struct {
+	Matched  bool
+	TunnelID string
+	Fallback FallbackPolicy
+}
+
+// RuleEngine evaluates process paths against configured rules.
+type RuleEngine struct {
+	mu      sync.RWMutex
+	rules   []Rule
+	bus     *EventBus
+	matcher *process.Matcher
+}
+
+// NewRuleEngine creates a rule engine with the given initial rules.
+func NewRuleEngine(rules []Rule, bus *EventBus, matcher *process.Matcher) *RuleEngine {
+	return &RuleEngine{
+		rules:   rules,
+		bus:     bus,
+		matcher: matcher,
+	}
+}
+
+// Match finds the first rule that matches the given executable path.
+// Returns the routing decision. Called on hot path — must be fast.
+func (re *RuleEngine) Match(exePath string) MatchResult {
+	re.mu.RLock()
+	defer re.mu.RUnlock()
+
+	for _, rule := range re.rules {
+		if process.MatchPattern(exePath, rule.Pattern) {
+			return MatchResult{
+				Matched:  true,
+				TunnelID: rule.TunnelID,
+				Fallback: rule.Fallback,
+			}
+		}
+	}
+
+	return MatchResult{Matched: false}
+}
+
+// MatchByPID resolves PID to exe path and then matches.
+func (re *RuleEngine) MatchByPID(pid uint32) MatchResult {
+	exePath, ok := re.matcher.GetExePath(pid)
+	if !ok {
+		return MatchResult{Matched: false}
+	}
+	return re.Match(exePath)
+}
+
+// SetRules replaces all routing rules.
+func (re *RuleEngine) SetRules(rules []Rule) {
+	re.mu.Lock()
+	re.rules = make([]Rule, len(rules))
+	copy(re.rules, rules)
+	re.mu.Unlock()
+
+	log.Printf("[Rule] Updated %d rules", len(rules))
+}
+
+// AddRule appends a rule and notifies subscribers.
+func (re *RuleEngine) AddRule(rule Rule) {
+	re.mu.Lock()
+	re.rules = append(re.rules, rule)
+	re.mu.Unlock()
+
+	log.Printf("[Rule] Added: %s → %s (fallback=%s)", rule.Pattern, rule.TunnelID, rule.Fallback)
+	if re.bus != nil {
+		re.bus.Publish(Event{Type: EventRuleAdded, Payload: RulePayload{Rule: rule}})
+	}
+}
+
+// RemoveRule removes the first rule matching the given pattern.
+func (re *RuleEngine) RemoveRule(pattern string) bool {
+	re.mu.Lock()
+	defer re.mu.Unlock()
+
+	for i, rule := range re.rules {
+		if rule.Pattern == pattern {
+			re.rules = append(re.rules[:i], re.rules[i+1:]...)
+			log.Printf("[Rule] Removed: %s", pattern)
+			if re.bus != nil {
+				re.bus.Publish(Event{Type: EventRuleRemoved, Payload: RulePayload{Rule: rule}})
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// GetRules returns a copy of current rules.
+func (re *RuleEngine) GetRules() []Rule {
+	re.mu.RLock()
+	defer re.mu.RUnlock()
+	result := make([]Rule, len(re.rules))
+	copy(result, re.rules)
+	return result
+}

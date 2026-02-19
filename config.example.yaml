@@ -1,0 +1,32 @@
+# AWG Split Tunnel — Example Configuration
+
+adapter_index: 0  # NDIS adapter index (0 = first network adapter)
+
+tunnels:
+  - id: awg-germany
+    protocol: amneziawg
+    name: "AWG Germany"
+    settings:
+      adapter_ip: "10.8.1.2"
+      # config_file: "C:\\path\\to\\awg-germany.conf"
+      # adapter_name: "AmneziaWG0"
+
+rules:
+  # Route Firefox through the German AWG tunnel, block if tunnel is down (kill switch)
+  - pattern: "firefox.exe"
+    tunnel_id: awg-germany
+    fallback: block
+
+  # Route Chrome through tunnel, allow direct if tunnel is down
+  - pattern: "chrome"
+    tunnel_id: awg-germany
+    fallback: allow_direct
+
+  # Block all traffic from processes in C:\blocked\ directory
+  - pattern: 'C:\blocked\*'
+    fallback: drop
+
+  # Route Steam through tunnel with kill switch
+  - pattern: "steam.exe"
+    tunnel_id: awg-germany
+    fallback: block

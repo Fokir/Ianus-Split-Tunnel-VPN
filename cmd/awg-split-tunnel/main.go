@@ -1,0 +1,153 @@
+//go:build windows
+
+package main
+
+import (
+	"context"
+	"flag"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/process"
+	"awg-split-tunnel/internal/provider"
+	"awg-split-tunnel/internal/provider/amneziawg"
+	"awg-split-tunnel/internal/proxy"
+)
+
+func main() {
+	configPath := flag.String("config", "config.yaml", "Path to configuration file")
+	flag.Parse()
+
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.Println("[Core] AWG Split Tunnel starting...")
+
+	// --- Initialize core components ---
+	bus := core.NewEventBus()
+
+	cfgManager := core.NewConfigManager(*configPath, bus)
+	if err := cfgManager.Load(); err != nil {
+		log.Fatalf("[Core] Failed to load config: %v", err)
+	}
+	cfg := cfgManager.Get()
+
+	registry := core.NewTunnelRegistry(bus)
+	matcher := process.NewMatcher()
+	ruleEngine := core.NewRuleEngine(cfg.Rules, bus, matcher)
+
+	// --- Create providers and proxies for each tunnel ---
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	providers := make(map[string]provider.TunnelProvider)
+	proxies := make([]*proxy.TunnelProxy, 0)
+
+	// Create the packet router first (needed for NAT lookup).
+	router, err := core.NewPacketRouter(registry, ruleEngine, bus, cfg.AdapterIndex)
+	if err != nil {
+		log.Fatalf("[Core] Failed to create packet router: %v", err)
+	}
+
+	// Provider lookup function for proxies.
+	providerLookup := func(tunnelID string) (provider.TunnelProvider, bool) {
+		p, ok := providers[tunnelID]
+		return p, ok
+	}
+
+	var nextProxyPort uint16 = 30000
+
+	for _, tcfg := range cfg.Tunnels {
+		proxyPort := nextProxyPort
+		nextProxyPort++
+
+		var prov provider.TunnelProvider
+
+		switch tcfg.Protocol {
+		case "amneziawg":
+			awgCfg := amneziawg.Config{
+				AdapterIP: getStringSetting(tcfg.Settings, "adapter_ip", "10.8.1.2"),
+			}
+			p, err := amneziawg.New(tcfg.Name, awgCfg)
+			if err != nil {
+				log.Printf("[Core] Failed to create AWG provider %q: %v", tcfg.ID, err)
+				continue
+			}
+			prov = p
+
+		default:
+			log.Printf("[Core] Unknown protocol %q for tunnel %q, skipping", tcfg.Protocol, tcfg.ID)
+			continue
+		}
+
+		// Register tunnel in the registry.
+		if err := registry.Register(tcfg, proxyPort); err != nil {
+			log.Printf("[Core] Failed to register tunnel %q: %v", tcfg.ID, err)
+			continue
+		}
+
+		providers[tcfg.ID] = prov
+
+		// Create transparent proxy for this tunnel.
+		tp := proxy.NewTunnelProxy(proxyPort, router.LookupNAT, providerLookup)
+		proxies = append(proxies, tp)
+
+		// Start proxy.
+		if err := tp.Start(ctx); err != nil {
+			log.Printf("[Core] Failed to start proxy for tunnel %q: %v", tcfg.ID, err)
+			continue
+		}
+
+		// Connect the provider.
+		if err := prov.Connect(ctx); err != nil {
+			log.Printf("[Core] Failed to connect tunnel %q: %v", tcfg.ID, err)
+			registry.SetState(tcfg.ID, core.TunnelStateError, err)
+			continue
+		}
+		registry.SetState(tcfg.ID, core.TunnelStateUp, nil)
+	}
+
+	// --- Start packet router ---
+	if err := router.Start(ctx); err != nil {
+		log.Fatalf("[Core] Failed to start packet router: %v", err)
+	}
+
+	// --- Log active rules ---
+	rules := ruleEngine.GetRules()
+	log.Printf("[Core] Active rules: %d", len(rules))
+	for _, r := range rules {
+		log.Printf("[Rule]   %s → tunnel=%q fallback=%s", r.Pattern, r.TunnelID, r.Fallback)
+	}
+
+	// --- Wait for shutdown signal ---
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	log.Println("[Core] Running. Press Ctrl+C to stop.")
+	<-sig
+
+	// --- Graceful shutdown ---
+	log.Println("[Core] Shutting down...")
+	cancel()
+
+	router.Stop()
+	for _, tp := range proxies {
+		tp.Stop()
+	}
+	for id, prov := range providers {
+		if err := prov.Disconnect(); err != nil {
+			log.Printf("[Core] Error disconnecting %s: %v", id, err)
+		}
+	}
+
+	log.Println("[Core] Shutdown complete.")
+}
+
+func getStringSetting(settings map[string]any, key, defaultVal string) string {
+	if v, ok := settings[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return defaultVal
+}

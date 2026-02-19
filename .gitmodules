@@ -1,0 +1,24 @@
+[submodule "refs/ndisapi-go"]
+	path = refs/ndisapi-go
+	url = https://github.com/wiresock/ndisapi-go.git
+[submodule "refs/ndisapi"]
+	path = refs/ndisapi
+	url = https://github.com/wiresock/ndisapi.git
+[submodule "refs/proxifyre"]
+	path = refs/proxifyre
+	url = https://github.com/wiresock/proxifyre.git
+[submodule "refs/gopacket"]
+	path = refs/gopacket
+	url = https://github.com/google/gopacket.git
+[submodule "refs/amneziawg-go"]
+	path = refs/amneziawg-go
+	url = https://github.com/amnezia-vpn/amneziawg-go.git
+[submodule "refs/amneziawg-windows-client"]
+	path = refs/amneziawg-windows-client
+	url = https://github.com/amnezia-vpn/amneziawg-windows-client.git
+[submodule "refs/tailscale-wf"]
+	path = refs/tailscale-wf
+	url = https://github.com/tailscale/wf.git
+[submodule "refs/mullvad-split-tunnel"]
+	path = refs/mullvad-split-tunnel
+	url = https://github.com/mullvad/win-split-tunnel.git
