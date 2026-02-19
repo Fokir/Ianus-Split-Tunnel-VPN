@@ -22,3 +22,6 @@
 [submodule "refs/mullvad-split-tunnel"]
 	path = refs/mullvad-split-tunnel
 	url = https://github.com/mullvad/win-split-tunnel.git
+[submodule "refs/WireSockUI"]
+	path = refs/WireSockUI
+	url = git@github.com:wiresock/WireSockUI.git
