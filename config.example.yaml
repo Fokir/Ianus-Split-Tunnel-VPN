@@ -7,9 +7,8 @@ tunnels:
     protocol: amneziawg
     name: "AWG Germany"
     settings:
-      adapter_ip: "10.8.1.2"
-      # config_file: "C:\\path\\to\\awg-germany.conf"
-      # adapter_name: "AmneziaWG0"
+      config_file: "awg-germany.conf"  # Path to AmneziaWG .conf file (required)
+      # adapter_ip: "10.8.1.2"         # Optional: override IP from .conf Address
 
 rules:
   # Route Firefox through the German AWG tunnel, block if tunnel is down (kill switch)

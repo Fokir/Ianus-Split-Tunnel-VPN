@@ -28,6 +28,10 @@ type TunnelProvider interface {
 	// The connection is bound to the VPN adapter's IP.
 	DialTCP(ctx context.Context, addr string) (net.Conn, error)
 
+	// DialUDP creates a connected UDP socket through the tunnel to the given address.
+	// Each Read returns one datagram; each Write sends one datagram.
+	DialUDP(ctx context.Context, addr string) (net.Conn, error)
+
 	// Name returns a human-readable name for this provider instance.
 	Name() string
 

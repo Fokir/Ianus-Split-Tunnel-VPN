@@ -15,7 +15,8 @@ import (
 
 // NATLookup is a function that resolves a client connection to its original
 // destination and tunnel ID via the NAT table.
-type NATLookup func(clientAddr net.Addr) (originalDst string, tunnelID string, ok bool)
+// addrKey is the string form of the remote address (e.g. "1.2.3.4:5678").
+type NATLookup func(addrKey string) (originalDst string, tunnelID string, ok bool)
 
 // ProviderLookup is a function that returns the TunnelProvider for a given tunnel ID.
 type ProviderLookup func(tunnelID string) (provider.TunnelProvider, bool)
@@ -46,8 +47,8 @@ func NewTunnelProxy(port uint16, natLookup NATLookup, providerLookup ProviderLoo
 func (tp *TunnelProxy) Start(ctx context.Context) error {
 	ctx, tp.cancel = context.WithCancel(ctx)
 
-	addr := fmt.Sprintf("127.0.0.1:%d", tp.port)
-	ln, err := net.Listen("tcp", addr)
+	addr := fmt.Sprintf("0.0.0.0:%d", tp.port)
+	ln, err := net.Listen("tcp4", addr)
 	if err != nil {
 		return fmt.Errorf("[Proxy] failed to listen on %s: %w", addr, err)
 	}
@@ -102,7 +103,7 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 	defer clientConn.Close()
 
 	// Look up original destination from NAT table.
-	originalDst, tunnelID, ok := tp.natLookup(clientConn.RemoteAddr())
+	originalDst, tunnelID, ok := tp.natLookup(clientConn.RemoteAddr().String())
 	if !ok {
 		log.Printf("[Proxy] No NAT entry for %s, closing", clientConn.RemoteAddr())
 		return

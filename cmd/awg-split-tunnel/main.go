@@ -60,6 +60,7 @@ func main() {
 
 	providers := make(map[string]provider.TunnelProvider)
 	proxies := make([]*proxy.TunnelProxy, 0)
+	udpProxies := make([]*proxy.UDPProxy, 0)
 
 	// Create the packet router first (needed for NAT lookup).
 	router, err := core.NewPacketRouter(registry, ruleEngine, bus, cfg.AdapterIndex)
@@ -77,7 +78,8 @@ func main() {
 
 	for _, tcfg := range cfg.Tunnels {
 		proxyPort := nextProxyPort
-		nextProxyPort++
+		udpProxyPort := nextProxyPort + 1
+		nextProxyPort += 2
 
 		var prov provider.TunnelProvider
 
@@ -88,9 +90,8 @@ func main() {
 				configFile = resolveRelativeToExe(configFile)
 			}
 			awgCfg := amneziawg.Config{
-				ConfigFile:  configFile,
-				AdapterName: getStringSetting(tcfg.Settings, "adapter_name", ""),
-				AdapterIP:   getStringSetting(tcfg.Settings, "adapter_ip", "10.8.1.2"),
+				ConfigFile: configFile,
+				AdapterIP:  getStringSetting(tcfg.Settings, "adapter_ip", ""),
 			}
 			p, err := amneziawg.New(tcfg.Name, awgCfg)
 			if err != nil {
@@ -105,23 +106,32 @@ func main() {
 		}
 
 		// Register tunnel in the registry.
-		if err := registry.Register(tcfg, proxyPort); err != nil {
+		if err := registry.Register(tcfg, proxyPort, udpProxyPort); err != nil {
 			log.Printf("[Core] Failed to register tunnel %q: %v", tcfg.ID, err)
 			continue
 		}
 
 		providers[tcfg.ID] = prov
 
-		// Register proxy port for O(1) hot-path lookup.
+		// Register proxy ports for O(1) hot-path lookup.
 		router.RegisterProxyPort(proxyPort)
+		router.RegisterUDPProxyPort(udpProxyPort)
 
-		// Create transparent proxy for this tunnel.
+		// Create and start TCP transparent proxy.
 		tp := proxy.NewTunnelProxy(proxyPort, router.LookupNAT, providerLookup)
 		proxies = append(proxies, tp)
 
-		// Start proxy.
 		if err := tp.Start(ctx); err != nil {
-			log.Printf("[Core] Failed to start proxy for tunnel %q: %v", tcfg.ID, err)
+			log.Printf("[Core] Failed to start TCP proxy for tunnel %q: %v", tcfg.ID, err)
+			continue
+		}
+
+		// Create and start UDP transparent proxy.
+		up := proxy.NewUDPProxy(udpProxyPort, router.LookupUDPNAT, providerLookup)
+		udpProxies = append(udpProxies, up)
+
+		if err := up.Start(ctx); err != nil {
+			log.Printf("[Core] Failed to start UDP proxy for tunnel %q: %v", tcfg.ID, err)
 			continue
 		}
 
@@ -159,6 +169,9 @@ func main() {
 	router.Stop()
 	for _, tp := range proxies {
 		tp.Stop()
+	}
+	for _, up := range udpProxies {
+		up.Stop()
 	}
 	for id, prov := range providers {
 		if err := prov.Disconnect(); err != nil {

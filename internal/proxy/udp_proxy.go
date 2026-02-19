@@ -1,0 +1,262 @@
+//go:build windows
+
+package proxy
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"sync"
+	"time"
+)
+
+// UDPNATLookup resolves a hairpinned client address to its original destination
+// and tunnel ID via the UDP NAT table.
+type UDPNATLookup func(addrKey string) (originalDst string, tunnelID string, ok bool)
+
+// UDPSession tracks a single client-to-tunnel UDP association.
+type UDPSession struct {
+	tunnelConn net.Conn
+	clientAddr *net.UDPAddr
+	lastActive time.Time
+	cancel     context.CancelFunc
+}
+
+// UDPProxy is a per-tunnel transparent UDP proxy.
+// It receives hairpinned datagrams, looks up the original destination from the
+// NAT table, and forwards traffic through the VPN provider.
+type UDPProxy struct {
+	port           uint16
+	conn           *net.UDPConn
+	natLookup      UDPNATLookup
+	providerLookup ProviderLookup
+
+	sessionsMu sync.RWMutex
+	sessions   map[string]*UDPSession
+
+	wg     sync.WaitGroup
+	cancel context.CancelFunc
+}
+
+// NewUDPProxy creates a UDP proxy that listens on the given port.
+func NewUDPProxy(port uint16, natLookup UDPNATLookup, providerLookup ProviderLookup) *UDPProxy {
+	return &UDPProxy{
+		port:           port,
+		natLookup:      natLookup,
+		providerLookup: providerLookup,
+		sessions:       make(map[string]*UDPSession),
+	}
+}
+
+// Start begins listening for UDP datagrams.
+func (up *UDPProxy) Start(ctx context.Context) error {
+	ctx, up.cancel = context.WithCancel(ctx)
+
+	addr := &net.UDPAddr{IP: net.IPv4zero, Port: int(up.port)}
+	conn, err := net.ListenUDP("udp4", addr)
+	if err != nil {
+		return fmt.Errorf("[Proxy] failed to listen UDP on :%d: %w", up.port, err)
+	}
+	up.conn = conn
+	log.Printf("[Proxy] UDP listening on :%d", up.port)
+
+	up.wg.Add(2)
+	go up.readLoop(ctx)
+	go up.cleanupLoop(ctx)
+
+	return nil
+}
+
+// Stop gracefully shuts down the UDP proxy.
+func (up *UDPProxy) Stop() {
+	if up.cancel != nil {
+		up.cancel()
+	}
+	if up.conn != nil {
+		up.conn.Close()
+	}
+
+	// Close all active sessions.
+	up.sessionsMu.Lock()
+	for _, sess := range up.sessions {
+		sess.tunnelConn.Close()
+		sess.cancel()
+	}
+	up.sessions = make(map[string]*UDPSession)
+	up.sessionsMu.Unlock()
+
+	up.wg.Wait()
+	log.Printf("[Proxy] UDP stopped (port %d)", up.port)
+}
+
+// Port returns the port this proxy listens on.
+func (up *UDPProxy) Port() uint16 {
+	return up.port
+}
+
+// readLoop reads datagrams from the listener and dispatches them.
+func (up *UDPProxy) readLoop(ctx context.Context) {
+	defer up.wg.Done()
+
+	buf := make([]byte, 65535)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		n, clientAddr, err := up.conn.ReadFromUDP(buf)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				log.Printf("[Proxy] UDP read error: %v", err)
+				continue
+			}
+		}
+
+		// Copy data before reuse of buf.
+		data := make([]byte, n)
+		copy(data, buf[:n])
+
+		up.handleDatagram(ctx, data, clientAddr)
+	}
+}
+
+// handleDatagram processes a single incoming datagram.
+func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr *net.UDPAddr) {
+	key := clientAddr.String()
+
+	// Fast path: existing session.
+	up.sessionsMu.RLock()
+	sess, exists := up.sessions[key]
+	up.sessionsMu.RUnlock()
+
+	if exists {
+		sess.lastActive = time.Now()
+		if _, err := sess.tunnelConn.Write(data); err != nil {
+			log.Printf("[Proxy] UDP write to tunnel failed for %s: %v", key, err)
+		}
+		return
+	}
+
+	// Slow path: create new session.
+	originalDst, tunnelID, ok := up.natLookup(key)
+	if !ok {
+		log.Printf("[Proxy] UDP no NAT entry for %s, dropping", key)
+		return
+	}
+
+	prov, ok := up.providerLookup(tunnelID)
+	if !ok {
+		log.Printf("[Proxy] UDP no provider for tunnel %q, dropping", tunnelID)
+		return
+	}
+
+	tunnelConn, err := prov.DialUDP(ctx, originalDst)
+	if err != nil {
+		log.Printf("[Proxy] UDP failed to dial %s via %s: %v", originalDst, tunnelID, err)
+		return
+	}
+
+	sessCtx, sessCancel := context.WithCancel(ctx)
+	sess = &UDPSession{
+		tunnelConn: tunnelConn,
+		clientAddr: clientAddr,
+		lastActive: time.Now(),
+		cancel:     sessCancel,
+	}
+
+	up.sessionsMu.Lock()
+	up.sessions[key] = sess
+	up.sessionsMu.Unlock()
+
+	// Send the first datagram.
+	if _, err := tunnelConn.Write(data); err != nil {
+		log.Printf("[Proxy] UDP write to tunnel failed for %s: %v", key, err)
+		up.removeSession(key)
+		return
+	}
+
+	// Start reading responses from the tunnel.
+	up.wg.Add(1)
+	go up.readFromTunnel(sessCtx, sess, key)
+}
+
+// readFromTunnel reads datagrams from the tunnel connection and sends them
+// back to the client through the hairpin path.
+func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, key string) {
+	defer up.wg.Done()
+	defer up.removeSession(key)
+
+	buf := make([]byte, 65535)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		n, err := sess.tunnelConn.Read(buf)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+			default:
+				log.Printf("[Proxy] UDP tunnel read error for %s: %v", key, err)
+			}
+			return
+		}
+
+		sess.lastActive = time.Now()
+		if _, err := up.conn.WriteToUDP(buf[:n], sess.clientAddr); err != nil {
+			log.Printf("[Proxy] UDP write to client %s failed: %v", key, err)
+			return
+		}
+	}
+}
+
+// removeSession closes and removes a session by key.
+func (up *UDPProxy) removeSession(key string) {
+	up.sessionsMu.Lock()
+	if sess, ok := up.sessions[key]; ok {
+		sess.tunnelConn.Close()
+		sess.cancel()
+		delete(up.sessions, key)
+	}
+	up.sessionsMu.Unlock()
+}
+
+// cleanupLoop periodically removes idle UDP sessions (>2min inactive).
+func (up *UDPProxy) cleanupLoop(ctx context.Context) {
+	defer up.wg.Done()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			var stale []string
+
+			up.sessionsMu.RLock()
+			for key, sess := range up.sessions {
+				if now.Sub(sess.lastActive) > 2*time.Minute {
+					stale = append(stale, key)
+				}
+			}
+			up.sessionsMu.RUnlock()
+
+			for _, key := range stale {
+				log.Printf("[Proxy] UDP session %s timed out, closing", key)
+				up.removeSession(key)
+			}
+		}
+	}
+}
+

@@ -10,11 +10,12 @@ import (
 
 // TunnelEntry holds runtime information about an active tunnel.
 type TunnelEntry struct {
-	ID        string
-	Config    TunnelConfig
-	State     TunnelState
-	ProxyPort uint16 // Local port where the tunnel proxy listens
-	Error     error  // Last error if state == TunnelStateError
+	ID           string
+	Config       TunnelConfig
+	State        TunnelState
+	ProxyPort    uint16 // Local port where the TCP tunnel proxy listens
+	UDPProxyPort uint16 // Local port where the UDP tunnel proxy listens
+	Error        error  // Last error if state == TunnelStateError
 }
 
 // TunnelRegistry manages active tunnels and their states.
@@ -33,7 +34,7 @@ func NewTunnelRegistry(bus *EventBus) *TunnelRegistry {
 }
 
 // Register adds a new tunnel to the registry in Down state.
-func (tr *TunnelRegistry) Register(cfg TunnelConfig, proxyPort uint16) error {
+func (tr *TunnelRegistry) Register(cfg TunnelConfig, proxyPort, udpProxyPort uint16) error {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 
@@ -42,13 +43,14 @@ func (tr *TunnelRegistry) Register(cfg TunnelConfig, proxyPort uint16) error {
 	}
 
 	tr.tunnels[cfg.ID] = &TunnelEntry{
-		ID:        cfg.ID,
-		Config:    cfg,
-		State:     TunnelStateDown,
-		ProxyPort: proxyPort,
+		ID:           cfg.ID,
+		Config:       cfg,
+		State:        TunnelStateDown,
+		ProxyPort:    proxyPort,
+		UDPProxyPort: udpProxyPort,
 	}
 
-	log.Printf("[Core] Registered tunnel %q (protocol=%s, proxy=:%d)", cfg.ID, cfg.Protocol, proxyPort)
+	log.Printf("[Core] Registered tunnel %q (protocol=%s, tcp=:%d, udp=:%d)", cfg.ID, cfg.Protocol, proxyPort, udpProxyPort)
 	return nil
 }
 
@@ -108,12 +110,22 @@ func (tr *TunnelRegistry) GetState(id string) TunnelState {
 	return TunnelStateDown
 }
 
-// GetProxyPort returns the local proxy port for a tunnel.
+// GetProxyPort returns the local TCP proxy port for a tunnel.
 func (tr *TunnelRegistry) GetProxyPort(id string) (uint16, bool) {
 	tr.mu.RLock()
 	defer tr.mu.RUnlock()
 	if entry, ok := tr.tunnels[id]; ok {
 		return entry.ProxyPort, true
+	}
+	return 0, false
+}
+
+// GetUDPProxyPort returns the local UDP proxy port for a tunnel.
+func (tr *TunnelRegistry) GetUDPProxyPort(id string) (uint16, bool) {
+	tr.mu.RLock()
+	defer tr.mu.RUnlock()
+	if entry, ok := tr.tunnels[id]; ok {
+		return entry.UDPProxyPort, true
 	}
 	return 0, false
 }
