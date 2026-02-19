@@ -13,10 +13,11 @@ import (
 	"awg-split-tunnel/internal/provider"
 )
 
-// fwdBufPool reuses 64KB buffers for bidirectional TCP forwarding.
+// fwdBufPool reuses 256KB buffers for bidirectional TCP forwarding.
+// Larger buffers reduce syscall overhead during bulk transfers.
 var fwdBufPool = sync.Pool{
 	New: func() any {
-		b := make([]byte, 64*1024)
+		b := make([]byte, 256*1024)
 		return &b
 	},
 }
