@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/process"
@@ -166,20 +167,30 @@ func main() {
 	log.Println("[Core] Shutting down...")
 	cancel()
 
-	router.Stop()
-	for _, tp := range proxies {
-		tp.Stop()
-	}
-	for _, up := range udpProxies {
-		up.Stop()
-	}
-	for id, prov := range providers {
-		if err := prov.Disconnect(); err != nil {
-			log.Printf("[Core] Error disconnecting %s: %v", id, err)
+	done := make(chan struct{})
+	go func() {
+		router.Stop()
+		for _, tp := range proxies {
+			tp.Stop()
 		}
-	}
+		for _, up := range udpProxies {
+			up.Stop()
+		}
+		for id, prov := range providers {
+			if err := prov.Disconnect(); err != nil {
+				log.Printf("[Core] Error disconnecting %s: %v", id, err)
+			}
+		}
+		close(done)
+	}()
 
-	log.Println("[Core] Shutdown complete.")
+	select {
+	case <-done:
+		log.Println("[Core] Shutdown complete.")
+	case <-time.After(10 * time.Second):
+		log.Println("[Core] Shutdown timed out, forcing exit.")
+		os.Exit(1)
+	}
 }
 
 func getStringSetting(settings map[string]any, key, defaultVal string) string {

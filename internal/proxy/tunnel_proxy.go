@@ -32,6 +32,9 @@ type TunnelProxy struct {
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
+
+	connsMu sync.Mutex
+	conns   map[net.Conn]struct{}
 }
 
 // NewTunnelProxy creates a proxy that listens on the given port.
@@ -40,6 +43,7 @@ func NewTunnelProxy(port uint16, natLookup NATLookup, providerLookup ProviderLoo
 		port:           port,
 		natLookup:      natLookup,
 		providerLookup: providerLookup,
+		conns:          make(map[net.Conn]struct{}),
 	}
 }
 
@@ -69,6 +73,13 @@ func (tp *TunnelProxy) Stop() {
 	if tp.listener != nil {
 		tp.listener.Close()
 	}
+	// Close all active connections to unblock io.CopyBuffer in forwarders.
+	tp.connsMu.Lock()
+	for c := range tp.conns {
+		c.Close()
+	}
+	tp.connsMu.Unlock()
+
 	tp.wg.Wait()
 	log.Printf("[Proxy] Stopped (port %d)", tp.port)
 }
@@ -76,6 +87,18 @@ func (tp *TunnelProxy) Stop() {
 // Port returns the port this proxy listens on.
 func (tp *TunnelProxy) Port() uint16 {
 	return tp.port
+}
+
+func (tp *TunnelProxy) trackConn(c net.Conn) {
+	tp.connsMu.Lock()
+	tp.conns[c] = struct{}{}
+	tp.connsMu.Unlock()
+}
+
+func (tp *TunnelProxy) untrackConn(c net.Conn) {
+	tp.connsMu.Lock()
+	delete(tp.conns, c)
+	tp.connsMu.Unlock()
 }
 
 func (tp *TunnelProxy) acceptLoop(ctx context.Context) {
@@ -102,6 +125,9 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 	defer tp.wg.Done()
 	defer clientConn.Close()
 
+	tp.trackConn(clientConn)
+	defer tp.untrackConn(clientConn)
+
 	// Look up original destination from NAT table.
 	originalDst, tunnelID, ok := tp.natLookup(clientConn.RemoteAddr().String())
 	if !ok {
@@ -123,6 +149,9 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 		return
 	}
 	defer remoteConn.Close()
+
+	tp.trackConn(remoteConn)
+	defer tp.untrackConn(remoteConn)
 
 	// Bidirectional forwarding.
 	var fwg sync.WaitGroup
