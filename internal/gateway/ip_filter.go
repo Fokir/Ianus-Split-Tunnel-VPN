@@ -111,6 +111,13 @@ type IPFilter struct {
 	globalHasAllowedIPs  bool
 	globalDisallowedApps []appPattern
 
+	// Local bypass trie: only hardcoded localBypassCIDRs (RFC 1918, link-local,
+	// multicast, loopback, broadcast). Nil when DisableLocal is set.
+	// Used by the router to drop packets to local networks early — if they
+	// reached TUN, there's no direct route through any local interface, and
+	// the __direct__ proxy (bound to the physical NIC) cannot deliver them.
+	localBypassIPs *PrefixTrie
+
 	// Per-tunnel filters.
 	tunnels map[string]*tunnelFilter
 }
@@ -141,8 +148,10 @@ func NewIPFilter(global core.GlobalFilterConfig, tunnels []core.TunnelConfig) *I
 
 	// Inject local/private networks unless explicitly disabled.
 	if !global.DisableLocal {
+		f.localBypassIPs = NewPrefixTrie()
 		for _, cidr := range localBypassCIDRs {
 			f.globalDisallowedIPs.Insert(cidr.ip, cidr.prefLen)
+			f.localBypassIPs.Insert(cidr.ip, cidr.prefLen)
 		}
 	}
 
@@ -191,6 +200,13 @@ func (f *IPFilter) IsTunnelDisallowedApp(tunnelID, exeLower, baseLower string) b
 		}
 	}
 	return false
+}
+
+// IsLocalBypassIP returns true if the IP belongs to hardcoded local bypass
+// CIDRs (RFC 1918, link-local, multicast, loopback, broadcast).
+// Returns false when DisableLocal is set (localBypassIPs is nil).
+func (f *IPFilter) IsLocalBypassIP(dstIP [4]byte) bool {
+	return f.localBypassIPs != nil && f.localBypassIPs.Contains(dstIP)
 }
 
 // ShouldBypassIP checks if the destination IP should bypass the tunnel.

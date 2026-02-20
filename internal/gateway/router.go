@@ -471,6 +471,16 @@ const (
 )
 
 func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunnelID string, proxyPort uint16, action flowAction) {
+	f := r.ipFilter.Load() // may be nil
+
+	// Early drop: if a local/private IP reached TUN, there is no direct route
+	// through any local interface (Docker/WSL/Hyper-V vNIC is down or absent).
+	// The __direct__ proxy (bound to the physical NIC via IP_UNICAST_IF) cannot
+	// deliver these packets either — drop them to avoid futile proxy timeouts.
+	if f != nil && f.IsLocalBypassIP(dstIP) {
+		return "", 0, flowDrop
+	}
+
 	// Look up PID by source port.
 	pid, err := r.procID.FindPIDByPort(srcPort, isUDP)
 	if err != nil {
@@ -492,8 +502,6 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// Pre-lowercase once for DisallowedApps + rule matching.
 	exeLower := strings.ToLower(exePath)
 	baseLower := filepath.Base(exeLower)
-
-	f := r.ipFilter.Load() // may be nil
 
 	// Check global DisallowedApps — always bypass VPN.
 	if f != nil && f.IsDisallowedApp(exeLower, baseLower) {
