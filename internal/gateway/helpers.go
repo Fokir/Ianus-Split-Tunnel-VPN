@@ -138,3 +138,65 @@ func tunSetUDPPort(pkt []byte, portOff int, newPort uint16, udpCkOff int) {
 	}
 	binary.BigEndian.PutUint16(pkt[udpCkOff:], checksumUpdate16(ck, old, newPort))
 }
+
+// rawMSSLimit is the maximum TCP MSS for raw-forwarded connections.
+// Derived from TUN adapter MTU minus IP (20) + TCP (20) headers.
+const rawMSSLimit = tunInterfaceMTU - 40 // 1360
+
+// clampTCPMSS reduces the MSS option in a TCP SYN/SYN-ACK packet if it
+// exceeds rawMSSLimit. This prevents the remote side from sending segments
+// larger than the VPN tunnel can carry, avoiding silent drops due to MTU
+// mismatch between the TUN adapter and the encrypted tunnel.
+//
+// tpOff is the offset of the TCP header within pkt.
+func clampTCPMSS(pkt []byte, tpOff int) {
+	// Only process packets with SYN flag set (SYN or SYN-ACK).
+	if pkt[tpOff+13]&tcpSYN == 0 {
+		return
+	}
+
+	// TCP data offset → header length in bytes.
+	dataOff := int(pkt[tpOff+12]>>4) * 4
+	if dataOff <= minTCPHdr {
+		return // no options
+	}
+
+	optEnd := tpOff + dataOff
+	if optEnd > len(pkt) {
+		optEnd = len(pkt)
+	}
+
+	// Walk TCP options looking for MSS (kind=2, length=4).
+	for pos := tpOff + minTCPHdr; pos < optEnd; {
+		kind := pkt[pos]
+		if kind == 0 { // End of Option List
+			break
+		}
+		if kind == 1 { // NOP
+			pos++
+			continue
+		}
+		if pos+1 >= optEnd {
+			break
+		}
+		optLen := int(pkt[pos+1])
+		if optLen < 2 || pos+optLen > optEnd {
+			break
+		}
+
+		if kind == 2 && optLen == 4 { // MSS option
+			currentMSS := binary.BigEndian.Uint16(pkt[pos+2:])
+			if currentMSS > rawMSSLimit {
+				binary.BigEndian.PutUint16(pkt[pos+2:], rawMSSLimit)
+				// Incrementally update TCP checksum.
+				tcpCkOff := tpOff + 16
+				ck := binary.BigEndian.Uint16(pkt[tcpCkOff:])
+				ck = checksumUpdate16(ck, currentMSS, rawMSSLimit)
+				binary.BigEndian.PutUint16(pkt[tcpCkOff:], ck)
+			}
+			return
+		}
+
+		pos += optLen
+	}
+}

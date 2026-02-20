@@ -253,6 +253,34 @@ func main() {
 		log.Fatalf("[Core] Failed to set default route: %v", err)
 	}
 
+	// === 11a. DNS Resolver (local DNS forwarder through VPN) ===
+	var dnsResolver *gateway.DNSResolver
+	if dnsConfig.FallbackTunnelID != "" && len(dnsConfig.FallbackServers) > 0 {
+		resolverCfg := gateway.DNSResolverConfig{
+			ListenAddr:     adapter.IP().String() + ":53", // e.g. "10.255.0.1:53"
+			Servers:        dnsConfig.FallbackServers,
+			TunnelID:       dnsConfig.FallbackTunnelID,
+			FallbackDirect: true,
+		}
+		dnsResolver = gateway.NewDNSResolver(resolverCfg, registry, providers)
+		if err := dnsResolver.Start(ctx); err != nil {
+			log.Printf("[DNS] Warning: failed to start DNS resolver: %v", err)
+		} else {
+			// Point TUN adapter DNS to our local resolver.
+			resolverIP := []netip.Addr{adapter.IP()}
+			if err := adapter.SetDNS(resolverIP); err != nil {
+				log.Printf("[DNS] Warning: failed to set DNS on TUN adapter: %v", err)
+			} else {
+				log.Printf("[DNS] TUN adapter DNS → %s (local resolver)", adapter.IP())
+			}
+
+			// Block DNS (port 53) on physical NIC to prevent ISP DPI interception.
+			if err := wfpMgr.BlockDNSOnInterface(realNIC.LUID); err != nil {
+				log.Printf("[DNS] Warning: failed to add DNS leak protection: %v", err)
+			}
+		}
+	}
+
 	// === 12. Start TUN Router ===
 	if err := tunRouter.Start(ctx); err != nil {
 		log.Fatalf("[Core] Failed to start TUN router: %v", err)
@@ -277,10 +305,15 @@ func main() {
 
 	done := make(chan struct{})
 	go func() {
-		// 1. Stop TUN Router
+		// 1. Stop DNS Resolver
+		if dnsResolver != nil {
+			dnsResolver.Stop()
+		}
+
+		// 2. Stop TUN Router
 		tunRouter.Stop()
 
-		// 2. Stop all proxies
+		// 3. Stop all proxies
 		for _, tp := range proxies {
 			tp.Stop()
 		}
@@ -288,20 +321,20 @@ func main() {
 			up.Stop()
 		}
 
-		// 3. Disconnect all providers
+		// 4. Disconnect all providers
 		for id, prov := range providers {
 			if err := prov.Disconnect(); err != nil {
 				log.Printf("[Core] Error disconnecting %s: %v", id, err)
 			}
 		}
 
-		// 4. WFP Manager Close (Dynamic=true auto-cleans)
+		// 5. WFP Manager Close (Dynamic=true auto-cleans)
 		wfpMgr.Close()
 
-		// 5. Route Manager Cleanup (restore default route)
+		// 6. Route Manager Cleanup (restore default route)
 		routeMgr.Cleanup()
 
-		// 6. Gateway Adapter Close (remove TUN)
+		// 7. Gateway Adapter Close (remove TUN)
 		adapter.Close()
 
 		close(done)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"os/exec"
 	"runtime"
 	"unsafe"
 
@@ -139,6 +140,40 @@ func (a *Adapter) Close() error {
 	return nil
 }
 
+// SetDNS configures DNS servers on the TUN adapter so that Windows DNS Client
+// sends queries to these servers (through TUN) instead of ISP/default DNS.
+// Also flushes the system DNS cache to clear stale entries.
+func (a *Adapter) SetDNS(servers []netip.Addr) error {
+	if len(servers) == 0 {
+		return nil
+	}
+
+	// Set primary DNS server via netsh using interface index.
+	out, err := exec.Command("netsh", "interface", "ipv4", "set", "dnsservers",
+		fmt.Sprintf("name=%d", a.ifIndex), "static", servers[0].String(),
+		"register=none", "validate=no",
+	).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("set dns %s: %s: %w", servers[0], string(out), err)
+	}
+
+	// Add secondary DNS servers.
+	for i := 1; i < len(servers); i++ {
+		out, err := exec.Command("netsh", "interface", "ipv4", "add", "dnsservers",
+			fmt.Sprintf("name=%d", a.ifIndex), servers[i].String(),
+			fmt.Sprintf("index=%d", i+1), "validate=no",
+		).CombinedOutput()
+		if err != nil {
+			log.Printf("[DNS] Warning: failed to add secondary DNS %s: %s: %v", servers[i], string(out), err)
+		}
+	}
+
+	// Flush DNS cache to clear stale/blocked entries.
+	exec.Command("ipconfig", "/flushdns").Run()
+
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // IP configuration via iphlpapi.dll
 // ---------------------------------------------------------------------------
@@ -246,11 +281,12 @@ type mibIPInterfaceRow struct {
 }
 
 const (
-	ipIfFamily         = 0
-	ipIfLUID           = 8
-	ipIfIndex          = 16
-	ipIfUseAutometric  = 44  // BOOLEAN (after 9 BOOLEANs starting at offset 40)
-	ipIfMetric         = 148 // ULONG (after ZoneIndices[16] at 80 + SitePrefixLength at 144)
+	ipIfFamily        = 0
+	ipIfLUID          = 8
+	ipIfIndex         = 16
+	ipIfUseAutometric = 44  // BOOLEAN (after 9 BOOLEANs starting at offset 40)
+	ipIfMetric        = 148 // ULONG (after ZoneIndices[16] at 80 + SitePrefixLength at 144)
+	ipIfNlMtu         = 152 // ULONG NlMtu
 )
 
 func (a *Adapter) setMetric() error {
@@ -263,15 +299,17 @@ func (a *Adapter) setMetric() error {
 		return fmt.Errorf("GetIpInterfaceEntry failed: 0x%x", r)
 	}
 
-	// Disable automatic metric and set our value.
+	// Disable automatic metric, set our metric value, and set MTU.
 	row.data[ipIfUseAutometric] = 0
 	*(*uint32)(unsafe.Pointer(&row.data[ipIfMetric])) = tunMetric
+	*(*uint32)(unsafe.Pointer(&row.data[ipIfNlMtu])) = tunInterfaceMTU
 
 	r, _, _ = procSetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row)))
 	if r != 0 {
 		return fmt.Errorf("SetIpInterfaceEntry failed: 0x%x", r)
 	}
 
+	log.Printf("[Gateway] Interface MTU set to %d", tunInterfaceMTU)
 	return nil
 }
 

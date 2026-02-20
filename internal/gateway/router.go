@@ -379,12 +379,13 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	// Slow path: new UDP flow.
 	tunnelID, udpProxyPort, action := r.resolveFlow(m.srcP, true, m.dstIP)
 
-	// DNS special handling: override tunnel based on DNS router.
+	// DNS routing: for matched processes, route DNS through the same tunnel.
+	// For unmatched processes (flowPass), DNS goes to DirectTunnelID — the local
+	// DNS resolver on 10.255.0.1:53 handles VPN routing at the application layer.
 	if m.dstP == 53 && r.dnsRouter != nil {
 		dnsRoute := r.dnsRouter.ResolveDNSRoute(tunnelID)
-		if dnsRoute.TunnelID != "" {
+		if dnsRoute.TunnelID != "" && dnsRoute.TunnelID != DirectTunnelID {
 			tunnelID = dnsRoute.TunnelID
-			// Get the proxy port for the DNS tunnel.
 			if port, ok := r.registry.GetUDPProxyPort(tunnelID); ok {
 				udpProxyPort = port
 			}
@@ -599,6 +600,11 @@ func (r *TUNRouter) handleRawOutbound(pkt []byte, m pktMeta, tunnelID string, vp
 		transportCkOff = m.tpOff + 6
 	}
 
+	// Clamp TCP MSS on SYN packets to prevent oversized segments in tunnel.
+	if proto == protoTCP {
+		clampTCPMSS(pkt, m.tpOff)
+	}
+
 	// Rewrite src IP from TUN IP (10.255.0.1) to tunnel's VPN IP.
 	tunOverwriteSrcIP(pkt, vpnIP, transportCkOff)
 
@@ -611,6 +617,10 @@ func (r *TUNRouter) handleRawOutbound(pkt []byte, m pktMeta, tunnelID string, vp
 // handleInboundRaw is called from WireGuard's receive goroutine for every
 // decrypted IPv4 packet. It performs reverse NAT (VPN IP → TUN IP) and writes
 // the packet to the TUN adapter. Returns true if consumed.
+//
+// IMPORTANT: Only consume packets that have a matching raw flow entry.
+// Packets without a raw flow entry (e.g. gVisor proxy connections, DNS resolver
+// connections) must fall through to gVisor by returning false.
 func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 	if len(pkt) < minIPv4Hdr {
 		return false
@@ -621,13 +631,13 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 		return false
 	}
 
-	// Extract destination IP (bytes 16-19).
+	// Extract destination IP (bytes 16-19) — this is the VPN IP.
 	var dstIP [4]byte
 	copy(dstIP[:], pkt[16:20])
 
 	// Check if this destination IP is one of our VPN IPs.
 	if _, ok := r.flows.LookupVpnIP(dstIP); !ok {
-		return false // not a raw-forwarded flow; let gVisor handle
+		return false // not for us at all
 	}
 
 	ihl := int(pkt[0]&0x0f) * 4
@@ -635,21 +645,41 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 		return false
 	}
 
-	// Determine transport checksum offset based on protocol.
+	proto := pkt[9]
+
+	// Determine transport checksum offset and extract ports for flow lookup.
 	var transportCkOff int
-	switch pkt[9] {
+	var srcIP [4]byte
+	var dstPort uint16
+
+	switch proto {
 	case protoTCP:
 		if len(pkt) < ihl+minTCPHdr {
 			return false
 		}
 		transportCkOff = ihl + 16
+		copy(srcIP[:], pkt[12:16])
+		dstPort = binary.BigEndian.Uint16(pkt[ihl+2:])
 	case protoUDP:
 		if len(pkt) < ihl+minUDPHdr {
 			return false
 		}
 		transportCkOff = ihl + 6
+		copy(srcIP[:], pkt[12:16])
+		dstPort = binary.BigEndian.Uint16(pkt[ihl+2:])
 	default:
 		return false // ICMP etc — let gVisor handle
+	}
+
+	// Check if this response matches a raw flow entry.
+	// For inbound: srcIP = original destination, dstPort = original source port.
+	if _, ok := r.flows.GetRawFlow(proto, srcIP, dstPort); !ok {
+		return false // no raw flow — let gVisor handle (proxy/DNS resolver traffic)
+	}
+
+	// Clamp TCP MSS on inbound SYN-ACK to prevent client sending oversized segments.
+	if proto == protoTCP {
+		clampTCPMSS(pkt, ihl)
 	}
 
 	// Rewrite dst IP from VPN IP to TUN IP (10.255.0.1).

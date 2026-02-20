@@ -259,6 +259,54 @@ func (w *WFPManager) AddBypassPrefixes(prefixes []netip.Prefix) error {
 	return nil
 }
 
+// BlockDNSOnInterface adds WFP rules to block DNS (UDP/TCP port 53) on a
+// specific interface (typically the physical NIC). This prevents ISP DPI from
+// intercepting DNS queries while keeping DNS available on other adapters
+// (e.g. VMware, Hyper-V work subnets).
+func (w *WFPManager) BlockDNSOnInterface(ifLUID uint64) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	for _, proto := range []uint8{17, 6} {
+		protoName := "UDP"
+		if proto == 6 {
+			protoName = "TCP"
+		}
+
+		ruleID := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:       ruleID,
+			Name:     fmt.Sprintf("AWG block DNS leak: %s:53 on LUID 0x%x", protoName, ifLUID),
+			Layer:    wf.LayerALEAuthConnectV4,
+			Sublayer: awgSublayerID,
+			Weight:   3000,
+			Conditions: []*wf.Match{
+				{
+					Field: wf.FieldIPProtocol,
+					Op:    wf.MatchTypeEqual,
+					Value: proto,
+				},
+				{
+					Field: wf.FieldIPRemotePort,
+					Op:    wf.MatchTypeEqual,
+					Value: uint16(53),
+				},
+				{
+					Field: wf.FieldIPLocalInterface,
+					Op:    wf.MatchTypeEqual,
+					Value: ifLUID,
+				},
+			},
+			Action: wf.ActionBlock,
+		}); err != nil {
+			return fmt.Errorf("[WFP] block DNS leak %s: %w", protoName, err)
+		}
+	}
+
+	log.Printf("[WFP] DNS blocked on interface LUID 0x%x (port 53 UDP+TCP)", ifLUID)
+	return nil
+}
+
 // Close closes the WFP session. Dynamic=true means all rules are auto-removed.
 func (w *WFPManager) Close() error {
 	if w.session != nil {
