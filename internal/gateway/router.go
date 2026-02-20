@@ -5,7 +5,6 @@ package gateway
 import (
 	"context"
 	"encoding/binary"
-	"log"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -95,7 +94,7 @@ func (r *TUNRouter) Start(ctx context.Context) error {
 
 	go r.packetLoop(ctx)
 
-	log.Printf("[Gateway] TUN Router started")
+	core.Log.Infof("Gateway", "TUN Router started")
 	return nil
 }
 
@@ -105,7 +104,7 @@ func (r *TUNRouter) Stop() {
 		r.cancel()
 	}
 	<-r.done
-	log.Printf("[Gateway] TUN Router stopped")
+	core.Log.Infof("Gateway", "TUN Router stopped")
 }
 
 // writePacket sends a packet via the adapter. On failure (ring full after retry),
@@ -113,7 +112,7 @@ func (r *TUNRouter) Stop() {
 func (r *TUNRouter) writePacket(pkt []byte) {
 	if err := r.adapter.WritePacket(pkt); err != nil {
 		if d := r.drops.Add(1); d == 1 || d%10000 == 0 {
-			log.Printf("[Gateway] Packet drop #%d: %v", d, err)
+			core.Log.Debugf("Gateway", "Packet drop #%d: %v", d, err)
 		}
 	}
 }
@@ -138,7 +137,7 @@ func (r *TUNRouter) packetLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("[Gateway] Read error: %v", err)
+				core.Log.Errorf("Gateway", "Read error: %v", err)
 				continue
 			}
 		}
@@ -575,7 +574,7 @@ func (r *TUNRouter) RegisterRawForwarder(tunnelID string, rf provider.RawForward
 	// WireGuard tunnel hit handleInboundRaw instead of gVisor.
 	rf.SetInboundHandler(r.handleInboundRaw)
 
-	log.Printf("[Gateway] Raw forwarder registered for tunnel %q (vpnIP=%d.%d.%d.%d)",
+	core.Log.Infof("Gateway", "Raw forwarder registered for tunnel %q (vpnIP=%d.%d.%d.%d)",
 		tunnelID, vpnIP[0], vpnIP[1], vpnIP[2], vpnIP[3])
 }
 

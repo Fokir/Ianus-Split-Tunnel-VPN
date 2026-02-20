@@ -4,10 +4,11 @@ package gateway
 
 import (
 	"fmt"
-	"log"
 	"net/netip"
 	"strings"
 	"sync"
+
+	"awg-split-tunnel/internal/core"
 
 	"golang.org/x/sys/windows"
 
@@ -73,7 +74,7 @@ func NewWFPManager(tunLUID uint64) (*WFPManager, error) {
 		return nil, fmt.Errorf("[WFP] add sublayer: %w", err)
 	}
 
-	log.Printf("[WFP] Session opened (Dynamic=true, TUN LUID=0x%x)", tunLUID)
+	core.Log.Infof("WFP", "Session opened (Dynamic=true, TUN LUID=0x%x)", tunLUID)
 
 	return &WFPManager{
 		session: sess,
@@ -95,7 +96,7 @@ func (w *WFPManager) EnsureBlocked(exePath string) {
 	w.mu.Unlock()
 
 	if err := w.BlockProcessOnRealNIC(exePath); err != nil {
-		log.Printf("[WFP] Failed to block %s on real NIC: %v", exePath, err)
+		core.Log.Errorf("WFP", "Failed to block %s on real NIC: %v", exePath, err)
 	}
 }
 
@@ -177,7 +178,7 @@ func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 	ruleIDs = append(ruleIDs, recvRuleID)
 
 	w.rules[key] = ruleIDs
-	log.Printf("[WFP] Blocked %s on real NIC (%d rules)", key, len(ruleIDs))
+	core.Log.Debugf("WFP", "Blocked %s on real NIC (%d rules)", key, len(ruleIDs))
 	return nil
 }
 
@@ -255,7 +256,7 @@ func (w *WFPManager) AddBypassPrefixes(prefixes []netip.Prefix) error {
 		}
 	}
 
-	log.Printf("[WFP] Added bypass permits for %d prefixes", len(prefixes))
+	core.Log.Infof("WFP", "Added bypass permits for %d prefixes", len(prefixes))
 	return nil
 }
 
@@ -303,7 +304,7 @@ func (w *WFPManager) BlockDNSOnInterface(ifLUID uint64) error {
 		}
 	}
 
-	log.Printf("[WFP] DNS blocked on interface LUID 0x%x (port 53 UDP+TCP)", ifLUID)
+	core.Log.Infof("WFP", "DNS blocked on interface LUID 0x%x (port 53 UDP+TCP)", ifLUID)
 	return nil
 }
 
@@ -311,7 +312,7 @@ func (w *WFPManager) BlockDNSOnInterface(ifLUID uint64) error {
 func (w *WFPManager) Close() error {
 	if w.session != nil {
 		err := w.session.Close()
-		log.Printf("[WFP] Session closed")
+		core.Log.Infof("WFP", "Session closed")
 		return err
 	}
 	return nil

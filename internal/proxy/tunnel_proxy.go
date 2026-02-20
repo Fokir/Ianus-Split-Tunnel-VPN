@@ -6,10 +6,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"sync"
 
+	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/provider"
 )
 
@@ -71,7 +71,7 @@ func (tp *TunnelProxy) Start(ctx context.Context) error {
 		return fmt.Errorf("[Proxy] failed to listen on %s: %w", addr, err)
 	}
 	tp.listener = ln
-	log.Printf("[Proxy] Listening on %s", addr)
+	core.Log.Infof("Proxy", "Listening on %s", addr)
 
 	tp.wg.Add(1)
 	go tp.acceptLoop(ctx)
@@ -95,7 +95,7 @@ func (tp *TunnelProxy) Stop() {
 	tp.connsMu.Unlock()
 
 	tp.wg.Wait()
-	log.Printf("[Proxy] Stopped (port %d)", tp.port)
+	core.Log.Infof("Proxy", "Stopped (port %d)", tp.port)
 }
 
 // Port returns the port this proxy listens on.
@@ -125,7 +125,7 @@ func (tp *TunnelProxy) acceptLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("[Proxy] Accept error: %v", err)
+				core.Log.Errorf("Proxy", "Accept error: %v", err)
 				continue
 			}
 		}
@@ -152,21 +152,21 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 	// Look up original destination from NAT table.
 	originalDst, tunnelID, ok := tp.natLookup(clientConn.RemoteAddr().String())
 	if !ok {
-		log.Printf("[Proxy] No NAT entry for %s, closing", clientConn.RemoteAddr())
+		core.Log.Warnf("Proxy", "No NAT entry for %s, closing", clientConn.RemoteAddr())
 		return
 	}
 
 	// Get the tunnel provider.
 	prov, ok := tp.providerLookup(tunnelID)
 	if !ok {
-		log.Printf("[Proxy] No provider for tunnel %q, closing", tunnelID)
+		core.Log.Errorf("Proxy", "No provider for tunnel %q, closing", tunnelID)
 		return
 	}
 
 	// Dial through the tunnel.
 	remoteConn, err := prov.DialTCP(ctx, originalDst)
 	if err != nil {
-		log.Printf("[Proxy] Failed to dial %s via %s: %v", originalDst, tunnelID, err)
+		core.Log.Errorf("Proxy", "Failed to dial %s via %s: %v", originalDst, tunnelID, err)
 		return
 	}
 	defer remoteConn.Close()

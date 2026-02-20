@@ -41,7 +41,6 @@ func main() {
 	}
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	log.Printf("[Core] AWG Split Tunnel %s starting...", version)
 
 	// === 1. Core components ===
 	bus := core.NewEventBus()
@@ -49,9 +48,13 @@ func main() {
 	resolvedConfigPath := resolveRelativeToExe(*configPath)
 	cfgManager := core.NewConfigManager(resolvedConfigPath, bus)
 	if err := cfgManager.Load(); err != nil {
-		log.Fatalf("[Core] Failed to load config: %v", err)
+		core.Log.Fatalf("Core", "Failed to load config: %v", err)
 	}
 	cfg := cfgManager.Get()
+
+	// Initialize logger from config.
+	core.Log = core.NewLogger(cfg.Logging)
+	core.Log.Infof("Core", "AWG Split Tunnel %s starting...", version)
 
 	registry := core.NewTunnelRegistry(bus)
 	matcher := process.NewMatcher()
@@ -63,7 +66,7 @@ func main() {
 	// === 2. Gateway Adapter (WinTUN) ===
 	adapter, err := gateway.NewAdapter()
 	if err != nil {
-		log.Fatalf("[Core] Failed to create gateway adapter: %v", err)
+		core.Log.Fatalf("Core", "Failed to create gateway adapter: %v", err)
 	}
 
 	// === 3. Discover Real NIC ===
@@ -71,14 +74,14 @@ func main() {
 	realNIC, err := routeMgr.DiscoverRealNIC()
 	if err != nil {
 		adapter.Close()
-		log.Fatalf("[Core] Failed to discover real NIC: %v", err)
+		core.Log.Fatalf("Core", "Failed to discover real NIC: %v", err)
 	}
 
 	// === 4. WFP Manager ===
 	wfpMgr, err := gateway.NewWFPManager(adapter.LUID())
 	if err != nil {
 		adapter.Close()
-		log.Fatalf("[Core] Failed to create WFP manager: %v", err)
+		core.Log.Fatalf("Core", "Failed to create WFP manager: %v", err)
 	}
 
 	// === 5. Flow Table + Process Identifier ===
@@ -93,7 +96,7 @@ func main() {
 		if ip, err := netip.ParseAddr(s); err == nil {
 			dnsConfig.FallbackServers = append(dnsConfig.FallbackServers, ip)
 		} else {
-			log.Printf("[Core] Invalid DNS server %q in config: %v", s, err)
+			core.Log.Warnf("Core", "Invalid DNS server %q in config: %v", s, err)
 		}
 	}
 	dnsRouter := gateway.NewDNSRouter(dnsConfig, registry)
@@ -107,7 +110,7 @@ func main() {
 	ipFilter := gateway.NewIPFilter(cfg.Global, cfg.Tunnels)
 	tunRouter.SetIPFilter(ipFilter)
 	if ipFilter.HasFilters() {
-		log.Printf("[Gateway] IP/App filter active: global disallowed_ips=%d, global allowed_ips=%d, global disallowed_apps=%d",
+		core.Log.Infof("Gateway", "IP/App filter active: global disallowed_ips=%d, global allowed_ips=%d, global disallowed_apps=%d",
 			len(cfg.Global.DisallowedIPs), len(cfg.Global.AllowedIPs), len(cfg.Global.DisallowedApps))
 	}
 
@@ -117,7 +120,7 @@ func main() {
 	bypassPrefixes := gateway.GetBypassPrefixes(cfg.Global)
 	if len(bypassPrefixes) > 0 {
 		if err := wfpMgr.AddBypassPrefixes(bypassPrefixes); err != nil {
-			log.Printf("[Core] Warning: failed to add WFP bypass permits: %v", err)
+			core.Log.Warnf("Core", "Failed to add WFP bypass permits: %v", err)
 		}
 	}
 
@@ -146,7 +149,7 @@ func main() {
 		Name:     "Direct",
 	}
 	if err := registry.Register(directCfg, directProxyPort, directUDPProxyPort); err != nil {
-		log.Fatalf("[Core] Failed to register direct provider: %v", err)
+		core.Log.Fatalf("Core", "Failed to register direct provider: %v", err)
 	}
 	registry.SetState(gateway.DirectTunnelID, core.TunnelStateUp, nil)
 	providers[gateway.DirectTunnelID] = directProv
@@ -157,13 +160,13 @@ func main() {
 	tp := proxy.NewTunnelProxy(directProxyPort, flows.LookupNAT, providerLookup)
 	proxies = append(proxies, tp)
 	if err := tp.Start(ctx); err != nil {
-		log.Fatalf("[Core] Failed to start direct TCP proxy: %v", err)
+		core.Log.Fatalf("Core", "Failed to start direct TCP proxy: %v", err)
 	}
 
 	up := proxy.NewUDPProxy(directUDPProxyPort, flows.LookupUDPNAT, providerLookup)
 	udpProxies = append(udpProxies, up)
 	if err := up.Start(ctx); err != nil {
-		log.Fatalf("[Core] Failed to start direct UDP proxy: %v", err)
+		core.Log.Fatalf("Core", "Failed to start direct UDP proxy: %v", err)
 	}
 
 	// === 9. VPN Providers + proxies ===
@@ -186,19 +189,19 @@ func main() {
 			}
 			p, err := amneziawg.New(tcfg.Name, awgCfg)
 			if err != nil {
-				log.Printf("[Core] Failed to create AWG provider %q: %v", tcfg.ID, err)
+				core.Log.Errorf("Core", "Failed to create AWG provider %q: %v", tcfg.ID, err)
 				continue
 			}
 			prov = p
 
 		default:
-			log.Printf("[Core] Unknown protocol %q for tunnel %q, skipping", tcfg.Protocol, tcfg.ID)
+			core.Log.Warnf("Core", "Unknown protocol %q for tunnel %q, skipping", tcfg.Protocol, tcfg.ID)
 			continue
 		}
 
 		// Register tunnel.
 		if err := registry.Register(tcfg, proxyPort, udpProxyPort); err != nil {
-			log.Printf("[Core] Failed to register tunnel %q: %v", tcfg.ID, err)
+			core.Log.Errorf("Core", "Failed to register tunnel %q: %v", tcfg.ID, err)
 			continue
 		}
 
@@ -210,7 +213,7 @@ func main() {
 		tp := proxy.NewTunnelProxy(proxyPort, flows.LookupNAT, providerLookup)
 		proxies = append(proxies, tp)
 		if err := tp.Start(ctx); err != nil {
-			log.Printf("[Core] Failed to start TCP proxy for tunnel %q: %v", tcfg.ID, err)
+			core.Log.Errorf("Core", "Failed to start TCP proxy for tunnel %q: %v", tcfg.ID, err)
 			continue
 		}
 
@@ -218,13 +221,13 @@ func main() {
 		up := proxy.NewUDPProxy(udpProxyPort, flows.LookupUDPNAT, providerLookup)
 		udpProxies = append(udpProxies, up)
 		if err := up.Start(ctx); err != nil {
-			log.Printf("[Core] Failed to start UDP proxy for tunnel %q: %v", tcfg.ID, err)
+			core.Log.Errorf("Core", "Failed to start UDP proxy for tunnel %q: %v", tcfg.ID, err)
 			continue
 		}
 
 		// Connect the provider.
 		if err := prov.Connect(ctx); err != nil {
-			log.Printf("[Core] Failed to connect tunnel %q: %v", tcfg.ID, err)
+			core.Log.Errorf("Core", "Failed to connect tunnel %q: %v", tcfg.ID, err)
 			registry.SetState(tcfg.ID, core.TunnelStateError, err)
 			continue
 		}
@@ -242,7 +245,7 @@ func main() {
 		if awgProv, ok := prov.(*amneziawg.Provider); ok {
 			for _, ep := range awgProv.GetPeerEndpoints() {
 				if err := routeMgr.AddBypassRoute(ep.Addr()); err != nil {
-					log.Printf("[Core] Failed to add bypass route for %s: %v", ep, err)
+					core.Log.Warnf("Core", "Failed to add bypass route for %s: %v", ep, err)
 				}
 			}
 		}
@@ -250,7 +253,7 @@ func main() {
 
 	// === 11. Set default route via TUN (LAST — after all bypass routes) ===
 	if err := routeMgr.SetDefaultRoute(); err != nil {
-		log.Fatalf("[Core] Failed to set default route: %v", err)
+		core.Log.Fatalf("Core", "Failed to set default route: %v", err)
 	}
 
 	// === 11a. DNS Resolver (local DNS forwarder through VPN) ===
@@ -264,43 +267,43 @@ func main() {
 		}
 		dnsResolver = gateway.NewDNSResolver(resolverCfg, registry, providers)
 		if err := dnsResolver.Start(ctx); err != nil {
-			log.Printf("[DNS] Warning: failed to start DNS resolver: %v", err)
+			core.Log.Warnf("DNS", "Failed to start DNS resolver: %v", err)
 		} else {
 			// Point TUN adapter DNS to our local resolver.
 			resolverIP := []netip.Addr{adapter.IP()}
 			if err := adapter.SetDNS(resolverIP); err != nil {
-				log.Printf("[DNS] Warning: failed to set DNS on TUN adapter: %v", err)
+				core.Log.Warnf("DNS", "Failed to set DNS on TUN adapter: %v", err)
 			} else {
-				log.Printf("[DNS] TUN adapter DNS → %s (local resolver)", adapter.IP())
+				core.Log.Infof("DNS", "TUN adapter DNS → %s (local resolver)", adapter.IP())
 			}
 
 			// Block DNS (port 53) on physical NIC to prevent ISP DPI interception.
 			if err := wfpMgr.BlockDNSOnInterface(realNIC.LUID); err != nil {
-				log.Printf("[DNS] Warning: failed to add DNS leak protection: %v", err)
+				core.Log.Warnf("DNS", "Failed to add DNS leak protection: %v", err)
 			}
 		}
 	}
 
 	// === 12. Start TUN Router ===
 	if err := tunRouter.Start(ctx); err != nil {
-		log.Fatalf("[Core] Failed to start TUN router: %v", err)
+		core.Log.Fatalf("Core", "Failed to start TUN router: %v", err)
 	}
 
 	// --- Log active rules ---
 	rules := ruleEngine.GetRules()
-	log.Printf("[Core] Active rules: %d", len(rules))
+	core.Log.Infof("Core", "Active rules: %d", len(rules))
 	for _, r := range rules {
-		log.Printf("[Rule]   %s → tunnel=%q fallback=%s", r.Pattern, r.TunnelID, r.Fallback)
+		core.Log.Infof("Rule", "  %s → tunnel=%q fallback=%s", r.Pattern, r.TunnelID, r.Fallback)
 	}
 
 	// --- Wait for shutdown signal ---
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	log.Println("[Core] Running. Press Ctrl+C to stop.")
+	core.Log.Infof("Core", "Running. Press Ctrl+C to stop.")
 	<-sig
 
 	// === Graceful shutdown (reverse order) ===
-	log.Println("[Core] Shutting down...")
+	core.Log.Infof("Core", "Shutting down...")
 	cancel()
 
 	done := make(chan struct{})
@@ -324,7 +327,7 @@ func main() {
 		// 4. Disconnect all providers
 		for id, prov := range providers {
 			if err := prov.Disconnect(); err != nil {
-				log.Printf("[Core] Error disconnecting %s: %v", id, err)
+				core.Log.Errorf("Core", "Error disconnecting %s: %v", id, err)
 			}
 		}
 
@@ -342,9 +345,9 @@ func main() {
 
 	select {
 	case <-done:
-		log.Println("[Core] Shutdown complete.")
+		core.Log.Infof("Core", "Shutdown complete.")
 	case <-time.After(10 * time.Second):
-		log.Println("[Core] Shutdown timed out, forcing exit.")
+		core.Log.Errorf("Core", "Shutdown timed out, forcing exit.")
 		os.Exit(1)
 	}
 }
@@ -366,7 +369,7 @@ func resolveRelativeToExe(path string) string {
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		log.Printf("[Core] Cannot determine executable path, using %q as-is: %v", path, err)
+		core.Log.Warnf("Core", "Cannot determine executable path, using %q as-is: %v", path, err)
 		return path
 	}
 	return filepath.Join(filepath.Dir(exe), path)

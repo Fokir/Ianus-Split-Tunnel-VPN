@@ -4,11 +4,12 @@ package gateway
 
 import (
 	"context"
-	"log"
 	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"awg-split-tunnel/internal/core"
 )
 
 // ---------------------------------------------------------------------------
@@ -381,7 +382,7 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 				}
 
 				if totalRemoved > 0 {
-					log.Printf("[Gateway] Raw flow cleanup: removed %d stale entries", totalRemoved)
+					core.Log.Debugf("Gateway", "Raw flow cleanup: removed %d stale entries", totalRemoved)
 				}
 			}
 		}
@@ -495,7 +496,7 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 				}
 
 				if totalRemoved > 0 {
-					log.Printf("[Gateway] TCP NAT cleanup: removed %d stale entries", totalRemoved)
+					core.Log.Debugf("Gateway", "TCP NAT cleanup: removed %d stale entries", totalRemoved)
 				}
 			}
 		}

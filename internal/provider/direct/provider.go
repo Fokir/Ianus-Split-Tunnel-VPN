@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"net"
 	"net/netip"
 	"syscall"
@@ -41,14 +40,14 @@ func New(realNICIndex uint32, localIP netip.Addr) *Provider {
 // Connect is a no-op for DirectProvider (always up).
 func (p *Provider) Connect(_ context.Context) error {
 	p.state = core.TunnelStateUp
-	log.Printf("[Direct] Provider ready (NIC index=%d, localIP=%s)", p.realNICIndex, p.localIP)
+	core.Log.Infof("Direct", "Provider ready (NIC index=%d, localIP=%s)", p.realNICIndex, p.localIP)
 	return nil
 }
 
 // Disconnect is a no-op.
 func (p *Provider) Disconnect() error {
 	p.state = core.TunnelStateDown
-	log.Printf("[Direct] Provider stopped")
+	core.Log.Infof("Direct", "Provider stopped")
 	return nil
 }
 

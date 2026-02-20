@@ -4,7 +4,6 @@ package core
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"sync"
 
@@ -123,6 +122,7 @@ type Config struct {
 	Tunnels []TunnelConfig     `yaml:"tunnels"`
 	Rules   []Rule             `yaml:"rules"`
 	DNS     DNSRouteConfig     `yaml:"dns,omitempty"`
+	Logging LogConfig          `yaml:"logging,omitempty"`
 }
 
 // ConfigManager handles loading, saving, and hot-reloading configuration.
@@ -152,7 +152,7 @@ func (cm *ConfigManager) Load() error {
 	data, err := os.ReadFile(cm.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("[Core] Config %s not found, creating default config", cm.filePath)
+			Log.Infof("Core", "Config %s not found, creating default config", cm.filePath)
 			cm.mu.Lock()
 			cm.config = defaultConfig()
 			cm.mu.Unlock()

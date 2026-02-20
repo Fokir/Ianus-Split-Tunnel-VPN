@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/netip"
 	"sync"
@@ -98,7 +97,7 @@ func (r *DNSResolver) Start(ctx context.Context) error {
 	go r.udpLoop(ctx)
 	go r.tcpLoop(ctx)
 
-	log.Printf("[DNS] Resolver listening on %s (tunnel=%s, servers=%v, fallback_direct=%v)",
+	core.Log.Infof("DNS", "Resolver listening on %s (tunnel=%s, servers=%v, fallback_direct=%v)",
 		r.config.ListenAddr, r.config.TunnelID, r.config.Servers, r.config.FallbackDirect)
 	return nil
 }
@@ -115,7 +114,7 @@ func (r *DNSResolver) Stop() {
 		r.tcpLn.Close()
 	}
 	r.wg.Wait()
-	log.Printf("[DNS] Resolver stopped")
+	core.Log.Infof("DNS", "Resolver stopped")
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +132,7 @@ func (r *DNSResolver) udpLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("[DNS] UDP read error: %v", err)
+				core.Log.Errorf("DNS", "UDP read error: %v", err)
 				continue
 			}
 		}
@@ -158,7 +157,7 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 	if err == nil {
 		r.udpConn.WriteToUDP(resp, clientAddr)
 		if name != "" {
-			log.Printf("[DNS] %s → %s via %s (UDP)", name, server, r.config.TunnelID)
+			core.Log.Debugf("DNS", "%s → %s via %s (UDP)", name, server, r.config.TunnelID)
 		}
 		return
 	}
@@ -169,13 +168,13 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 		if err == nil {
 			r.udpConn.WriteToUDP(resp, clientAddr)
 			if name != "" {
-				log.Printf("[DNS] %s → %s via direct/fallback (UDP)", name, server)
+				core.Log.Debugf("DNS", "%s → %s via direct/fallback (UDP)", name, server)
 			}
 			return
 		}
 	}
 
-	log.Printf("[DNS] All servers failed for %s (UDP): %v", name, err)
+	core.Log.Warnf("DNS", "All servers failed for %s (UDP): %v", name, err)
 	// Send SERVFAIL response.
 	if sf := makeServFail(query); sf != nil {
 		r.udpConn.WriteToUDP(sf, clientAddr)
@@ -239,7 +238,7 @@ func (r *DNSResolver) tcpLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("[DNS] TCP accept error: %v", err)
+				core.Log.Errorf("DNS", "TCP accept error: %v", err)
 				continue
 			}
 		}
@@ -276,13 +275,13 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 	}
 
 	if err != nil {
-		log.Printf("[DNS] All servers failed for %s (TCP): %v", name, err)
+		core.Log.Warnf("DNS", "All servers failed for %s (TCP): %v", name, err)
 		resp = makeServFail(query)
 		if resp == nil {
 			return
 		}
 	} else if name != "" {
-		log.Printf("[DNS] %s → %s via %s (TCP)", name, server, r.config.TunnelID)
+		core.Log.Debugf("DNS", "%s → %s via %s (TCP)", name, server, r.config.TunnelID)
 	}
 
 	// Write response with length prefix.

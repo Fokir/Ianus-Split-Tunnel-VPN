@@ -4,11 +4,12 @@ package gateway
 
 import (
 	"fmt"
-	"log"
 	"net/netip"
 	"os/exec"
 	"runtime"
 	"unsafe"
+
+	"awg-split-tunnel/internal/core"
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wintun"
@@ -76,10 +77,10 @@ func NewAdapter() (*Adapter, error) {
 
 	// Set low metric to make this the preferred interface.
 	if err := a.setMetric(); err != nil {
-		log.Printf("[Gateway] Warning: failed to set metric: %v", err)
+		core.Log.Warnf("Gateway", "Failed to set metric: %v", err)
 	}
 
-	log.Printf("[Gateway] Adapter %q created (IP=%s, LUID=0x%x)", adapterName, ip, luid)
+	core.Log.Infof("Gateway", "Adapter %q created (IP=%s, LUID=0x%x)", adapterName, ip, luid)
 	return a, nil
 }
 
@@ -136,7 +137,7 @@ func (a *Adapter) WritePacket(pkt []byte) error {
 func (a *Adapter) Close() error {
 	a.session.End()
 	a.wt.Close()
-	log.Printf("[Gateway] Adapter closed")
+	core.Log.Infof("Gateway", "Adapter closed")
 	return nil
 }
 
@@ -164,7 +165,7 @@ func (a *Adapter) SetDNS(servers []netip.Addr) error {
 			fmt.Sprintf("index=%d", i+1), "validate=no",
 		).CombinedOutput()
 		if err != nil {
-			log.Printf("[DNS] Warning: failed to add secondary DNS %s: %s: %v", servers[i], string(out), err)
+			core.Log.Warnf("DNS", "Failed to add secondary DNS %s: %s: %v", servers[i], string(out), err)
 		}
 	}
 
@@ -309,7 +310,7 @@ func (a *Adapter) setMetric() error {
 		return fmt.Errorf("SetIpInterfaceEntry failed: 0x%x", r)
 	}
 
-	log.Printf("[Gateway] Interface MTU set to %d", tunInterfaceMTU)
+	core.Log.Infof("Gateway", "Interface MTU set to %d", tunInterfaceMTU)
 	return nil
 }
 

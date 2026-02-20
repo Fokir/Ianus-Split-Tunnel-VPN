@@ -3,7 +3,6 @@
 package core
 
 import (
-	"log"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -106,7 +105,7 @@ func (re *RuleEngine) SetRules(rules []Rule) {
 	re.rulesLower = lower
 	re.mu.Unlock()
 
-	log.Printf("[Rule] Updated %d rules", len(rules))
+	Log.Infof("Rule", "Updated %d rules", len(rules))
 }
 
 // AddRule appends a rule and notifies subscribers.
@@ -116,7 +115,7 @@ func (re *RuleEngine) AddRule(rule Rule) {
 	re.rulesLower = append(re.rulesLower, strings.ToLower(rule.Pattern))
 	re.mu.Unlock()
 
-	log.Printf("[Rule] Added: %s → %s (fallback=%s)", rule.Pattern, rule.TunnelID, rule.Fallback)
+	Log.Infof("Rule", "Added: %s → %s (fallback=%s)", rule.Pattern, rule.TunnelID, rule.Fallback)
 	if re.bus != nil {
 		re.bus.Publish(Event{Type: EventRuleAdded, Payload: RulePayload{Rule: rule}})
 	}
@@ -131,7 +130,7 @@ func (re *RuleEngine) RemoveRule(pattern string) bool {
 		if rule.Pattern == pattern {
 			re.rules = append(re.rules[:i], re.rules[i+1:]...)
 			re.rulesLower = append(re.rulesLower[:i], re.rulesLower[i+1:]...)
-			log.Printf("[Rule] Removed: %s", pattern)
+			Log.Infof("Rule", "Removed: %s", pattern)
 			if re.bus != nil {
 				re.bus.Publish(Event{Type: EventRuleRemoved, Payload: RulePayload{Rule: rule}})
 			}

@@ -3,7 +3,6 @@
 package gateway
 
 import (
-	"log"
 	"net"
 	"net/netip"
 	"strings"
@@ -261,7 +260,7 @@ func buildTrie(cidrs []string) *PrefixTrie {
 
 		_, ipNet, err := net.ParseCIDR(s)
 		if err != nil {
-			log.Printf("[Gateway] Invalid CIDR %q: %v", s, err)
+			core.Log.Warnf("Gateway", "Invalid CIDR %q: %v", s, err)
 			continue
 		}
 

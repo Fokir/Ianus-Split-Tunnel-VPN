@@ -4,11 +4,12 @@ package gateway
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"net/netip"
 	"sync"
 	"unsafe"
+
+	"awg-split-tunnel/internal/core"
 
 	"golang.org/x/sys/windows"
 )
@@ -58,7 +59,7 @@ func (rm *RouteManager) DiscoverRealNIC() (RealNIC, error) {
 	}
 
 	rm.realNIC = nic
-	log.Printf("[Route] Real NIC: LUID=0x%x Index=%d Gateway=%s LocalIP=%s", nic.LUID, nic.Index, nic.Gateway, nic.LocalIP)
+	core.Log.Infof("Route", "Real NIC: LUID=0x%x Index=%d Gateway=%s LocalIP=%s", nic.LUID, nic.Index, nic.Gateway, nic.LocalIP)
 	return nic, nil
 }
 
@@ -80,7 +81,7 @@ func (rm *RouteManager) SetDefaultRoute() error {
 	for _, prefix := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
 		p := netip.MustParsePrefix(prefix)
 		if err := rm.addRouteWithMetric(p, rm.realNIC.LUID, rm.realNIC.Gateway, backupMetric); err != nil {
-			log.Printf("[Route] Warning: backup route %s via real NIC: %v", prefix, err)
+			core.Log.Warnf("Route", "Backup route %s via real NIC: %v", prefix, err)
 		}
 	}
 
@@ -92,7 +93,7 @@ func (rm *RouteManager) SetDefaultRoute() error {
 		return fmt.Errorf("[Route] add 128.0.0.0/1: %w", err)
 	}
 
-	log.Printf("[Route] Default routes set via TUN")
+	core.Log.Infof("Route", "Default routes set via TUN")
 	return nil
 }
 
@@ -107,7 +108,7 @@ func (rm *RouteManager) AddBypassRoute(dst netip.Addr) error {
 		return fmt.Errorf("[Route] bypass %s: %w", dst, err)
 	}
 
-	log.Printf("[Route] Added bypass route: %s via real NIC", dst)
+	core.Log.Infof("Route", "Added bypass route: %s via real NIC", dst)
 	return nil
 }
 
@@ -126,10 +127,10 @@ func (rm *RouteManager) Cleanup() error {
 	rm.routes = nil
 
 	if lastErr != nil {
-		log.Printf("[Route] Cleanup completed with errors: %v", lastErr)
+		core.Log.Warnf("Route", "Cleanup completed with errors: %v", lastErr)
 		return lastErr
 	}
-	log.Printf("[Route] Cleanup completed")
+	core.Log.Infof("Route", "Cleanup completed")
 	return nil
 }
 

@@ -4,7 +4,6 @@ package core
 
 import (
 	"fmt"
-	"log"
 	"sync"
 )
 
@@ -50,7 +49,7 @@ func (tr *TunnelRegistry) Register(cfg TunnelConfig, proxyPort, udpProxyPort uin
 		UDPProxyPort: udpProxyPort,
 	}
 
-	log.Printf("[Core] Registered tunnel %q (protocol=%s, tcp=:%d, udp=:%d)", cfg.ID, cfg.Protocol, proxyPort, udpProxyPort)
+	Log.Infof("Core", "Registered tunnel %q (protocol=%s, tcp=:%d, udp=:%d)", cfg.ID, cfg.Protocol, proxyPort, udpProxyPort)
 	return nil
 }
 
@@ -60,7 +59,7 @@ func (tr *TunnelRegistry) Unregister(id string) {
 	delete(tr.tunnels, id)
 	tr.mu.Unlock()
 
-	log.Printf("[Core] Unregistered tunnel %q", id)
+	Log.Infof("Core", "Unregistered tunnel %q", id)
 }
 
 // Get returns a snapshot copy of the tunnel entry for the given ID.
@@ -91,7 +90,7 @@ func (tr *TunnelRegistry) SetState(id string, state TunnelState, err error) {
 	tr.mu.Unlock()
 
 	if old != state {
-		log.Printf("[Core] Tunnel %q: %s → %s", id, old, state)
+		Log.Infof("Core", "Tunnel %q: %s → %s", id, old, state)
 		if tr.bus != nil {
 			tr.bus.Publish(Event{
 				Type: EventTunnelStateChanged,

@@ -74,3 +74,15 @@ dns:
   servers:
     - "1.1.1.1"
     - "8.8.8.8"
+
+# Logging configuration (optional).
+# Controls log verbosity globally and per-component.
+# Levels: debug, info, warn, error, off (default: info).
+# Fatalf always prints regardless of level.
+logging:
+  level: info
+  # Per-component overrides (lowercase component name):
+  #   core, gateway, route, wfp, dns, proxy, rule, awg, direct
+  # components:
+  #   dns: off       # Silence DNS per-query logs
+  #   gateway: debug # Verbose gateway/packet logs

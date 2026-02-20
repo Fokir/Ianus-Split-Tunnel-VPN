@@ -5,11 +5,12 @@ package proxy
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"awg-split-tunnel/internal/core"
 )
 
 // udpBufPool reuses 65535-byte buffers for tunnel read goroutines.
@@ -86,7 +87,7 @@ func (up *UDPProxy) Start(ctx context.Context) error {
 		return fmt.Errorf("[Proxy] failed to listen UDP on :%d: %w", up.port, err)
 	}
 	up.conn = conn
-	log.Printf("[Proxy] UDP listening on :%d", up.port)
+	core.Log.Infof("Proxy", "UDP listening on :%d", up.port)
 
 	// Start cached timestamp updater for fast-path activity tracking.
 	up.nowSec.Store(time.Now().Unix())
@@ -117,7 +118,7 @@ func (up *UDPProxy) Stop() {
 	up.sessionsMu.Unlock()
 
 	up.wg.Wait()
-	log.Printf("[Proxy] UDP stopped (port %d)", up.port)
+	core.Log.Infof("Proxy", "UDP stopped (port %d)", up.port)
 }
 
 // Port returns the port this proxy listens on.
@@ -143,7 +144,7 @@ func (up *UDPProxy) readLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("[Proxy] UDP read error: %v", err)
+				core.Log.Errorf("Proxy", "UDP read error: %v", err)
 				continue
 			}
 		}
@@ -165,7 +166,7 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 	if exists {
 		atomic.StoreInt64(&sess.lastActive, up.nowSec.Load())
 		if _, err := sess.tunnelConn.Write(data); err != nil {
-			log.Printf("[Proxy] UDP write to tunnel failed for %s: %v", clientAddr, err)
+			core.Log.Errorf("Proxy", "UDP write to tunnel failed for %s: %v", clientAddr, err)
 		}
 		return
 	}
@@ -174,19 +175,19 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 	addrStr := clientAddr.String()
 	originalDst, tunnelID, ok := up.natLookup(addrStr)
 	if !ok {
-		log.Printf("[Proxy] UDP no NAT entry for %s, dropping", addrStr)
+		core.Log.Warnf("Proxy", "UDP no NAT entry for %s, dropping", addrStr)
 		return
 	}
 
 	prov, ok := up.providerLookup(tunnelID)
 	if !ok {
-		log.Printf("[Proxy] UDP no provider for tunnel %q, dropping", tunnelID)
+		core.Log.Errorf("Proxy", "UDP no provider for tunnel %q, dropping", tunnelID)
 		return
 	}
 
 	tunnelConn, err := prov.DialUDP(ctx, originalDst)
 	if err != nil {
-		log.Printf("[Proxy] UDP failed to dial %s via %s: %v", originalDst, tunnelID, err)
+		core.Log.Errorf("Proxy", "UDP failed to dial %s via %s: %v", originalDst, tunnelID, err)
 		return
 	}
 
@@ -204,7 +205,7 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 
 	// Send the first datagram.
 	if _, err := tunnelConn.Write(data); err != nil {
-		log.Printf("[Proxy] UDP write to tunnel failed for %s: %v", clientAddr, err)
+		core.Log.Errorf("Proxy", "UDP write to tunnel failed for %s: %v", clientAddr, err)
 		up.removeSession(sk)
 		return
 	}
@@ -236,14 +237,14 @@ func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, sk udp
 			select {
 			case <-ctx.Done():
 			default:
-				log.Printf("[Proxy] UDP tunnel read error for %s: %v", sess.clientAddr, err)
+				core.Log.Errorf("Proxy", "UDP tunnel read error for %s: %v", sess.clientAddr, err)
 			}
 			return
 		}
 
 		atomic.StoreInt64(&sess.lastActive, up.nowSec.Load())
 		if _, err := up.conn.WriteToUDP(buf[:n], sess.clientAddr); err != nil {
-			log.Printf("[Proxy] UDP write to client %s failed: %v", sess.clientAddr, err)
+			core.Log.Errorf("Proxy", "UDP write to client %s failed: %v", sess.clientAddr, err)
 			return
 		}
 	}
@@ -303,7 +304,7 @@ func (up *UDPProxy) cleanupLoop(ctx context.Context) {
 			up.sessionsMu.RUnlock()
 
 			for _, sk := range stale {
-				log.Printf("[Proxy] UDP session timed out, closing")
+				core.Log.Debugf("Proxy", "UDP session timed out, closing")
 				up.removeSession(sk)
 			}
 		}

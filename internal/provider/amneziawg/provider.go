@@ -5,7 +5,6 @@ package amneziawg
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"net/netip"
 	"sync"
@@ -66,7 +65,7 @@ func (p *Provider) Connect(ctx context.Context) error {
 	defer p.mu.Unlock()
 
 	p.state = core.TunnelStateConnecting
-	log.Printf("[AWG] Connecting tunnel %q...", p.name)
+	core.Log.Infof("AWG", "Connecting tunnel %q...", p.name)
 
 	// 1. Parse .conf file.
 	parsed, err := ParseConfigFile(p.config.ConfigFile)
@@ -117,7 +116,7 @@ func (p *Provider) Connect(ctx context.Context) error {
 	p.tnet = tnet
 	p.peerEndpoints = parsed.PeerEndpoints
 	p.state = core.TunnelStateUp
-	log.Printf("[AWG] Tunnel %q is UP (ip=%s, mtu=%d)", p.name, p.adapterIP, parsed.MTU)
+	core.Log.Infof("AWG", "Tunnel %q is UP (ip=%s, mtu=%d)", p.name, p.adapterIP, parsed.MTU)
 	return nil
 }
 
@@ -137,7 +136,7 @@ func (p *Provider) Disconnect() error {
 	}
 
 	p.state = core.TunnelStateDown
-	log.Printf("[AWG] Tunnel %q disconnected", p.name)
+	core.Log.Infof("AWG", "Tunnel %q disconnected", p.name)
 	return nil
 }
 

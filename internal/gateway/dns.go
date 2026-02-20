@@ -3,7 +3,6 @@
 package gateway
 
 import (
-	"log"
 	"net/netip"
 
 	"awg-split-tunnel/internal/core"
@@ -33,7 +32,7 @@ type DNSRouter struct {
 
 // NewDNSRouter creates a DNS router with the given configuration.
 func NewDNSRouter(config DNSConfig, registry *core.TunnelRegistry) *DNSRouter {
-	log.Printf("[DNS] Router created (fallback_tunnel=%q, fallback_servers=%v)",
+	core.Log.Infof("DNS", "Router created (fallback_tunnel=%q, fallback_servers=%v)",
 		config.FallbackTunnelID, config.FallbackServers)
 	return &DNSRouter{
 		config:   config,
