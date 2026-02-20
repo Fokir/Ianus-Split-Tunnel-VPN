@@ -1,8 +1,6 @@
 # AWG Split Tunnel — Example Configuration
-
-# NDIS adapter index — check startup log for "[Router] Found N adapters"
-# to find the correct index for your internet-facing adapter (e.g. Ethernet, Wi-Fi).
-adapter_index: 0
+# Uses WinTUN gateway adapter + WFP per-process interface blocking.
+# No adapter_index needed — traffic is routed via TUN adapter automatically.
 
 tunnels:
   - id: awg-germany
@@ -31,3 +29,16 @@ rules:
   - pattern: "steam.exe"
     tunnel_id: awg-germany
     fallback: block
+
+# DNS routing configuration (optional).
+# Controls how DNS queries are routed per-process.
+dns:
+  # Tunnel for system DNS queries (svchost.exe, unmatched processes).
+  # Omit or leave empty to route through direct (system DNS via real NIC).
+  tunnel_id: awg-germany
+
+  # DNS servers for fallback queries.
+  # If empty, uses the tunnel's built-in DNS servers from WG config.
+  servers:
+    - "1.1.1.1"
+    - "8.8.8.8"

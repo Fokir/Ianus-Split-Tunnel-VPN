@@ -95,13 +95,20 @@ type TunnelConfig struct {
 	Settings map[string]any `yaml:"settings,omitempty"`
 }
 
+// DNSRouteConfig configures per-process DNS routing.
+type DNSRouteConfig struct {
+	// FallbackTunnelID is the tunnel used for system DNS (svchost.exe) queries.
+	// Empty means use direct (no tunnel).
+	FallbackTunnelID string `yaml:"tunnel_id,omitempty"`
+	// Servers are DNS server addresses for fallback queries.
+	Servers []string `yaml:"servers,omitempty"`
+}
+
 // Config is the top-level application configuration.
 type Config struct {
 	Tunnels []TunnelConfig `yaml:"tunnels"`
 	Rules   []Rule         `yaml:"rules"`
-
-	// AdapterIndex is the NDIS adapter index to filter on (0-based).
-	AdapterIndex int `yaml:"adapter_index"`
+	DNS     DNSRouteConfig `yaml:"dns,omitempty"`
 }
 
 // ConfigManager handles loading, saving, and hot-reloading configuration.

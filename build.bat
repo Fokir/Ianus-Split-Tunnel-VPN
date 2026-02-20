@@ -36,4 +36,12 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
+:: Copy wintun.dll to build output.
+if exist ".\dll\wintun.dll" (
+    copy /Y ".\dll\wintun.dll" "%OUT_DIR%\wintun.dll" >nul
+    echo Copied wintun.dll to %OUT_DIR%
+) else (
+    echo WARNING: dll\wintun.dll not found — adapter will fail at runtime
+)
+
 echo Built %BINARY% (%VERSION%)

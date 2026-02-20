@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -14,9 +15,11 @@ import (
 	"time"
 
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/gateway"
 	"awg-split-tunnel/internal/process"
 	"awg-split-tunnel/internal/provider"
 	"awg-split-tunnel/internal/provider/amneziawg"
+	"awg-split-tunnel/internal/provider/direct"
 	"awg-split-tunnel/internal/proxy"
 )
 
@@ -40,10 +43,9 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	log.Printf("[Core] AWG Split Tunnel %s starting...", version)
 
-	// --- Initialize core components ---
+	// === 1. Core components ===
 	bus := core.NewEventBus()
 
-	// Resolve config path relative to executable location if not absolute.
 	resolvedConfigPath := resolveRelativeToExe(*configPath)
 	cfgManager := core.NewConfigManager(resolvedConfigPath, bus)
 	if err := cfgManager.Load(); err != nil {
@@ -55,19 +57,56 @@ func main() {
 	matcher := process.NewMatcher()
 	ruleEngine := core.NewRuleEngine(cfg.Rules, bus, matcher)
 
-	// --- Create providers and proxies for each tunnel ---
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// === 2. Gateway Adapter (WinTUN) ===
+	adapter, err := gateway.NewAdapter()
+	if err != nil {
+		log.Fatalf("[Core] Failed to create gateway adapter: %v", err)
+	}
+
+	// === 3. Discover Real NIC ===
+	routeMgr := gateway.NewRouteManager(adapter.LUID())
+	realNIC, err := routeMgr.DiscoverRealNIC()
+	if err != nil {
+		adapter.Close()
+		log.Fatalf("[Core] Failed to discover real NIC: %v", err)
+	}
+
+	// === 4. WFP Manager ===
+	wfpMgr, err := gateway.NewWFPManager(adapter.LUID())
+	if err != nil {
+		adapter.Close()
+		log.Fatalf("[Core] Failed to create WFP manager: %v", err)
+	}
+
+	// === 5. Flow Table + Process Identifier ===
+	flows := gateway.NewFlowTable()
+	procID := gateway.NewProcessIdentifier()
+
+	// === 6. DNS Router ===
+	dnsConfig := gateway.DNSConfig{
+		FallbackTunnelID: cfg.DNS.FallbackTunnelID,
+	}
+	for _, s := range cfg.DNS.Servers {
+		if ip, err := netip.ParseAddr(s); err == nil {
+			dnsConfig.FallbackServers = append(dnsConfig.FallbackServers, ip)
+		} else {
+			log.Printf("[Core] Invalid DNS server %q in config: %v", s, err)
+		}
+	}
+	dnsRouter := gateway.NewDNSRouter(dnsConfig, registry)
+
+	// === 7. TUN Router (not started yet) ===
+	tunRouter := gateway.NewTUNRouter(
+		adapter, flows, procID, matcher, ruleEngine, registry, wfpMgr, dnsRouter,
+	)
+
+	// === 8. Direct Provider + proxies ===
 	providers := make(map[string]provider.TunnelProvider)
 	proxies := make([]*proxy.TunnelProxy, 0)
 	udpProxies := make([]*proxy.UDPProxy, 0)
-
-	// Create the packet router first (needed for NAT lookup).
-	router, err := core.NewPacketRouter(registry, ruleEngine, bus, cfg.AdapterIndex)
-	if err != nil {
-		log.Fatalf("[Core] Failed to create packet router: %v", err)
-	}
 
 	// Provider lookup function for proxies.
 	providerLookup := func(tunnelID string) (provider.TunnelProvider, bool) {
@@ -77,6 +116,39 @@ func main() {
 
 	var nextProxyPort uint16 = 30000
 
+	// Register Direct Provider.
+	directProv := direct.New(realNIC.Index)
+	directProxyPort := nextProxyPort
+	directUDPProxyPort := nextProxyPort + 1
+	nextProxyPort += 2
+
+	directCfg := core.TunnelConfig{
+		ID:       gateway.DirectTunnelID,
+		Protocol: "direct",
+		Name:     "Direct",
+	}
+	if err := registry.Register(directCfg, directProxyPort, directUDPProxyPort); err != nil {
+		log.Fatalf("[Core] Failed to register direct provider: %v", err)
+	}
+	registry.SetState(gateway.DirectTunnelID, core.TunnelStateUp, nil)
+	providers[gateway.DirectTunnelID] = directProv
+
+	flows.RegisterProxyPort(directProxyPort)
+	flows.RegisterUDPProxyPort(directUDPProxyPort)
+
+	tp := proxy.NewTunnelProxy(directProxyPort, flows.LookupNAT, providerLookup)
+	proxies = append(proxies, tp)
+	if err := tp.Start(ctx); err != nil {
+		log.Fatalf("[Core] Failed to start direct TCP proxy: %v", err)
+	}
+
+	up := proxy.NewUDPProxy(directUDPProxyPort, flows.LookupUDPNAT, providerLookup)
+	udpProxies = append(udpProxies, up)
+	if err := up.Start(ctx); err != nil {
+		log.Fatalf("[Core] Failed to start direct UDP proxy: %v", err)
+	}
+
+	// === 9. VPN Providers + proxies ===
 	for _, tcfg := range cfg.Tunnels {
 		proxyPort := nextProxyPort
 		udpProxyPort := nextProxyPort + 1
@@ -106,31 +178,27 @@ func main() {
 			continue
 		}
 
-		// Register tunnel in the registry.
+		// Register tunnel.
 		if err := registry.Register(tcfg, proxyPort, udpProxyPort); err != nil {
 			log.Printf("[Core] Failed to register tunnel %q: %v", tcfg.ID, err)
 			continue
 		}
 
 		providers[tcfg.ID] = prov
+		flows.RegisterProxyPort(proxyPort)
+		flows.RegisterUDPProxyPort(udpProxyPort)
 
-		// Register proxy ports for O(1) hot-path lookup.
-		router.RegisterProxyPort(proxyPort)
-		router.RegisterUDPProxyPort(udpProxyPort)
-
-		// Create and start TCP transparent proxy.
-		tp := proxy.NewTunnelProxy(proxyPort, router.LookupNAT, providerLookup)
+		// TCP proxy.
+		tp := proxy.NewTunnelProxy(proxyPort, flows.LookupNAT, providerLookup)
 		proxies = append(proxies, tp)
-
 		if err := tp.Start(ctx); err != nil {
 			log.Printf("[Core] Failed to start TCP proxy for tunnel %q: %v", tcfg.ID, err)
 			continue
 		}
 
-		// Create and start UDP transparent proxy.
-		up := proxy.NewUDPProxy(udpProxyPort, router.LookupUDPNAT, providerLookup)
+		// UDP proxy.
+		up := proxy.NewUDPProxy(udpProxyPort, flows.LookupUDPNAT, providerLookup)
 		udpProxies = append(udpProxies, up)
-
 		if err := up.Start(ctx); err != nil {
 			log.Printf("[Core] Failed to start UDP proxy for tunnel %q: %v", tcfg.ID, err)
 			continue
@@ -144,17 +212,24 @@ func main() {
 		}
 		registry.SetState(tcfg.ID, core.TunnelStateUp, nil)
 
-		// Add kernel-level static bypass for VPN server endpoint traffic.
+		// === 10. Add bypass route for VPN server endpoints ===
 		if awgProv, ok := prov.(*amneziawg.Provider); ok {
 			for _, ep := range awgProv.GetPeerEndpoints() {
-				router.AddEndpointBypass(ep.Addr().AsSlice(), ep.Port())
+				if err := routeMgr.AddBypassRoute(ep.Addr()); err != nil {
+					log.Printf("[Core] Failed to add bypass route for %s: %v", ep, err)
+				}
 			}
 		}
 	}
 
-	// --- Start packet router ---
-	if err := router.Start(ctx); err != nil {
-		log.Fatalf("[Core] Failed to start packet router: %v", err)
+	// === 11. Set default route via TUN (LAST — after all bypass routes) ===
+	if err := routeMgr.SetDefaultRoute(); err != nil {
+		log.Fatalf("[Core] Failed to set default route: %v", err)
+	}
+
+	// === 12. Start TUN Router ===
+	if err := tunRouter.Start(ctx); err != nil {
+		log.Fatalf("[Core] Failed to start TUN router: %v", err)
 	}
 
 	// --- Log active rules ---
@@ -170,24 +245,39 @@ func main() {
 	log.Println("[Core] Running. Press Ctrl+C to stop.")
 	<-sig
 
-	// --- Graceful shutdown ---
+	// === Graceful shutdown (reverse order) ===
 	log.Println("[Core] Shutting down...")
 	cancel()
 
 	done := make(chan struct{})
 	go func() {
-		router.Stop()
+		// 1. Stop TUN Router
+		tunRouter.Stop()
+
+		// 2. Stop all proxies
 		for _, tp := range proxies {
 			tp.Stop()
 		}
 		for _, up := range udpProxies {
 			up.Stop()
 		}
+
+		// 3. Disconnect all providers
 		for id, prov := range providers {
 			if err := prov.Disconnect(); err != nil {
 				log.Printf("[Core] Error disconnecting %s: %v", id, err)
 			}
 		}
+
+		// 4. WFP Manager Close (Dynamic=true auto-cleans)
+		wfpMgr.Close()
+
+		// 5. Route Manager Cleanup (restore default route)
+		routeMgr.Cleanup()
+
+		// 6. Gateway Adapter Close (remove TUN)
+		adapter.Close()
+
 		close(done)
 	}()
 
