@@ -106,6 +106,22 @@ type DNSRouteConfig struct {
 	FallbackTunnelID string `yaml:"tunnel_id,omitempty"`
 	// Servers are DNS server addresses for fallback queries.
 	Servers []string `yaml:"servers,omitempty"`
+	// Cache configures DNS response caching.
+	Cache DNSCacheYAMLConfig `yaml:"cache,omitempty"`
+}
+
+// DNSCacheYAMLConfig holds DNS cache settings from YAML config.
+type DNSCacheYAMLConfig struct {
+	// Enabled controls whether DNS caching is active (default true).
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// MaxSize is the maximum number of cache entries (default 10000).
+	MaxSize int `yaml:"max_size,omitempty"`
+	// MinTTL is the minimum TTL floor, e.g. "30s" (default 30s).
+	MinTTL string `yaml:"min_ttl,omitempty"`
+	// MaxTTL is the maximum TTL cap, e.g. "5m" (default 5m).
+	MaxTTL string `yaml:"max_ttl,omitempty"`
+	// NegTTL is the NXDOMAIN cache TTL, e.g. "60s" (default 60s).
+	NegTTL string `yaml:"neg_ttl,omitempty"`
 }
 
 // GlobalFilterConfig holds IP and app filters applied to all tunnels.

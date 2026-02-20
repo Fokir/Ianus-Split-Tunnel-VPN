@@ -71,9 +71,19 @@ dns:
 
   # DNS servers for fallback queries.
   # If empty, uses the tunnel's built-in DNS servers from WG config.
+  # Queries are sent to all servers in parallel; first response wins.
   servers:
     - "1.1.1.1"
     - "8.8.8.8"
+
+  # DNS response cache (optional, enabled by default).
+  # Caches upstream DNS responses to avoid redundant queries.
+  # cache:
+  #   enabled: true      # Set to false to disable caching
+  #   max_size: 10000    # Maximum number of cache entries
+  #   min_ttl: "30s"     # Minimum TTL floor
+  #   max_ttl: "5m"      # Maximum TTL cap
+  #   neg_ttl: "60s"     # NXDOMAIN cache TTL
 
 # Logging configuration (optional).
 # Controls log verbosity globally and per-component.

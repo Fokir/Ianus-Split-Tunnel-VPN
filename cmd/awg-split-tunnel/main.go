@@ -264,6 +264,7 @@ func main() {
 			Servers:        dnsConfig.FallbackServers,
 			TunnelID:       dnsConfig.FallbackTunnelID,
 			FallbackDirect: true,
+			Cache:          buildDNSCacheConfig(cfg.DNS.Cache),
 		}
 		dnsResolver = gateway.NewDNSResolver(resolverCfg, registry, providers)
 		if err := dnsResolver.Start(ctx); err != nil {
@@ -359,6 +360,34 @@ func getStringSetting(settings map[string]any, key, defaultVal string) string {
 		}
 	}
 	return defaultVal
+}
+
+// buildDNSCacheConfig converts YAML cache config to gateway.DNSCacheConfig pointer.
+// Returns nil only when explicitly disabled via enabled: false.
+// Returns &DNSCacheConfig{} (defaults) when no cache config is specified.
+func buildDNSCacheConfig(yamlCfg core.DNSCacheYAMLConfig) *gateway.DNSCacheConfig {
+	if yamlCfg.Enabled != nil && !*yamlCfg.Enabled {
+		return nil // disabled explicitly
+	}
+	cfg := &gateway.DNSCacheConfig{
+		MaxSize: yamlCfg.MaxSize,
+	}
+	if yamlCfg.MinTTL != "" {
+		if d, err := time.ParseDuration(yamlCfg.MinTTL); err == nil {
+			cfg.MinTTL = d
+		}
+	}
+	if yamlCfg.MaxTTL != "" {
+		if d, err := time.ParseDuration(yamlCfg.MaxTTL); err == nil {
+			cfg.MaxTTL = d
+		}
+	}
+	if yamlCfg.NegTTL != "" {
+		if d, err := time.ParseDuration(yamlCfg.NegTTL); err == nil {
+			cfg.NegTTL = d
+		}
+	}
+	return cfg
 }
 
 // resolveRelativeToExe resolves a relative path against the directory containing

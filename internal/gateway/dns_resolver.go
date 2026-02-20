@@ -32,6 +32,10 @@ type DNSResolverConfig struct {
 
 	// FallbackDirect enables direct (non-VPN) fallback when all VPN servers fail.
 	FallbackDirect bool
+
+	// Cache configures DNS response caching. Nil disables caching.
+	// Use &DNSCacheConfig{} for defaults.
+	Cache *DNSCacheConfig
 }
 
 // DNSResolver is a local DNS forwarder that listens on the TUN adapter IP
@@ -52,6 +56,8 @@ type DNSResolver struct {
 	udpConn *net.UDPConn
 	tcpLn   net.Listener
 
+	cache *DNSCache // nil if caching disabled
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -65,11 +71,19 @@ func NewDNSResolver(
 	if config.Timeout == 0 {
 		config.Timeout = 3 * time.Second
 	}
-	return &DNSResolver{
+
+	r := &DNSResolver{
 		config:    config,
 		registry:  registry,
 		providers: providers,
 	}
+
+	// Initialize DNS cache if configured.
+	if config.Cache != nil {
+		r.cache = NewDNSCache(*config.Cache)
+	}
+
+	return r
 }
 
 // Start begins listening for DNS queries on UDP and TCP.
@@ -114,6 +128,9 @@ func (r *DNSResolver) Stop() {
 		r.tcpLn.Close()
 	}
 	r.wg.Wait()
+	if r.cache != nil {
+		r.cache.Stop()
+	}
 	core.Log.Infof("DNS", "Resolver stopped")
 }
 
@@ -152,9 +169,23 @@ func (r *DNSResolver) udpLoop(ctx context.Context) {
 func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAddr *net.UDPAddr) {
 	name := extractDNSName(query)
 
+	// Cache lookup.
+	if r.cache != nil {
+		qName, qtype, qclass, err := parseDNSQuestion(query)
+		if err == nil {
+			queryID := getDNSTransactionID(query)
+			if cached, ok := r.cache.Get(queryID, qName, qtype, qclass); ok {
+				r.udpConn.WriteToUDP(cached, clientAddr)
+				core.Log.Debugf("DNS", "%s cache hit (UDP)", name)
+				return
+			}
+		}
+	}
+
 	// Try VPN tunnel first.
 	resp, server, err := r.forwardUDP(ctx, r.config.TunnelID, query)
 	if err == nil {
+		r.cacheStore(query, resp)
 		r.udpConn.WriteToUDP(resp, clientAddr)
 		if name != "" {
 			core.Log.Debugf("DNS", "%s → %s via %s (UDP)", name, server, r.config.TunnelID)
@@ -166,6 +197,7 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 	if r.config.FallbackDirect {
 		resp, server, err = r.forwardUDP(ctx, DirectTunnelID, query)
 		if err == nil {
+			r.cacheStore(query, resp)
 			r.udpConn.WriteToUDP(resp, clientAddr)
 			if name != "" {
 				core.Log.Debugf("DNS", "%s → %s via direct/fallback (UDP)", name, server)
@@ -192,36 +224,79 @@ func (r *DNSResolver) forwardUDP(ctx context.Context, tunnelID string, query []b
 		return nil, netip.Addr{}, fmt.Errorf("tunnel %q not up", tunnelID)
 	}
 
-	for _, server := range r.config.Servers {
-		addr := net.JoinHostPort(server.String(), "53")
-
-		dialCtx, cancel := context.WithTimeout(ctx, r.config.Timeout)
-		conn, err := prov.DialUDP(dialCtx, addr)
-		cancel()
-		if err != nil {
-			continue
-		}
-
-		conn.SetDeadline(time.Now().Add(r.config.Timeout))
-		if _, err := conn.Write(query); err != nil {
-			conn.Close()
-			continue
-		}
-
-		resp := make([]byte, 4096)
-		n, err := conn.Read(resp)
-		conn.Close()
-
-		if err != nil {
-			continue
-		}
-
-		if n >= 12 {
-			return resp[:n], server, nil
-		}
+	servers := r.config.Servers
+	if len(servers) == 0 {
+		return nil, netip.Addr{}, fmt.Errorf("no DNS servers configured")
 	}
 
-	return nil, netip.Addr{}, fmt.Errorf("all %d servers unreachable via %s", len(r.config.Servers), tunnelID)
+	// Single server — no parallelism overhead.
+	if len(servers) == 1 {
+		return r.forwardUDPSingle(ctx, prov, servers[0], query)
+	}
+
+	// Fan-out to all servers in parallel, return first success.
+	type result struct {
+		resp   []byte
+		server netip.Addr
+		err    error
+	}
+
+	fanCtx, fanCancel := context.WithTimeout(ctx, r.config.Timeout)
+	defer fanCancel()
+
+	ch := make(chan result, len(servers))
+	for _, srv := range servers {
+		go func(server netip.Addr) {
+			resp, _, err := r.forwardUDPSingle(fanCtx, prov, server, query)
+			ch <- result{resp: resp, server: server, err: err}
+		}(srv)
+	}
+
+	var lastErr error
+	for range servers {
+		res := <-ch
+		if res.err != nil {
+			lastErr = res.err
+			continue
+		}
+		fanCancel() // cancel remaining goroutines
+		return res.resp, res.server, nil
+	}
+
+	return nil, netip.Addr{}, fmt.Errorf("all %d servers unreachable via %s: %w", len(servers), tunnelID, lastErr)
+}
+
+// forwardUDPSingle sends a DNS query to a single server via the given provider.
+func (r *DNSResolver) forwardUDPSingle(ctx context.Context, prov provider.TunnelProvider, server netip.Addr, query []byte) ([]byte, netip.Addr, error) {
+	addr := net.JoinHostPort(server.String(), "53")
+
+	conn, err := prov.DialUDP(ctx, addr)
+	if err != nil {
+		return nil, server, err
+	}
+	defer conn.Close()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+	} else {
+		conn.SetDeadline(time.Now().Add(r.config.Timeout))
+	}
+
+	if _, err := conn.Write(query); err != nil {
+		return nil, server, err
+	}
+
+	resp := make([]byte, 4096)
+	n, err := conn.Read(resp)
+	if err != nil {
+		return nil, server, err
+	}
+
+	if n < 12 {
+		return nil, server, fmt.Errorf("response too short (%d bytes)", n)
+	}
+
+	return resp[:n], server, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +343,22 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 
 	name := extractDNSName(query)
 
+	// Cache lookup.
+	if r.cache != nil {
+		qName, qtype, qclass, parseErr := parseDNSQuestion(query)
+		if parseErr == nil {
+			queryID := getDNSTransactionID(query)
+			if cached, ok := r.cache.Get(queryID, qName, qtype, qclass); ok {
+				core.Log.Debugf("DNS", "%s cache hit (TCP)", name)
+				var respLen [2]byte
+				binary.BigEndian.PutUint16(respLen[:], uint16(len(cached)))
+				clientConn.Write(respLen[:])
+				clientConn.Write(cached)
+				return
+			}
+		}
+	}
+
 	// Try VPN tunnel.
 	resp, server, err := r.forwardTCP(ctx, r.config.TunnelID, query)
 	if err != nil && r.config.FallbackDirect {
@@ -280,8 +371,11 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 		if resp == nil {
 			return
 		}
-	} else if name != "" {
-		core.Log.Debugf("DNS", "%s → %s via %s (TCP)", name, server, r.config.TunnelID)
+	} else {
+		r.cacheStore(query, resp)
+		if name != "" {
+			core.Log.Debugf("DNS", "%s → %s via %s (TCP)", name, server, r.config.TunnelID)
+		}
 	}
 
 	// Write response with length prefix.
@@ -302,52 +396,90 @@ func (r *DNSResolver) forwardTCP(ctx context.Context, tunnelID string, query []b
 		return nil, netip.Addr{}, fmt.Errorf("tunnel %q not up", tunnelID)
 	}
 
-	for _, server := range r.config.Servers {
-		addr := net.JoinHostPort(server.String(), "53")
-
-		dialCtx, cancel := context.WithTimeout(ctx, r.config.Timeout)
-		conn, err := prov.DialTCP(dialCtx, addr)
-		cancel()
-		if err != nil {
-			continue
-		}
-
-		conn.SetDeadline(time.Now().Add(r.config.Timeout))
-
-		// Write with length prefix.
-		var qLenBuf [2]byte
-		binary.BigEndian.PutUint16(qLenBuf[:], uint16(len(query)))
-		if _, err := conn.Write(qLenBuf[:]); err != nil {
-			conn.Close()
-			continue
-		}
-		if _, err := conn.Write(query); err != nil {
-			conn.Close()
-			continue
-		}
-
-		// Read response length.
-		var rLenBuf [2]byte
-		if _, err := io.ReadFull(conn, rLenBuf[:]); err != nil {
-			conn.Close()
-			continue
-		}
-		rLen := int(binary.BigEndian.Uint16(rLenBuf[:]))
-		if rLen < 12 || rLen > 65535 {
-			conn.Close()
-			continue
-		}
-
-		resp := make([]byte, rLen)
-		if _, err := io.ReadFull(conn, resp); err != nil {
-			conn.Close()
-			continue
-		}
-		conn.Close()
-		return resp, server, nil
+	servers := r.config.Servers
+	if len(servers) == 0 {
+		return nil, netip.Addr{}, fmt.Errorf("no DNS servers configured")
 	}
 
-	return nil, netip.Addr{}, fmt.Errorf("all %d servers unreachable via %s (TCP)", len(r.config.Servers), tunnelID)
+	// Single server — no parallelism overhead.
+	if len(servers) == 1 {
+		return r.forwardTCPSingle(ctx, prov, servers[0], query)
+	}
+
+	// Fan-out to all servers in parallel, return first success.
+	type result struct {
+		resp   []byte
+		server netip.Addr
+		err    error
+	}
+
+	fanCtx, fanCancel := context.WithTimeout(ctx, r.config.Timeout)
+	defer fanCancel()
+
+	ch := make(chan result, len(servers))
+	for _, srv := range servers {
+		go func(server netip.Addr) {
+			resp, _, err := r.forwardTCPSingle(fanCtx, prov, server, query)
+			ch <- result{resp: resp, server: server, err: err}
+		}(srv)
+	}
+
+	var lastErr error
+	for range servers {
+		res := <-ch
+		if res.err != nil {
+			lastErr = res.err
+			continue
+		}
+		fanCancel()
+		return res.resp, res.server, nil
+	}
+
+	return nil, netip.Addr{}, fmt.Errorf("all %d servers unreachable via %s (TCP): %w", len(servers), tunnelID, lastErr)
+}
+
+// forwardTCPSingle sends a DNS query to a single server via TCP through the given provider.
+func (r *DNSResolver) forwardTCPSingle(ctx context.Context, prov provider.TunnelProvider, server netip.Addr, query []byte) ([]byte, netip.Addr, error) {
+	addr := net.JoinHostPort(server.String(), "53")
+
+	conn, err := prov.DialTCP(ctx, addr)
+	if err != nil {
+		return nil, server, err
+	}
+	defer conn.Close()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+	} else {
+		conn.SetDeadline(time.Now().Add(r.config.Timeout))
+	}
+
+	// Write with length prefix.
+	var qLenBuf [2]byte
+	binary.BigEndian.PutUint16(qLenBuf[:], uint16(len(query)))
+	if _, err := conn.Write(qLenBuf[:]); err != nil {
+		return nil, server, err
+	}
+	if _, err := conn.Write(query); err != nil {
+		return nil, server, err
+	}
+
+	// Read response length.
+	var rLenBuf [2]byte
+	if _, err := io.ReadFull(conn, rLenBuf[:]); err != nil {
+		return nil, server, err
+	}
+	rLen := int(binary.BigEndian.Uint16(rLenBuf[:]))
+	if rLen < 12 || rLen > 65535 {
+		return nil, server, fmt.Errorf("invalid response length %d", rLen)
+	}
+
+	resp := make([]byte, rLen)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		return nil, server, err
+	}
+
+	return resp, server, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -405,4 +537,15 @@ func makeServFail(query []byte) []byte {
 	resp[10], resp[11] = 0, 0
 
 	return resp
+}
+
+// cacheStore stores a DNS response in the cache if caching is enabled.
+func (r *DNSResolver) cacheStore(query, resp []byte) {
+	if r.cache == nil {
+		return
+	}
+	name, qtype, qclass, err := parseDNSQuestion(query)
+	if err == nil {
+		r.cache.Put(name, qtype, qclass, resp)
+	}
 }
