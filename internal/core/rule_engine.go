@@ -4,6 +4,8 @@ package core
 
 import (
 	"log"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"awg-split-tunnel/internal/process"
@@ -18,29 +20,39 @@ type MatchResult struct {
 
 // RuleEngine evaluates process paths against configured rules.
 type RuleEngine struct {
-	mu      sync.RWMutex
-	rules   []Rule
-	bus     *EventBus
-	matcher *process.Matcher
+	mu         sync.RWMutex
+	rules      []Rule
+	rulesLower []string // pre-lowercased patterns, parallel to rules
+	bus        *EventBus
+	matcher    *process.Matcher
 }
 
 // NewRuleEngine creates a rule engine with the given initial rules.
 func NewRuleEngine(rules []Rule, bus *EventBus, matcher *process.Matcher) *RuleEngine {
+	lower := make([]string, len(rules))
+	for i, r := range rules {
+		lower[i] = strings.ToLower(r.Pattern)
+	}
 	return &RuleEngine{
-		rules:   rules,
-		bus:     bus,
-		matcher: matcher,
+		rules:      rules,
+		rulesLower: lower,
+		bus:        bus,
+		matcher:    matcher,
 	}
 }
 
 // Match finds the first rule that matches the given executable path.
 // Returns the routing decision. Called on hot path — must be fast.
+// Pre-lowercases exePath once (O(1) allocs) instead of per-pattern.
 func (re *RuleEngine) Match(exePath string) MatchResult {
 	re.mu.RLock()
 	defer re.mu.RUnlock()
 
-	for _, rule := range re.rules {
-		if process.MatchPattern(exePath, rule.Pattern) {
+	exeLower := strings.ToLower(exePath)
+	baseLower := filepath.Base(exeLower)
+
+	for i, rule := range re.rules {
+		if process.MatchPreprocessed(exeLower, baseLower, rule.Pattern, re.rulesLower[i]) {
 			return MatchResult{
 				Matched:  true,
 				TunnelID: rule.TunnelID,
@@ -63,9 +75,15 @@ func (re *RuleEngine) MatchByPID(pid uint32) MatchResult {
 
 // SetRules replaces all routing rules.
 func (re *RuleEngine) SetRules(rules []Rule) {
+	lower := make([]string, len(rules))
+	for i, r := range rules {
+		lower[i] = strings.ToLower(r.Pattern)
+	}
+
 	re.mu.Lock()
 	re.rules = make([]Rule, len(rules))
 	copy(re.rules, rules)
+	re.rulesLower = lower
 	re.mu.Unlock()
 
 	log.Printf("[Rule] Updated %d rules", len(rules))
@@ -75,6 +93,7 @@ func (re *RuleEngine) SetRules(rules []Rule) {
 func (re *RuleEngine) AddRule(rule Rule) {
 	re.mu.Lock()
 	re.rules = append(re.rules, rule)
+	re.rulesLower = append(re.rulesLower, strings.ToLower(rule.Pattern))
 	re.mu.Unlock()
 
 	log.Printf("[Rule] Added: %s → %s (fallback=%s)", rule.Pattern, rule.TunnelID, rule.Fallback)
@@ -91,6 +110,7 @@ func (re *RuleEngine) RemoveRule(pattern string) bool {
 	for i, rule := range re.rules {
 		if rule.Pattern == pattern {
 			re.rules = append(re.rules[:i], re.rules[i+1:]...)
+			re.rulesLower = append(re.rulesLower[:i], re.rulesLower[i+1:]...)
 			log.Printf("[Rule] Removed: %s", pattern)
 			if re.bus != nil {
 				re.bus.Publish(Event{Type: EventRuleRemoved, Payload: RulePayload{Rule: rule}})

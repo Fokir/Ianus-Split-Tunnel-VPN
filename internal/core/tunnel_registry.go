@@ -63,12 +63,17 @@ func (tr *TunnelRegistry) Unregister(id string) {
 	log.Printf("[Core] Unregistered tunnel %q", id)
 }
 
-// Get returns the tunnel entry for the given ID.
-func (tr *TunnelRegistry) Get(id string) (*TunnelEntry, bool) {
+// Get returns a snapshot copy of the tunnel entry for the given ID.
+// Returns a value (not pointer) to avoid data races — callers can safely
+// read fields after the lock is released.
+func (tr *TunnelRegistry) Get(id string) (TunnelEntry, bool) {
 	tr.mu.RLock()
 	defer tr.mu.RUnlock()
 	entry, ok := tr.tunnels[id]
-	return entry, ok
+	if !ok {
+		return TunnelEntry{}, false
+	}
+	return *entry, true
 }
 
 // SetState updates the tunnel state and publishes an event if changed.

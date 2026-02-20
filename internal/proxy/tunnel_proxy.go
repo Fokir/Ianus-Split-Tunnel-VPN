@@ -13,6 +13,11 @@ import (
 	"awg-split-tunnel/internal/provider"
 )
 
+// sockBufSize is the socket buffer size for TCP proxy connections.
+// 2 MB buffers allow large TCP windows for high throughput, especially
+// important for VPN tunneled traffic over high-latency links.
+const sockBufSize = 2 * 1024 * 1024
+
 // fwdBufPool reuses 256KB buffers for bidirectional TCP forwarding.
 // Larger buffers reduce syscall overhead during bulk transfers.
 var fwdBufPool = sync.Pool{
@@ -134,6 +139,13 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 	defer tp.wg.Done()
 	defer clientConn.Close()
 
+	// Tune client-side loopback socket: disable Nagle, enlarge buffers.
+	if tc, ok := clientConn.(*net.TCPConn); ok {
+		tc.SetNoDelay(true)
+		tc.SetReadBuffer(sockBufSize)
+		tc.SetWriteBuffer(sockBufSize)
+	}
+
 	tp.trackConn(clientConn)
 	defer tp.untrackConn(clientConn)
 
@@ -158,6 +170,13 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 		return
 	}
 	defer remoteConn.Close()
+
+	// Tune tunnel-side socket: disable Nagle, enlarge buffers.
+	if tc, ok := remoteConn.(*net.TCPConn); ok {
+		tc.SetNoDelay(true)
+		tc.SetReadBuffer(sockBufSize)
+		tc.SetWriteBuffer(sockBufSize)
+	}
 
 	tp.trackConn(remoteConn)
 	defer tp.untrackConn(remoteConn)

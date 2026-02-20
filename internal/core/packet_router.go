@@ -16,9 +16,6 @@ import (
 	A "github.com/wiresock/ndisapi-go"
 	D "github.com/wiresock/ndisapi-go/driver"
 	N "github.com/wiresock/ndisapi-go/netlib"
-
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 )
 
 // ---------------------------------------------------------------------------
@@ -39,7 +36,9 @@ func makeNATKey(ip netip.Addr, port uint16) natKey {
 }
 
 // NATEntry maps a redirected TCP connection back to its original destination.
+// Stored as pointer in the NAT map to allow atomic LastActivity updates.
 type NATEntry struct {
+	LastActivity    int64 // atomic; Unix seconds (for periodic cleanup)
 	OriginalDstIP   netip.Addr
 	OriginalDstPort uint16
 	TunnelID        string
@@ -48,7 +47,7 @@ type NATEntry struct {
 
 // UDPNATEntry maps a redirected UDP flow back to its original destination.
 type UDPNATEntry struct {
-	LastActivity    int64 // atomic; UnixNano
+	LastActivity    int64 // atomic; Unix seconds
 	OriginalDstIP   netip.Addr
 	OriginalDstPort uint16
 	TunnelID        string
@@ -56,10 +55,53 @@ type UDPNATEntry struct {
 }
 
 // ---------------------------------------------------------------------------
+// Sharded NAT tables — 64 shards reduce RWMutex contention under high
+// concurrency. Each shard has its own lock, so a SYN (write lock) on one
+// shard doesn't block packet lookups on other shards.
+// ---------------------------------------------------------------------------
+
+const numNATShards = 64
+
+type tcpNATShard struct {
+	mu sync.RWMutex
+	m  map[natKey]*NATEntry
+}
+
+type udpNATShard struct {
+	mu sync.RWMutex
+	m  map[natKey]*UDPNATEntry
+}
+
+// natShardIndex selects a shard using FNV-1a hash of the 6-byte natKey.
+func natShardIndex(k natKey) uint32 {
+	h := uint32(2166136261)
+	h = (h ^ uint32(k[0])) * 16777619
+	h = (h ^ uint32(k[1])) * 16777619
+	h = (h ^ uint32(k[2])) * 16777619
+	h = (h ^ uint32(k[3])) * 16777619
+	h = (h ^ uint32(k[4])) * 16777619
+	h = (h ^ uint32(k[5])) * 16777619
+	return h & (numNATShards - 1)
+}
+
+// ---------------------------------------------------------------------------
 // In-place packet manipulation helpers (zero-copy, incremental checksums)
 // ---------------------------------------------------------------------------
 
-const ethHdrLen = 14
+const (
+	ethHdrLen  = 14
+	minIPv4Hdr = 20
+	minTCPHdr  = 20
+	minUDPHdr  = 8
+
+	protoTCP byte = 6
+	protoUDP byte = 17
+
+	tcpFIN byte = 0x01
+	tcpSYN byte = 0x02
+	tcpRST byte = 0x04
+	tcpACK byte = 0x10
+)
 
 // checksumFold folds a 32-bit accumulator to a 16-bit one's complement value.
 func checksumFold(sum uint32) uint16 {
@@ -153,29 +195,18 @@ func setUDPPort(pkt []byte, portOff int, newPort uint16, udpCkOff int) {
 }
 
 // ---------------------------------------------------------------------------
-// parseCtx — pooled parser state for concurrent filter callbacks
+// pktMeta — stack-allocated packet metadata from direct buffer parsing.
+// Replaces gopacket DecodingLayerParser for zero-alloc, zero-dependency
+// header extraction on the hot path (~10ns vs ~200-500ns).
 // ---------------------------------------------------------------------------
 
-type parseCtx struct {
-	eth     layers.Ethernet
-	ip4     layers.IPv4
-	tcp     layers.TCP
-	udp     layers.UDP
-	payload gopacket.Payload
-	parser  *gopacket.DecodingLayerParser
-	decoded []gopacket.LayerType
-}
-
-func newParseCtx() *parseCtx {
-	pc := &parseCtx{
-		decoded: make([]gopacket.LayerType, 0, 4),
-	}
-	pc.parser = gopacket.NewDecodingLayerParser(
-		layers.LayerTypeEthernet,
-		&pc.eth, &pc.ip4, &pc.tcp, &pc.udp, &pc.payload,
-	)
-	pc.parser.IgnoreUnsupported = true
-	return pc
+type pktMeta struct {
+	srcIP netip.Addr
+	dstIP netip.Addr
+	srcP  uint16
+	dstP  uint16
+	flags byte // TCP flags byte; 0 for UDP
+	tpOff int  // transport header offset in pkt (ethHdrLen + ipHdrLen)
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +215,7 @@ func newParseCtx() *parseCtx {
 
 type PacketRouter struct {
 	api           *A.NdisApi
-	filter        *D.QueuedPacketFilter
+	filter        D.SingleInterfacePacketFilter
 	staticFilters *D.StaticFilters
 	process       *N.ProcessLookup
 
@@ -192,19 +223,19 @@ type PacketRouter struct {
 	rules    *RuleEngine
 	bus      *EventBus
 
-	natMu sync.RWMutex
-	nat   map[natKey]NATEntry
+	// Sharded NAT tables (64 shards each) for reduced lock contention.
+	tcpNAT [numNATShards]tcpNATShard
+	udpNAT [numNATShards]udpNATShard
 
-	proxyPortsMu sync.RWMutex
-	proxyPorts   map[uint16]struct{}
+	// Proxy ports: atomic copy-on-write for lock-free reads on hot path.
+	proxyPortsMu    sync.Mutex // protects writes only (rare: tunnel add/remove)
+	proxyPorts      atomic.Pointer[map[uint16]struct{}]
+	udpProxyPortsMu sync.Mutex
+	udpProxyPorts   atomic.Pointer[map[uint16]struct{}]
 
-	udpNatMu sync.RWMutex
-	udpNat   map[natKey]*UDPNATEntry
-
-	udpProxyPortsMu sync.RWMutex
-	udpProxyPorts   map[uint16]struct{}
-
-	parsePool sync.Pool
+	// Cached Unix timestamp (seconds), updated every 250ms.
+	// Eliminates time.Now() syscall from the UDP fast path.
+	nowSec atomic.Int64
 
 	adapterIndex int
 }
@@ -221,20 +252,26 @@ func NewPacketRouter(
 	}
 
 	pr := &PacketRouter{
-		api:           api,
-		process:       N.NewProcessLookup(),
-		registry:      registry,
-		rules:         rules,
-		bus:           bus,
-		nat:           make(map[natKey]NATEntry),
-		proxyPorts:    make(map[uint16]struct{}),
-		udpNat:        make(map[natKey]*UDPNATEntry),
-		udpProxyPorts: make(map[uint16]struct{}),
-		parsePool: sync.Pool{
-			New: func() any { return newParseCtx() },
-		},
+		api:          api,
+		process:      N.NewProcessLookup(),
+		registry:     registry,
+		rules:        rules,
+		bus:          bus,
 		adapterIndex: adapterIndex,
 	}
+	// Initialize all NAT shard maps.
+	for i := range pr.tcpNAT {
+		pr.tcpNAT[i].m = make(map[natKey]*NATEntry)
+	}
+	for i := range pr.udpNAT {
+		pr.udpNAT[i].m = make(map[natKey]*UDPNATEntry)
+	}
+
+	// Initialize atomic proxy port sets with empty maps.
+	emptyTCP := make(map[uint16]struct{})
+	emptyUDP := make(map[uint16]struct{})
+	pr.proxyPorts.Store(&emptyTCP)
+	pr.udpProxyPorts.Store(&emptyUDP)
 
 	sf, err := D.NewStaticFilters(api, true, true)
 	if err != nil {
@@ -268,25 +305,49 @@ func (pr *PacketRouter) Start(ctx context.Context) error {
 
 	go pr.process.StartCleanup(ctx, time.Minute)
 
-	pr.filter, err = D.NewQueuedPacketFilter(
-		ctx,
-		pr.api,
-		adapters,
-		nil,
-		pr.outgoingCallback,
-	)
-	if err != nil {
-		return err
-	}
+	// Start cached timestamp updater for the UDP fast path.
+	pr.startTimestampUpdater(ctx)
 
+	// QueuedPacketFilter uses a 4-goroutine pipeline (1 reader + 4 processors),
+	// which provides significantly higher throughput than FastIO's single-threaded
+	// shared memory approach. FastIO has lower per-packet latency but serializes
+	// all processing in one goroutine, bottlenecking under high PPS loads.
+	queued, qErr := D.NewQueuedPacketFilter(
+		ctx, pr.api, adapters, nil, pr.outgoingCallback,
+	)
+	if qErr != nil {
+		return qErr
+	}
+	pr.filter = queued
 	if err := pr.filter.StartFilter(pr.adapterIndex); err != nil {
 		return err
 	}
+	log.Printf("[Router] Packet filter started (QueuedPacketFilter pipeline)")
 
+	go pr.tcpNATCleanup(ctx)
 	go pr.udpNATCleanup(ctx)
 
 	log.Printf("[Router] Packet filter started on adapter %d", pr.adapterIndex)
 	return nil
+}
+
+// startTimestampUpdater launches a background goroutine that updates the
+// cached Unix timestamp every 250ms, eliminating time.Now() syscalls
+// from the per-packet hot path.
+func (pr *PacketRouter) startTimestampUpdater(ctx context.Context) {
+	pr.nowSec.Store(time.Now().Unix())
+	go func() {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pr.nowSec.Store(time.Now().Unix())
+			}
+		}
+	}()
 }
 
 func (pr *PacketRouter) Stop() {
@@ -329,38 +390,56 @@ func (pr *PacketRouter) AddEndpointBypass(ip net.IP, port uint16) {
 }
 
 // ---------------------------------------------------------------------------
-// Outgoing packet callback — thread-safe via parseCtx pool
+// Outgoing packet callback — direct binary parsing, zero allocations
 // ---------------------------------------------------------------------------
 
 func (pr *PacketRouter) outgoingCallback(handle A.Handle, b *A.IntermediateBuffer) A.FilterAction {
-	pc := pr.parsePool.Get().(*parseCtx)
-	defer pr.parsePool.Put(pc)
-
-	if err := pc.parser.DecodeLayers(b.Buffer[:b.Length], &pc.decoded); err != nil {
+	// Minimum: Ethernet header (14) + IPv4 minimum header (20).
+	if b.Length < ethHdrLen+minIPv4Hdr {
 		return A.FilterActionPass
 	}
 
-	var hasIPv4, hasTCP, hasUDP bool
-	for _, lt := range pc.decoded {
-		switch lt {
-		case layers.LayerTypeIPv4:
-			hasIPv4 = true
-		case layers.LayerTypeTCP:
-			hasTCP = true
-		case layers.LayerTypeUDP:
-			hasUDP = true
+	pkt := b.Buffer[:b.Length]
+
+	// EtherType must be IPv4 (0x0800).
+	if binary.BigEndian.Uint16(pkt[12:14]) != 0x0800 {
+		return A.FilterActionPass
+	}
+
+	ihl := int(pkt[14]&0x0f) * 4
+	if ihl < minIPv4Hdr {
+		return A.FilterActionPass
+	}
+
+	tpOff := ethHdrLen + ihl
+
+	switch pkt[23] { // IP protocol field
+	case protoTCP:
+		if int(b.Length) < tpOff+minTCPHdr {
+			return A.FilterActionPass
 		}
-	}
-	if !hasIPv4 {
-		return A.FilterActionPass
+		return pr.handleTCPPacket(pkt, pktMeta{
+			srcIP: netip.AddrFrom4([4]byte(pkt[26:30])),
+			dstIP: netip.AddrFrom4([4]byte(pkt[30:34])),
+			srcP:  binary.BigEndian.Uint16(pkt[tpOff:]),
+			dstP:  binary.BigEndian.Uint16(pkt[tpOff+2:]),
+			flags: pkt[tpOff+13],
+			tpOff: tpOff,
+		})
+
+	case protoUDP:
+		if int(b.Length) < tpOff+minUDPHdr {
+			return A.FilterActionPass
+		}
+		return pr.handleUDPOutgoing(pkt, pktMeta{
+			srcIP: netip.AddrFrom4([4]byte(pkt[26:30])),
+			dstIP: netip.AddrFrom4([4]byte(pkt[30:34])),
+			srcP:  binary.BigEndian.Uint16(pkt[tpOff:]),
+			dstP:  binary.BigEndian.Uint16(pkt[tpOff+2:]),
+			tpOff: tpOff,
+		})
 	}
 
-	if hasTCP {
-		return pr.handleTCPPacket(pc, b, handle)
-	}
-	if hasUDP {
-		return pr.handleUDPOutgoing(pc, b, handle)
-	}
 	return A.FilterActionPass
 }
 
@@ -368,30 +447,26 @@ func (pr *PacketRouter) outgoingCallback(handle A.Handle, b *A.IntermediateBuffe
 // TCP handling
 // ---------------------------------------------------------------------------
 
-func (pr *PacketRouter) handleTCPPacket(pc *parseCtx, b *A.IntermediateBuffer, handle A.Handle) A.FilterAction {
-	srcIP, _ := netip.AddrFromSlice(pc.ip4.SrcIP)
-	dstIP, _ := netip.AddrFromSlice(pc.ip4.DstIP)
-	srcPort := uint16(pc.tcp.SrcPort)
-	dstPort := uint16(pc.tcp.DstPort)
-
-	src := netip.AddrPortFrom(srcIP, srcPort)
-	dst := netip.AddrPortFrom(dstIP, dstPort)
-
-	if pr.isProxySourcePort(srcPort) {
-		return pr.handleProxyResponse(pc, b, dst)
+func (pr *PacketRouter) handleTCPPacket(pkt []byte, m pktMeta) A.FilterAction {
+	if pr.isProxySourcePort(m.srcP) {
+		dst := netip.AddrPortFrom(m.dstIP, m.dstP)
+		return pr.handleProxyResponse(pkt, m, dst)
 	}
 
-	if pc.tcp.SYN && !pc.tcp.ACK {
-		return pr.handleSYN(pc, b, handle, src, dst)
+	if m.flags&tcpSYN != 0 && m.flags&tcpACK == 0 {
+		src := netip.AddrPortFrom(m.srcIP, m.srcP)
+		dst := netip.AddrPortFrom(m.dstIP, m.dstP)
+		return pr.handleSYN(pkt, m, src, dst)
 	}
 
-	return pr.handleExistingConnection(pc, b, src, dst)
+	src := netip.AddrPortFrom(m.srcIP, m.srcP)
+	dst := netip.AddrPortFrom(m.dstIP, m.dstP)
+	return pr.handleExistingConnection(pkt, m, src, dst)
 }
 
 func (pr *PacketRouter) handleSYN(
-	pc *parseCtx,
-	b *A.IntermediateBuffer,
-	handle A.Handle,
+	pkt []byte,
+	m pktMeta,
 	src, dst netip.AddrPort,
 ) A.FilterAction {
 	info, err := pr.process.FindProcessInfo(context.Background(), false, src, dst, false)
@@ -427,50 +502,51 @@ func (pr *PacketRouter) handleSYN(
 	}
 
 	nk := makeNATKey(dst.Addr(), src.Port())
-	pr.natMu.Lock()
-	pr.nat[nk] = NATEntry{
+	shard := &pr.tcpNAT[natShardIndex(nk)]
+	shard.mu.Lock()
+	shard.m[nk] = &NATEntry{
+		LastActivity:    pr.nowSec.Load(),
 		OriginalDstIP:   dst.Addr(),
 		OriginalDstPort: dst.Port(),
 		TunnelID:        result.TunnelID,
 		ProxyPort:       entry.ProxyPort,
 	}
-	pr.natMu.Unlock()
+	shard.mu.Unlock()
 
 	// In-place hairpin redirect: swap MACs, swap IPs, change TCP DstPort.
-	pkt := b.Buffer[:b.Length]
-	ipHdrLen := int(pc.ip4.IHL) * 4
-	tcpStart := ethHdrLen + ipHdrLen
-
 	swapMACs(pkt)
 	swapIPs(pkt)
-	setTCPPort(pkt, tcpStart+2, entry.ProxyPort, tcpStart+16)
+	setTCPPort(pkt, m.tpOff+2, entry.ProxyPort, m.tpOff+16)
 
 	return A.FilterActionRedirect
 }
 
-func (pr *PacketRouter) handleProxyResponse(pc *parseCtx, b *A.IntermediateBuffer, dst netip.AddrPort) A.FilterAction {
+func (pr *PacketRouter) handleProxyResponse(pkt []byte, m pktMeta, dst netip.AddrPort) A.FilterAction {
 	nk := makeNATKey(dst.Addr(), dst.Port())
+	shard := &pr.tcpNAT[natShardIndex(nk)]
 
-	pr.natMu.RLock()
-	entry, ok := pr.nat[nk]
-	pr.natMu.RUnlock()
+	shard.mu.RLock()
+	entry, ok := shard.m[nk]
+	shard.mu.RUnlock()
 	if !ok {
 		return A.FilterActionPass
 	}
 
-	if pc.tcp.FIN || pc.tcp.RST {
-		pr.natMu.Lock()
-		delete(pr.nat, nk)
-		pr.natMu.Unlock()
+	// Update activity timestamp for periodic cleanup.
+	atomic.StoreInt64(&entry.LastActivity, pr.nowSec.Load())
+
+	// RST: connection aborted, delete NAT entry immediately.
+	// FIN: let the 4-way handshake complete; periodic cleanup handles stale entries.
+	if m.flags&tcpRST != 0 {
+		shard.mu.Lock()
+		delete(shard.m, nk)
+		shard.mu.Unlock()
 	}
 
-	pkt := b.Buffer[:b.Length]
-	ipHdrLen := int(pc.ip4.IHL) * 4
-	tcpStart := ethHdrLen + ipHdrLen
-	tcpCkOff := tcpStart + 16
+	tcpCkOff := m.tpOff + 16
 
 	// Restore original source port.
-	setTCPPort(pkt, tcpStart, entry.OriginalDstPort, tcpCkOff)
+	setTCPPort(pkt, m.tpOff, entry.OriginalDstPort, tcpCkOff)
 	// Swap MACs and IPs.
 	swapMACs(pkt)
 	swapIPs(pkt)
@@ -481,57 +557,73 @@ func (pr *PacketRouter) handleProxyResponse(pc *parseCtx, b *A.IntermediateBuffe
 }
 
 func (pr *PacketRouter) handleExistingConnection(
-	pc *parseCtx,
-	b *A.IntermediateBuffer,
+	pkt []byte,
+	m pktMeta,
 	src, dst netip.AddrPort,
 ) A.FilterAction {
 	nk := makeNATKey(dst.Addr(), src.Port())
+	shard := &pr.tcpNAT[natShardIndex(nk)]
 
-	pr.natMu.RLock()
-	entry, ok := pr.nat[nk]
-	pr.natMu.RUnlock()
+	shard.mu.RLock()
+	entry, ok := shard.m[nk]
+	shard.mu.RUnlock()
 	if !ok {
 		return A.FilterActionPass
 	}
 
-	if pc.tcp.FIN || pc.tcp.RST {
-		pr.natMu.Lock()
-		delete(pr.nat, nk)
-		pr.natMu.Unlock()
+	// Update activity timestamp for periodic cleanup.
+	atomic.StoreInt64(&entry.LastActivity, pr.nowSec.Load())
+
+	// RST: connection aborted, delete NAT entry immediately.
+	// FIN: let the 4-way handshake complete; periodic cleanup handles stale entries.
+	if m.flags&tcpRST != 0 {
+		shard.mu.Lock()
+		delete(shard.m, nk)
+		shard.mu.Unlock()
 	}
 
 	// In-place hairpin redirect: swap MACs, swap IPs, change TCP DstPort.
-	pkt := b.Buffer[:b.Length]
-	ipHdrLen := int(pc.ip4.IHL) * 4
-	tcpStart := ethHdrLen + ipHdrLen
-
 	swapMACs(pkt)
 	swapIPs(pkt)
-	setTCPPort(pkt, tcpStart+2, entry.ProxyPort, tcpStart+16)
+	setTCPPort(pkt, m.tpOff+2, entry.ProxyPort, m.tpOff+16)
 
 	return A.FilterActionRedirect
 }
 
 // ---------------------------------------------------------------------------
-// Proxy port management
+// Proxy port management — lock-free reads via atomic copy-on-write
 // ---------------------------------------------------------------------------
 
 func (pr *PacketRouter) RegisterProxyPort(port uint16) {
 	pr.proxyPortsMu.Lock()
-	pr.proxyPorts[port] = struct{}{}
-	pr.proxyPortsMu.Unlock()
+	defer pr.proxyPortsMu.Unlock()
+
+	old := pr.proxyPorts.Load()
+	newMap := make(map[uint16]struct{}, len(*old)+1)
+	for k, v := range *old {
+		newMap[k] = v
+	}
+	newMap[port] = struct{}{}
+	pr.proxyPorts.Store(&newMap)
 }
 
 func (pr *PacketRouter) UnregisterProxyPort(port uint16) {
 	pr.proxyPortsMu.Lock()
-	delete(pr.proxyPorts, port)
-	pr.proxyPortsMu.Unlock()
+	defer pr.proxyPortsMu.Unlock()
+
+	old := pr.proxyPorts.Load()
+	newMap := make(map[uint16]struct{}, len(*old))
+	for k, v := range *old {
+		if k != port {
+			newMap[k] = v
+		}
+	}
+	pr.proxyPorts.Store(&newMap)
 }
 
 func (pr *PacketRouter) isProxySourcePort(port uint16) bool {
-	pr.proxyPortsMu.RLock()
-	_, ok := pr.proxyPorts[port]
-	pr.proxyPortsMu.RUnlock()
+	m := pr.proxyPorts.Load()
+	_, ok := (*m)[port]
 	return ok
 }
 
@@ -542,11 +634,12 @@ func (pr *PacketRouter) LookupNAT(addrKey string) (originalDst string, tunnelID 
 		return "", "", false
 	}
 	nk := makeNATKey(ap.Addr(), ap.Port())
+	shard := &pr.tcpNAT[natShardIndex(nk)]
 
-	pr.natMu.RLock()
-	entry, exists := pr.nat[nk]
-	pr.natMu.RUnlock()
-	if !exists {
+	shard.mu.RLock()
+	entry, exists := shard.m[nk]
+	shard.mu.RUnlock()
+	if !exists || entry == nil {
 		return "", "", false
 	}
 
@@ -558,45 +651,38 @@ func (pr *PacketRouter) LookupNAT(addrKey string) (originalDst string, tunnelID 
 // UDP interception, NAT hairpin, and proxy port management
 // ---------------------------------------------------------------------------
 
-func (pr *PacketRouter) handleUDPOutgoing(pc *parseCtx, b *A.IntermediateBuffer, handle A.Handle) A.FilterAction {
-	srcIP, _ := netip.AddrFromSlice(pc.ip4.SrcIP)
-	dstIP, _ := netip.AddrFromSlice(pc.ip4.DstIP)
-	srcPort := uint16(pc.udp.SrcPort)
-	dstPort := uint16(pc.udp.DstPort)
-
-	if dstIP.IsMulticast() || dstIP == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
+func (pr *PacketRouter) handleUDPOutgoing(pkt []byte, m pktMeta) A.FilterAction {
+	if m.dstIP.IsMulticast() || m.dstIP == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
 		return A.FilterActionPass
 	}
 
-	src := netip.AddrPortFrom(srcIP, srcPort)
-	dst := netip.AddrPortFrom(dstIP, dstPort)
-
-	if pr.isUDPProxySourcePort(srcPort) {
-		return pr.handleUDPProxyResponse(pc, b, dst)
+	if pr.isUDPProxySourcePort(m.srcP) {
+		dst := netip.AddrPortFrom(m.dstIP, m.dstP)
+		return pr.handleUDPProxyResponse(pkt, m, dst)
 	}
 
-	nk := makeNATKey(dst.Addr(), src.Port())
+	nk := makeNATKey(m.dstIP, m.srcP)
+	ushard := &pr.udpNAT[natShardIndex(nk)]
 
-	// Fast path: existing NAT entry.
-	pr.udpNatMu.RLock()
-	entry, exists := pr.udpNat[nk]
-	pr.udpNatMu.RUnlock()
+	// Fast path: existing NAT entry — atomic timestamp, no time.Now() syscall.
+	ushard.mu.RLock()
+	entry, exists := ushard.m[nk]
+	ushard.mu.RUnlock()
 
 	if exists {
-		atomic.StoreInt64(&entry.LastActivity, time.Now().UnixNano())
-
-		pkt := b.Buffer[:b.Length]
-		ipHdrLen := int(pc.ip4.IHL) * 4
-		udpStart := ethHdrLen + ipHdrLen
+		atomic.StoreInt64(&entry.LastActivity, pr.nowSec.Load())
 
 		swapMACs(pkt)
 		swapIPs(pkt)
-		setUDPPort(pkt, udpStart+2, entry.UDPProxyPort, udpStart+6)
+		setUDPPort(pkt, m.tpOff+2, entry.UDPProxyPort, m.tpOff+6)
 
 		return A.FilterActionRedirect
 	}
 
 	// Slow path: new flow.
+	src := netip.AddrPortFrom(m.srcIP, m.srcP)
+	dst := netip.AddrPortFrom(m.dstIP, m.dstP)
+
 	info, err := pr.process.FindProcessInfo(context.Background(), false, src, dst, true)
 	if err != nil {
 		return A.FilterActionPass
@@ -634,44 +720,38 @@ func (pr *PacketRouter) handleUDPOutgoing(pc *parseCtx, b *A.IntermediateBuffer,
 		return A.FilterActionPass
 	}
 
-	pr.udpNatMu.Lock()
-	pr.udpNat[nk] = &UDPNATEntry{
-		LastActivity:    time.Now().UnixNano(),
+	ushard.mu.Lock()
+	ushard.m[nk] = &UDPNATEntry{
+		LastActivity:    pr.nowSec.Load(),
 		OriginalDstIP:   dst.Addr(),
 		OriginalDstPort: dst.Port(),
 		TunnelID:        result.TunnelID,
 		UDPProxyPort:    udpProxyPort,
 	}
-	pr.udpNatMu.Unlock()
-
-	pkt := b.Buffer[:b.Length]
-	ipHdrLen := int(pc.ip4.IHL) * 4
-	udpStart := ethHdrLen + ipHdrLen
+	ushard.mu.Unlock()
 
 	swapMACs(pkt)
 	swapIPs(pkt)
-	setUDPPort(pkt, udpStart+2, udpProxyPort, udpStart+6)
+	setUDPPort(pkt, m.tpOff+2, udpProxyPort, m.tpOff+6)
 
 	return A.FilterActionRedirect
 }
 
-func (pr *PacketRouter) handleUDPProxyResponse(pc *parseCtx, b *A.IntermediateBuffer, dst netip.AddrPort) A.FilterAction {
+func (pr *PacketRouter) handleUDPProxyResponse(pkt []byte, m pktMeta, dst netip.AddrPort) A.FilterAction {
 	nk := makeNATKey(dst.Addr(), dst.Port())
+	ushard := &pr.udpNAT[natShardIndex(nk)]
 
-	pr.udpNatMu.RLock()
-	entry, ok := pr.udpNat[nk]
-	pr.udpNatMu.RUnlock()
+	ushard.mu.RLock()
+	entry, ok := ushard.m[nk]
+	ushard.mu.RUnlock()
 	if !ok {
 		return A.FilterActionPass
 	}
 
-	pkt := b.Buffer[:b.Length]
-	ipHdrLen := int(pc.ip4.IHL) * 4
-	udpStart := ethHdrLen + ipHdrLen
-	udpCkOff := udpStart + 6
+	udpCkOff := m.tpOff + 6
 
 	// Restore original source port.
-	setUDPPort(pkt, udpStart, entry.OriginalDstPort, udpCkOff)
+	setUDPPort(pkt, m.tpOff, entry.OriginalDstPort, udpCkOff)
 	// Swap MACs and IPs.
 	swapMACs(pkt)
 	swapIPs(pkt)
@@ -682,25 +762,39 @@ func (pr *PacketRouter) handleUDPProxyResponse(pc *parseCtx, b *A.IntermediateBu
 }
 
 // ---------------------------------------------------------------------------
-// UDP proxy port management
+// UDP proxy port management — lock-free reads via atomic copy-on-write
 // ---------------------------------------------------------------------------
 
 func (pr *PacketRouter) RegisterUDPProxyPort(port uint16) {
 	pr.udpProxyPortsMu.Lock()
-	pr.udpProxyPorts[port] = struct{}{}
-	pr.udpProxyPortsMu.Unlock()
+	defer pr.udpProxyPortsMu.Unlock()
+
+	old := pr.udpProxyPorts.Load()
+	newMap := make(map[uint16]struct{}, len(*old)+1)
+	for k, v := range *old {
+		newMap[k] = v
+	}
+	newMap[port] = struct{}{}
+	pr.udpProxyPorts.Store(&newMap)
 }
 
 func (pr *PacketRouter) UnregisterUDPProxyPort(port uint16) {
 	pr.udpProxyPortsMu.Lock()
-	delete(pr.udpProxyPorts, port)
-	pr.udpProxyPortsMu.Unlock()
+	defer pr.udpProxyPortsMu.Unlock()
+
+	old := pr.udpProxyPorts.Load()
+	newMap := make(map[uint16]struct{}, len(*old))
+	for k, v := range *old {
+		if k != port {
+			newMap[k] = v
+		}
+	}
+	pr.udpProxyPorts.Store(&newMap)
 }
 
 func (pr *PacketRouter) isUDPProxySourcePort(port uint16) bool {
-	pr.udpProxyPortsMu.RLock()
-	_, ok := pr.udpProxyPorts[port]
-	pr.udpProxyPortsMu.RUnlock()
+	m := pr.udpProxyPorts.Load()
+	_, ok := (*m)[port]
 	return ok
 }
 
@@ -710,10 +804,11 @@ func (pr *PacketRouter) LookupUDPNAT(addrKey string) (originalDst string, tunnel
 		return "", "", false
 	}
 	nk := makeNATKey(ap.Addr(), ap.Port())
+	ushard := &pr.udpNAT[natShardIndex(nk)]
 
-	pr.udpNatMu.RLock()
-	entry, exists := pr.udpNat[nk]
-	pr.udpNatMu.RUnlock()
+	ushard.mu.RLock()
+	entry, exists := ushard.m[nk]
+	ushard.mu.RUnlock()
 	if !exists {
 		return "", "", false
 	}
@@ -722,7 +817,57 @@ func (pr *PacketRouter) LookupUDPNAT(addrKey string) (originalDst string, tunnel
 	return dst.String(), entry.TunnelID, true
 }
 
+// tcpNATCleanup periodically removes stale TCP NAT entries.
+// Entries become stale when there's no packet activity for 5 minutes (e.g. process
+// crash, network timeout, or completed 4-way handshake where FIN/ACK have passed).
+// Iterates all 64 shards; each shard locked independently.
+func (pr *PacketRouter) tcpNATCleanup(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now().Unix()
+			const timeout int64 = 300 // 5 minutes
+			totalRemoved := 0
+
+			for i := range pr.tcpNAT {
+				shard := &pr.tcpNAT[i]
+
+				// Collect stale keys under read lock.
+				var stale []natKey
+				shard.mu.RLock()
+				for key, entry := range shard.m {
+					last := atomic.LoadInt64(&entry.LastActivity)
+					if now-last > timeout {
+						stale = append(stale, key)
+					}
+				}
+				shard.mu.RUnlock()
+
+				// Delete stale entries under write lock (brief).
+				if len(stale) > 0 {
+					shard.mu.Lock()
+					for _, key := range stale {
+						delete(shard.m, key)
+					}
+					shard.mu.Unlock()
+					totalRemoved += len(stale)
+				}
+			}
+
+			if totalRemoved > 0 {
+				log.Printf("[Router] TCP NAT cleanup: removed %d stale entries", totalRemoved)
+			}
+		}
+	}
+}
+
 // udpNATCleanup periodically removes stale UDP NAT entries.
+// Iterates all 64 shards; each shard locked independently.
 func (pr *PacketRouter) udpNATCleanup(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -732,19 +877,35 @@ func (pr *PacketRouter) udpNATCleanup(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			now := time.Now()
-			pr.udpNatMu.Lock()
-			for key, entry := range pr.udpNat {
-				timeout := 2 * time.Minute
-				if entry.OriginalDstPort == 53 {
-					timeout = 10 * time.Second
+			now := time.Now().Unix()
+
+			for i := range pr.udpNAT {
+				shard := &pr.udpNAT[i]
+
+				// Collect stale keys under read lock.
+				var stale []natKey
+				shard.mu.RLock()
+				for key, entry := range shard.m {
+					var timeout int64 = 120 // 2 minutes
+					if entry.OriginalDstPort == 53 {
+						timeout = 10
+					}
+					last := atomic.LoadInt64(&entry.LastActivity)
+					if now-last > timeout {
+						stale = append(stale, key)
+					}
 				}
-				last := time.Unix(0, atomic.LoadInt64(&entry.LastActivity))
-				if now.Sub(last) > timeout {
-					delete(pr.udpNat, key)
+				shard.mu.RUnlock()
+
+				// Delete stale entries under write lock (brief).
+				if len(stale) > 0 {
+					shard.mu.Lock()
+					for _, key := range stale {
+						delete(shard.m, key)
+					}
+					shard.mu.Unlock()
 				}
 			}
-			pr.udpNatMu.Unlock()
 		}
 	}
 }

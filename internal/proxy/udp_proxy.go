@@ -40,7 +40,7 @@ type UDPNATLookup func(addrKey string) (originalDst string, tunnelID string, ok 
 
 // UDPSession tracks a single client-to-tunnel UDP association.
 type UDPSession struct {
-	lastActive int64 // atomic; UnixNano timestamp
+	lastActive int64 // atomic; Unix seconds
 	tunnelConn net.Conn
 	clientAddr *net.UDPAddr
 	cancel     context.CancelFunc
@@ -57,6 +57,10 @@ type UDPProxy struct {
 
 	sessionsMu sync.RWMutex
 	sessions   map[udpSessionKey]*UDPSession
+
+	// Cached Unix timestamp (seconds), updated every 250ms.
+	// Eliminates time.Now() syscall from the per-datagram fast path.
+	nowSec atomic.Int64
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -84,7 +88,10 @@ func (up *UDPProxy) Start(ctx context.Context) error {
 	up.conn = conn
 	log.Printf("[Proxy] UDP listening on :%d", up.port)
 
-	up.wg.Add(2)
+	// Start cached timestamp updater for fast-path activity tracking.
+	up.nowSec.Store(time.Now().Unix())
+	up.wg.Add(3)
+	go up.timestampUpdater(ctx)
 	go up.readLoop(ctx)
 	go up.cleanupLoop(ctx)
 
@@ -156,7 +163,7 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 	up.sessionsMu.RUnlock()
 
 	if exists {
-		atomic.StoreInt64(&sess.lastActive, time.Now().UnixNano())
+		atomic.StoreInt64(&sess.lastActive, up.nowSec.Load())
 		if _, err := sess.tunnelConn.Write(data); err != nil {
 			log.Printf("[Proxy] UDP write to tunnel failed for %s: %v", clientAddr, err)
 		}
@@ -185,7 +192,7 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 
 	sessCtx, sessCancel := context.WithCancel(ctx)
 	sess = &UDPSession{
-		lastActive: time.Now().UnixNano(),
+		lastActive: up.nowSec.Load(),
 		tunnelConn: tunnelConn,
 		clientAddr: clientAddr,
 		cancel:     sessCancel,
@@ -234,7 +241,7 @@ func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, sk udp
 			return
 		}
 
-		atomic.StoreInt64(&sess.lastActive, time.Now().UnixNano())
+		atomic.StoreInt64(&sess.lastActive, up.nowSec.Load())
 		if _, err := up.conn.WriteToUDP(buf[:n], sess.clientAddr); err != nil {
 			log.Printf("[Proxy] UDP write to client %s failed: %v", sess.clientAddr, err)
 			return
@@ -253,6 +260,23 @@ func (up *UDPProxy) removeSession(sk udpSessionKey) {
 	up.sessionsMu.Unlock()
 }
 
+// timestampUpdater updates the cached Unix timestamp every 250ms.
+func (up *UDPProxy) timestampUpdater(ctx context.Context) {
+	defer up.wg.Done()
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			up.nowSec.Store(time.Now().Unix())
+		}
+	}
+}
+
 // cleanupLoop periodically removes idle UDP sessions (>2min inactive).
 func (up *UDPProxy) cleanupLoop(ctx context.Context) {
 	defer up.wg.Done()
@@ -265,13 +289,14 @@ func (up *UDPProxy) cleanupLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			now := time.Now()
+			now := time.Now().Unix()
+			const timeout int64 = 120 // 2 minutes
 			var stale []udpSessionKey
 
 			up.sessionsMu.RLock()
 			for sk, sess := range up.sessions {
-				last := time.Unix(0, atomic.LoadInt64(&sess.lastActive))
-				if now.Sub(last) > 2*time.Minute {
+				last := atomic.LoadInt64(&sess.lastActive)
+				if now-last > timeout {
 					stale = append(stale, sk)
 				}
 			}

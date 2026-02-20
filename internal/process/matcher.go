@@ -103,6 +103,40 @@ func MatchPattern(exePath string, pattern string) bool {
 	return false
 }
 
+// MatchPreprocessed is a fast-path version of MatchPattern.
+// It accepts pre-lowercased exePath (exeLower) and base name (baseLower),
+// plus the original and pre-lowercased pattern. This avoids repeated
+// strings.ToLower allocations when matching against multiple rules.
+func MatchPreprocessed(exeLower, baseLower, pattern, patternLower string) bool {
+	if patternLower == "" || exeLower == "" {
+		return false
+	}
+
+	// Directory pattern: ends with \* or /*
+	if strings.HasSuffix(pattern, `\*`) || strings.HasSuffix(pattern, `/*`) {
+		dir := patternLower[:len(patternLower)-2]
+		if len(exeLower) > len(dir) && strings.HasPrefix(exeLower, dir) {
+			c := exeLower[len(dir)]
+			return c == '\\' || c == '/'
+		}
+		return false
+	}
+
+	// Full path glob.
+	if strings.ContainsAny(pattern, `\/`) {
+		matched, _ := filepath.Match(patternLower, exeLower)
+		return matched
+	}
+
+	// Exact exe name match.
+	if baseLower == patternLower {
+		return true
+	}
+
+	// Substring match in exe name.
+	return strings.Contains(baseLower, patternLower)
+}
+
 // queryProcessPath uses Windows API to get the executable path from a PID.
 func queryProcessPath(pid uint32) (string, error) {
 	handle, err := windows.OpenProcess(
