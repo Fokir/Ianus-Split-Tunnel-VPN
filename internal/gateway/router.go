@@ -7,6 +7,9 @@ import (
 	"encoding/binary"
 	"log"
 	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -33,9 +36,11 @@ type TUNRouter struct {
 	registry  *core.TunnelRegistry
 	wfp       *WFPManager
 	dnsRouter *DNSRouter
+	ipFilter  atomic.Pointer[IPFilter]
 
-	tunIP [4]byte         // 10.255.0.1 in network byte order
-	drops atomic.Uint64   // WritePacket drop counter
+	tunIP   [4]byte       // 10.255.0.1 in network byte order
+	selfPID uint32        // current process PID (loop prevention)
+	drops   atomic.Uint64 // WritePacket drop counter
 
 	// Raw IP forwarding state.
 	rawMu    sync.RWMutex
@@ -67,10 +72,16 @@ func NewTUNRouter(
 		wfp:       wfp,
 		dnsRouter: dnsRouter,
 		tunIP:     adapter.IP().As4(),
+		selfPID:   uint32(os.Getpid()),
 		rawFwders: make(map[string]provider.RawForwarder),
 		vpnIPs:    make(map[string][4]byte),
 		done:      make(chan struct{}),
 	}
+}
+
+// SetIPFilter atomically sets the IP/app filter. Safe for concurrent use.
+func (r *TUNRouter) SetIPFilter(filter *IPFilter) {
+	r.ipFilter.Store(filter)
 }
 
 // Start begins the packet processing loop.
@@ -206,7 +217,7 @@ func (r *TUNRouter) handleTCP(pkt []byte, m pktMeta) {
 }
 
 func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
-	tunnelID, proxyPort, action := r.resolveFlow(m.srcP, false)
+	tunnelID, proxyPort, action := r.resolveFlow(m.srcP, false, m.dstIP)
 
 	switch action {
 	case flowDrop:
@@ -366,7 +377,7 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	}
 
 	// Slow path: new UDP flow.
-	tunnelID, udpProxyPort, action := r.resolveFlow(m.srcP, true)
+	tunnelID, udpProxyPort, action := r.resolveFlow(m.srcP, true, m.dstIP)
 
 	// DNS special handling: override tunnel based on DNS router.
 	if m.dstP == 53 && r.dnsRouter != nil {
@@ -459,11 +470,17 @@ const (
 	flowDrop                    // drop the packet
 )
 
-func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool) (tunnelID string, proxyPort uint16, action flowAction) {
+func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunnelID string, proxyPort uint16, action flowAction) {
 	// Look up PID by source port.
 	pid, err := r.procID.FindPIDByPort(srcPort, isUDP)
 	if err != nil {
 		return "", 0, flowPass
+	}
+
+	// Self-process loop prevention: our own outbound traffic (e.g. direct proxy)
+	// must not re-enter the proxy path, or it creates an infinite loop.
+	if pid == r.selfPID {
+		return "", 0, flowDrop
 	}
 
 	// Get exe path.
@@ -472,8 +489,19 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool) (tunnelID string, pr
 		return "", 0, flowPass
 	}
 
-	// Match rules.
-	result := r.rules.Match(exePath)
+	// Pre-lowercase once for DisallowedApps + rule matching.
+	exeLower := strings.ToLower(exePath)
+	baseLower := filepath.Base(exeLower)
+
+	f := r.ipFilter.Load() // may be nil
+
+	// Check global DisallowedApps — always bypass VPN.
+	if f != nil && f.IsDisallowedApp(exeLower, baseLower) {
+		return "", 0, flowPass
+	}
+
+	// Match rules using pre-lowered strings.
+	result := r.rules.MatchPreLowered(exeLower, baseLower)
 	if !result.Matched {
 		return "", 0, flowPass
 	}
@@ -481,6 +509,11 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool) (tunnelID string, pr
 	// Drop policy always drops.
 	if result.Fallback == core.PolicyDrop {
 		return "", 0, flowDrop
+	}
+
+	// Check per-tunnel DisallowedApps.
+	if f != nil && f.IsTunnelDisallowedApp(result.TunnelID, exeLower, baseLower) {
+		return "", 0, flowPass
 	}
 
 	// Get tunnel entry.
@@ -499,6 +532,11 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool) (tunnelID string, pr
 		case core.PolicyAllowDirect:
 			return "", 0, flowPass
 		}
+		return "", 0, flowPass
+	}
+
+	// Check IP-based filtering (DisallowedIPs / AllowedIPs).
+	if f != nil && f.ShouldBypassIP(result.TunnelID, dstIP) {
 		return "", 0, flowPass
 	}
 

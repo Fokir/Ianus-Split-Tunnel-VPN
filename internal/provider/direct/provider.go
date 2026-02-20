@@ -21,17 +21,19 @@ const (
 )
 
 // Provider implements TunnelProvider for direct (non-VPN) traffic.
-// Routes traffic through the real NIC using IP_UNICAST_IF socket option,
-// bypassing the TUN adapter's default route.
+// Routes traffic through the real NIC using IP_UNICAST_IF socket option
+// and LocalAddr binding, bypassing the TUN adapter's default route.
 type Provider struct {
 	realNICIndex uint32
+	localIP      netip.Addr // real NIC's own IPv4 address
 	state        core.TunnelState
 }
 
 // New creates a DirectProvider that binds to the specified real NIC.
-func New(realNICIndex uint32) *Provider {
+func New(realNICIndex uint32, localIP netip.Addr) *Provider {
 	return &Provider{
 		realNICIndex: realNICIndex,
+		localIP:      localIP,
 		state:        core.TunnelStateUp,
 	}
 }
@@ -39,7 +41,7 @@ func New(realNICIndex uint32) *Provider {
 // Connect is a no-op for DirectProvider (always up).
 func (p *Provider) Connect(_ context.Context) error {
 	p.state = core.TunnelStateUp
-	log.Printf("[Direct] Provider ready (NIC index=%d)", p.realNICIndex)
+	log.Printf("[Direct] Provider ready (NIC index=%d, localIP=%s)", p.realNICIndex, p.localIP)
 	return nil
 }
 
@@ -61,6 +63,10 @@ func (p *Provider) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{
 		Control: p.bindToRealNIC,
 	}
+	// Bind to real NIC's IP for belt-and-suspenders with IP_UNICAST_IF.
+	if p.localIP.IsValid() {
+		dialer.LocalAddr = &net.TCPAddr{IP: p.localIP.AsSlice()}
+	}
 	return dialer.DialContext(ctx, "tcp4", addr)
 }
 
@@ -68,6 +74,9 @@ func (p *Provider) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
 func (p *Provider) DialUDP(ctx context.Context, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{
 		Control: p.bindToRealNIC,
+	}
+	if p.localIP.IsValid() {
+		dialer.LocalAddr = &net.UDPAddr{IP: p.localIP.AsSlice()}
 	}
 	return dialer.DialContext(ctx, "udp4", addr)
 }

@@ -36,8 +36,10 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-:: Copy wintun.dll to build output.
-if exist ".\dll\wintun.dll" (
+:: Copy wintun.dll to build output (skip if already present — may be locked by running VPN).
+if exist "%OUT_DIR%\wintun.dll" (
+    echo wintun.dll already in %OUT_DIR%, skipping copy
+) else if exist ".\dll\wintun.dll" (
     copy /Y ".\dll\wintun.dll" "%OUT_DIR%\wintun.dll" >nul
     echo Copied wintun.dll to %OUT_DIR%
 ) else (

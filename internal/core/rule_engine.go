@@ -64,6 +64,26 @@ func (re *RuleEngine) Match(exePath string) MatchResult {
 	return MatchResult{Matched: false}
 }
 
+// MatchPreLowered finds the first rule matching the given pre-lowercased exe path.
+// Avoids redundant strings.ToLower when the caller has already lowercased the path
+// (e.g. after checking DisallowedApps in resolveFlow).
+func (re *RuleEngine) MatchPreLowered(exeLower, baseLower string) MatchResult {
+	re.mu.RLock()
+	defer re.mu.RUnlock()
+
+	for i, rule := range re.rules {
+		if process.MatchPreprocessed(exeLower, baseLower, rule.Pattern, re.rulesLower[i]) {
+			return MatchResult{
+				Matched:  true,
+				TunnelID: rule.TunnelID,
+				Fallback: rule.Fallback,
+			}
+		}
+	}
+
+	return MatchResult{Matched: false}
+}
+
 // MatchByPID resolves PID to exe path and then matches.
 func (re *RuleEngine) MatchByPID(pid uint32) MatchResult {
 	exePath, ok := re.matcher.GetExePath(pid)

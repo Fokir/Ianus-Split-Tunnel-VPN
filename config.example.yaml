@@ -2,6 +2,30 @@
 # Uses WinTUN gateway adapter + WFP per-process interface blocking.
 # No adapter_index needed — traffic is routed via TUN adapter automatically.
 
+# Global IP/app filters (optional).
+# Applied to ALL tunnels before per-tunnel filters.
+global:
+  # Local/private networks (RFC 1918, link-local, multicast, loopback)
+  # are automatically excluded from VPN. Set disable_local: true to
+  # override this and route ALL traffic (including local) through VPN.
+  # disable_local: true
+
+  # Additional IPs that always bypass VPN (go direct). Checked before AllowedIPs.
+  # Bare IPs (without /mask) are treated as /32.
+  disallowed_ips:
+    - "212.193.55.91/32"   # Specific server
+
+  # Apps that always go direct (bypass VPN entirely).
+  # Same pattern syntax as rules: exe name, substring, path glob, dir\*
+  disallowed_apps:
+    - "steam.exe"
+    - 'C:\Games\*'
+
+  # If set, only these IPs go through VPN. Default: all traffic.
+  # Omit to route all matched traffic through VPN.
+  # allowed_ips:
+  #   - "0.0.0.0/0"
+
 tunnels:
   - id: awg-germany
     protocol: amneziawg
@@ -9,6 +33,14 @@ tunnels:
     settings:
       config_file: "awg-germany.conf"  # Path to AmneziaWG .conf file (required)
       # adapter_ip: "10.8.1.2"         # Optional: override IP from .conf Address
+
+    # Per-tunnel IP/app filters (optional, override global).
+    # disallowed_ips:
+    #   - "192.168.1.0/24"
+    # allowed_ips:
+    #   - "0.0.0.0/0"
+    # disallowed_apps:
+    #   - "qbittorrent.exe"
 
 rules:
   # Route Firefox through the German AWG tunnel, block if tunnel is down (kill switch)

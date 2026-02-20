@@ -103,6 +103,24 @@ func main() {
 		adapter, flows, procID, matcher, ruleEngine, registry, wfpMgr, dnsRouter,
 	)
 
+	// === 7a. IP/App Filter ===
+	ipFilter := gateway.NewIPFilter(cfg.Global, cfg.Tunnels)
+	tunRouter.SetIPFilter(ipFilter)
+	if ipFilter.HasFilters() {
+		log.Printf("[Gateway] IP/App filter active: global disallowed_ips=%d, global allowed_ips=%d, global disallowed_apps=%d",
+			len(cfg.Global.DisallowedIPs), len(cfg.Global.AllowedIPs), len(cfg.Global.DisallowedApps))
+	}
+
+	// === 7b. WFP bypass permits for local/disallowed CIDRs ===
+	// Without these, WFP BLOCK rules prevent blocked processes from reaching
+	// local subnet IPs that route via real NIC (not TUN) due to connected routes.
+	bypassPrefixes := gateway.GetBypassPrefixes(cfg.Global)
+	if len(bypassPrefixes) > 0 {
+		if err := wfpMgr.AddBypassPrefixes(bypassPrefixes); err != nil {
+			log.Printf("[Core] Warning: failed to add WFP bypass permits: %v", err)
+		}
+	}
+
 	// === 8. Direct Provider + proxies ===
 	providers := make(map[string]provider.TunnelProvider)
 	proxies := make([]*proxy.TunnelProxy, 0)
@@ -117,7 +135,7 @@ func main() {
 	var nextProxyPort uint16 = 30000
 
 	// Register Direct Provider.
-	directProv := direct.New(realNIC.Index)
+	directProv := direct.New(realNIC.Index, realNIC.LocalIP)
 	directProxyPort := nextProxyPort
 	directUDPProxyPort := nextProxyPort + 1
 	nextProxyPort += 2

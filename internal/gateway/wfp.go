@@ -5,6 +5,7 @@ package gateway
 import (
 	"fmt"
 	"log"
+	"net/netip"
 	"strings"
 	"sync"
 
@@ -194,6 +195,68 @@ func (w *WFPManager) UnblockProcess(exePath string) {
 	for _, id := range ruleIDs {
 		w.session.DeleteRule(id)
 	}
+}
+
+// AddBypassPrefixes creates WFP PERMIT rules for bypass CIDRs.
+// These rules have higher weight (2000) than per-process BLOCK rules (1000),
+// ensuring traffic to bypass IPs is allowed on the real NIC even for
+// WFP-blocked processes.
+//
+// This is needed because connected subnet routes (e.g. 192.168.1.0/24) are
+// more specific than TUN's /1 split routes, so local traffic goes through
+// the real NIC where per-process BLOCK rules would drop it.
+func (w *WFPManager) AddBypassPrefixes(prefixes []netip.Prefix) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	for _, prefix := range prefixes {
+		if !prefix.Addr().Is4() {
+			continue
+		}
+
+		// Permit outbound connections to bypass CIDRs on any interface.
+		connectID := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:       connectID,
+			Name:     fmt.Sprintf("AWG bypass permit connect: %s", prefix),
+			Layer:    wf.LayerALEAuthConnectV4,
+			Sublayer: awgSublayerID,
+			Weight:   2000,
+			Conditions: []*wf.Match{
+				{
+					Field: wf.FieldIPRemoteAddress,
+					Op:    wf.MatchTypeEqual,
+					Value: prefix,
+				},
+			},
+			Action: wf.ActionPermit,
+		}); err != nil {
+			return fmt.Errorf("[WFP] add bypass permit connect %s: %w", prefix, err)
+		}
+
+		// Permit inbound responses from bypass CIDRs on any interface.
+		recvID := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:       recvID,
+			Name:     fmt.Sprintf("AWG bypass permit recv: %s", prefix),
+			Layer:    wf.LayerALEAuthRecvAcceptV4,
+			Sublayer: awgSublayerID,
+			Weight:   2000,
+			Conditions: []*wf.Match{
+				{
+					Field: wf.FieldIPRemoteAddress,
+					Op:    wf.MatchTypeEqual,
+					Value: prefix,
+				},
+			},
+			Action: wf.ActionPermit,
+		}); err != nil {
+			return fmt.Errorf("[WFP] add bypass permit recv %s: %w", prefix, err)
+		}
+	}
+
+	log.Printf("[WFP] Added bypass permits for %d prefixes", len(prefixes))
+	return nil
 }
 
 // Close closes the WFP session. Dynamic=true means all rules are auto-removed.

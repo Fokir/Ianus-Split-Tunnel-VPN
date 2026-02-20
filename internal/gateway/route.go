@@ -5,6 +5,7 @@ package gateway
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/netip"
 	"sync"
 	"unsafe"
@@ -14,9 +15,10 @@ import (
 
 // RealNIC holds information about the system's real internet-facing NIC.
 type RealNIC struct {
-	LUID     uint64
-	Index    uint32
-	Gateway  netip.Addr
+	LUID    uint64
+	Index   uint32
+	Gateway netip.Addr
+	LocalIP netip.Addr // NIC's own IPv4 address
 }
 
 // RouteManager manages system routing table entries for the TUN gateway.
@@ -40,8 +42,23 @@ func (rm *RouteManager) DiscoverRealNIC() (RealNIC, error) {
 	if err != nil {
 		return RealNIC{}, err
 	}
+
+	// Resolve the NIC's own IPv4 address for direct provider LocalAddr binding.
+	if iface, err := net.InterfaceByIndex(int(nic.Index)); err == nil {
+		if addrs, err := iface.Addrs(); err == nil {
+			for _, a := range addrs {
+				if ipnet, ok := a.(*net.IPNet); ok {
+					if ip4 := ipnet.IP.To4(); ip4 != nil {
+						nic.LocalIP, _ = netip.AddrFromSlice(ip4)
+						break
+					}
+				}
+			}
+		}
+	}
+
 	rm.realNIC = nic
-	log.Printf("[Route] Real NIC: LUID=0x%x Index=%d Gateway=%s", nic.LUID, nic.Index, nic.Gateway)
+	log.Printf("[Route] Real NIC: LUID=0x%x Index=%d Gateway=%s LocalIP=%s", nic.LUID, nic.Index, nic.Gateway, nic.LocalIP)
 	return nic, nil
 }
 
@@ -50,15 +67,27 @@ func (rm *RouteManager) RealNICInfo() RealNIC { return rm.realNIC }
 
 // SetDefaultRoute adds split default routes (0.0.0.0/1 + 128.0.0.0/1) via TUN.
 // This captures all traffic without replacing the actual 0.0.0.0/0 entry.
+// Also adds backup split routes via real NIC (high metric) so that the direct
+// provider's IP_UNICAST_IF can find matching routes on the real NIC interface.
 func (rm *RouteManager) SetDefaultRoute() error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	// 0.0.0.0/1
+	// Backup split routes via real NIC (high metric, used by IP_UNICAST_IF).
+	// Without these, IP_UNICAST_IF has no /1 route on the real NIC and TCP
+	// connections from the direct proxy fall through to TUN's /1 routes.
+	const backupMetric = 9999
+	for _, prefix := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
+		p := netip.MustParsePrefix(prefix)
+		if err := rm.addRouteWithMetric(p, rm.realNIC.LUID, rm.realNIC.Gateway, backupMetric); err != nil {
+			log.Printf("[Route] Warning: backup route %s via real NIC: %v", prefix, err)
+		}
+	}
+
+	// Primary split routes via TUN (metric 0, captures all traffic).
 	if err := rm.addRoute(netip.MustParsePrefix("0.0.0.0/1"), rm.tunLUID, netip.Addr{}); err != nil {
 		return fmt.Errorf("[Route] add 0.0.0.0/1: %w", err)
 	}
-	// 128.0.0.0/1
 	if err := rm.addRoute(netip.MustParsePrefix("128.0.0.0/1"), rm.tunLUID, netip.Addr{}); err != nil {
 		return fmt.Errorf("[Route] add 128.0.0.0/1: %w", err)
 	}
@@ -155,7 +184,7 @@ const (
 	fwdOrigin         = 100 // NL_ROUTE_ORIGIN
 )
 
-func (rm *RouteManager) addRoute(dst netip.Prefix, luid uint64, nextHop netip.Addr) error {
+func (rm *RouteManager) addRouteWithMetric(dst netip.Prefix, luid uint64, nextHop netip.Addr, metric uint32) error {
 	var row mibIPForwardRow2
 	initIpForwardEntry(&row)
 
@@ -176,17 +205,22 @@ func (rm *RouteManager) addRoute(dst netip.Prefix, luid uint64, nextHop netip.Ad
 	}
 
 	// Metric, Protocol, Origin
-	*(*uint32)(unsafe.Pointer(&row.data[fwdMetric])) = 0
+	*(*uint32)(unsafe.Pointer(&row.data[fwdMetric])) = metric
 	*(*int32)(unsafe.Pointer(&row.data[fwdProtocol])) = 3 // MIB_IPPROTO_NETMGMT
 	*(*int32)(unsafe.Pointer(&row.data[fwdOrigin])) = 1   // NlroManual
 
 	r, _, _ := procCreateIpForwardEntry2.Call(uintptr(unsafe.Pointer(&row)))
-	if r != 0 && r != 0x80071392 { // ERROR_OBJECT_ALREADY_EXISTS
+	// ERROR_OBJECT_ALREADY_EXISTS can come as HRESULT 0x80071392 or Win32 0x1392.
+	if r != 0 && r != 0x80071392 && r != 0x1392 {
 		return fmt.Errorf("CreateIpForwardEntry2 failed: 0x%x", r)
 	}
 
 	rm.routes = append(rm.routes, row)
 	return nil
+}
+
+func (rm *RouteManager) addRoute(dst netip.Prefix, luid uint64, nextHop netip.Addr) error {
+	return rm.addRouteWithMetric(dst, luid, nextHop, 0)
 }
 
 func initIpForwardEntry(row *mibIPForwardRow2) {

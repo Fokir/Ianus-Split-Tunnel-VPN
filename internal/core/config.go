@@ -93,6 +93,11 @@ type TunnelConfig struct {
 	// Protocol-specific configuration stored as a generic map.
 	// Parsed by the corresponding provider.
 	Settings map[string]any `yaml:"settings,omitempty"`
+
+	// Per-tunnel IP/app filtering (optional overrides).
+	AllowedIPs     []string `yaml:"allowed_ips,omitempty"`
+	DisallowedIPs  []string `yaml:"disallowed_ips,omitempty"`
+	DisallowedApps []string `yaml:"disallowed_apps,omitempty"`
 }
 
 // DNSRouteConfig configures per-process DNS routing.
@@ -104,11 +109,20 @@ type DNSRouteConfig struct {
 	Servers []string `yaml:"servers,omitempty"`
 }
 
+// GlobalFilterConfig holds IP and app filters applied to all tunnels.
+type GlobalFilterConfig struct {
+	AllowedIPs     []string `yaml:"allowed_ips,omitempty"`
+	DisallowedIPs  []string `yaml:"disallowed_ips,omitempty"`
+	DisallowedApps []string `yaml:"disallowed_apps,omitempty"`
+	DisableLocal   bool     `yaml:"disable_local,omitempty"`
+}
+
 // Config is the top-level application configuration.
 type Config struct {
-	Tunnels []TunnelConfig `yaml:"tunnels"`
-	Rules   []Rule         `yaml:"rules"`
-	DNS     DNSRouteConfig `yaml:"dns,omitempty"`
+	Global  GlobalFilterConfig `yaml:"global,omitempty"`
+	Tunnels []TunnelConfig     `yaml:"tunnels"`
+	Rules   []Rule             `yaml:"rules"`
+	DNS     DNSRouteConfig     `yaml:"dns,omitempty"`
 }
 
 // ConfigManager handles loading, saving, and hot-reloading configuration.
