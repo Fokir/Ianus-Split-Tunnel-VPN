@@ -212,6 +212,14 @@ func main() {
 		}
 		registry.SetState(tcfg.ID, core.TunnelStateUp, nil)
 
+		// Register raw forwarder if the provider supports it.
+		if rf, ok := prov.(provider.RawForwarder); ok {
+			vpnIP := prov.GetAdapterIP()
+			if vpnIP.IsValid() && vpnIP.Is4() {
+				tunRouter.RegisterRawForwarder(tcfg.ID, rf, vpnIP.As4())
+			}
+		}
+
 		// === 10. Add bypass route for VPN server endpoints ===
 		if awgProv, ok := prov.(*amneziawg.Provider); ok {
 			for _, ep := range awgProv.GetPeerEndpoints() {

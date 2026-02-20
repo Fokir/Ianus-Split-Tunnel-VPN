@@ -47,6 +47,43 @@ type UDPNATEntry struct {
 }
 
 // ---------------------------------------------------------------------------
+// Raw flow types — for raw IP forwarding (bypass TCP proxy + gVisor)
+// ---------------------------------------------------------------------------
+
+// RawFlowEntry tracks a raw-forwarded flow (TCP or UDP) through a VPN tunnel.
+type RawFlowEntry struct {
+	LastActivity int64   // atomic; Unix seconds
+	TunnelID     string
+	VpnIP        [4]byte // cached VPN IP for fast src IP rewrite
+}
+
+// rawFlowKey is a compact key: proto(1) + dstIP(4) + srcPort(2) = 7 bytes.
+type rawFlowKey [7]byte
+
+func makeRawFlowKey(proto byte, dstIP [4]byte, srcPort uint16) rawFlowKey {
+	var k rawFlowKey
+	k[0] = proto
+	copy(k[1:5], dstIP[:])
+	k[5] = byte(srcPort >> 8)
+	k[6] = byte(srcPort)
+	return k
+}
+
+// rawFlowShardIndex selects a shard using FNV-1a hash.
+func rawFlowShardIndex(k rawFlowKey) uint32 {
+	h := uint32(2166136261)
+	for _, b := range k {
+		h = (h ^ uint32(b)) * 16777619
+	}
+	return h & (numNATShards - 1)
+}
+
+type rawFlowShard struct {
+	mu sync.RWMutex
+	m  map[rawFlowKey]*RawFlowEntry
+}
+
+// ---------------------------------------------------------------------------
 // Sharded NAT tables — 64 shards reduce RWMutex contention
 // ---------------------------------------------------------------------------
 
@@ -82,6 +119,12 @@ func natShardIndex(k natKey) uint32 {
 type FlowTable struct {
 	tcp [numNATShards]tcpNATShard
 	udp [numNATShards]udpNATShard
+	raw [numNATShards]rawFlowShard
+
+	// VPN IP reverse map: vpnIP → tunnelID (for inbound raw routing).
+	// Lock-free reads via atomic copy-on-write.
+	vpnIPMu  sync.Mutex
+	vpnIPMap atomic.Pointer[map[[4]byte]string]
 
 	// Proxy ports: atomic copy-on-write for lock-free reads on hot path.
 	proxyPortsMu    sync.Mutex
@@ -102,10 +145,15 @@ func NewFlowTable() *FlowTable {
 	for i := range ft.udp {
 		ft.udp[i].m = make(map[natKey]*UDPNATEntry)
 	}
+	for i := range ft.raw {
+		ft.raw[i].m = make(map[rawFlowKey]*RawFlowEntry)
+	}
 	emptyTCP := make(map[uint16]struct{})
 	emptyUDP := make(map[uint16]struct{})
+	emptyVPN := make(map[[4]byte]string)
 	ft.proxyPorts.Store(&emptyTCP)
 	ft.udpProxyPorts.Store(&emptyUDP)
+	ft.vpnIPMap.Store(&emptyVPN)
 	ft.nowSec.Store(time.Now().Unix())
 	return ft
 }
@@ -224,6 +272,120 @@ func (ft *FlowTable) LookupUDPNAT(addrKey string) (originalDst string, tunnelID 
 
 	dst := netip.AddrPortFrom(entry.OriginalDstIP, entry.OriginalDstPort)
 	return dst.String(), entry.TunnelID, true
+}
+
+// ---------------------------------------------------------------------------
+// Raw flow operations — for raw IP forwarding (bypass TCP proxy + gVisor)
+// ---------------------------------------------------------------------------
+
+// InsertRawFlow creates a raw flow entry for a TCP or UDP flow.
+func (ft *FlowTable) InsertRawFlow(proto byte, dstIP [4]byte, srcPort uint16, entry *RawFlowEntry) {
+	k := makeRawFlowKey(proto, dstIP, srcPort)
+	shard := &ft.raw[rawFlowShardIndex(k)]
+	shard.mu.Lock()
+	shard.m[k] = entry
+	shard.mu.Unlock()
+}
+
+// GetRawFlow looks up a raw flow entry.
+func (ft *FlowTable) GetRawFlow(proto byte, dstIP [4]byte, srcPort uint16) (*RawFlowEntry, bool) {
+	k := makeRawFlowKey(proto, dstIP, srcPort)
+	shard := &ft.raw[rawFlowShardIndex(k)]
+	shard.mu.RLock()
+	entry, ok := shard.m[k]
+	shard.mu.RUnlock()
+	return entry, ok
+}
+
+// DeleteRawFlow removes a raw flow entry.
+func (ft *FlowTable) DeleteRawFlow(proto byte, dstIP [4]byte, srcPort uint16) {
+	k := makeRawFlowKey(proto, dstIP, srcPort)
+	shard := &ft.raw[rawFlowShardIndex(k)]
+	shard.mu.Lock()
+	delete(shard.m, k)
+	shard.mu.Unlock()
+}
+
+// ---------------------------------------------------------------------------
+// VPN IP reverse map — lock-free reads via atomic copy-on-write
+// ---------------------------------------------------------------------------
+
+// RegisterVpnIP associates a VPN adapter IP with a tunnelID.
+func (ft *FlowTable) RegisterVpnIP(vpnIP [4]byte, tunnelID string) {
+	ft.vpnIPMu.Lock()
+	defer ft.vpnIPMu.Unlock()
+	old := ft.vpnIPMap.Load()
+	newMap := make(map[[4]byte]string, len(*old)+1)
+	for k, v := range *old {
+		newMap[k] = v
+	}
+	newMap[vpnIP] = tunnelID
+	ft.vpnIPMap.Store(&newMap)
+}
+
+// UnregisterVpnIP removes a VPN IP mapping.
+func (ft *FlowTable) UnregisterVpnIP(vpnIP [4]byte) {
+	ft.vpnIPMu.Lock()
+	defer ft.vpnIPMu.Unlock()
+	old := ft.vpnIPMap.Load()
+	newMap := make(map[[4]byte]string, len(*old))
+	for k, v := range *old {
+		if k != vpnIP {
+			newMap[k] = v
+		}
+	}
+	ft.vpnIPMap.Store(&newMap)
+}
+
+// LookupVpnIP returns the tunnelID for a given VPN IP (lock-free).
+func (ft *FlowTable) LookupVpnIP(ip [4]byte) (string, bool) {
+	m := ft.vpnIPMap.Load()
+	tid, ok := (*m)[ip]
+	return tid, ok
+}
+
+// StartRawFlowCleanup periodically removes stale raw flow entries (>5 min idle).
+func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				now := time.Now().Unix()
+				const timeout int64 = 300 // 5 minutes
+				totalRemoved := 0
+
+				for i := range ft.raw {
+					shard := &ft.raw[i]
+					var stale []rawFlowKey
+					shard.mu.RLock()
+					for key, entry := range shard.m {
+						last := atomic.LoadInt64(&entry.LastActivity)
+						if now-last > timeout {
+							stale = append(stale, key)
+						}
+					}
+					shard.mu.RUnlock()
+
+					if len(stale) > 0 {
+						shard.mu.Lock()
+						for _, key := range stale {
+							delete(shard.m, key)
+						}
+						shard.mu.Unlock()
+						totalRemoved += len(stale)
+					}
+				}
+
+				if totalRemoved > 0 {
+					log.Printf("[Gateway] Raw flow cleanup: removed %d stale entries", totalRemoved)
+				}
+			}
+		}
+	}()
 }
 
 // ---------------------------------------------------------------------------

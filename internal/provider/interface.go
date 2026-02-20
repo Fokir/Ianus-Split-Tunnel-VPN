@@ -10,6 +10,21 @@ import (
 	"awg-split-tunnel/internal/core"
 )
 
+// RawForwarder allows injecting raw IP packets directly into a VPN tunnel,
+// bypassing the userspace TCP proxy and gVisor stack. Providers that support
+// raw forwarding (e.g. AmneziaWG) implement this interface in addition to
+// TunnelProvider. The TUNRouter uses a type assertion to detect support.
+type RawForwarder interface {
+	// InjectOutbound sends a raw IP packet into the tunnel for encryption.
+	// Returns true on success, false if the packet was dropped.
+	InjectOutbound(pkt []byte) bool
+
+	// SetInboundHandler installs a callback for packets arriving from the tunnel.
+	// If the handler returns true, the packet is consumed (raw path); false falls
+	// through to gVisor. Pass nil to remove the handler.
+	SetInboundHandler(handler func(pkt []byte) bool)
+}
+
 // TunnelProvider is the contract every VPN protocol must implement.
 type TunnelProvider interface {
 	// Connect establishes the VPN tunnel. Blocks until connected or ctx cancelled.

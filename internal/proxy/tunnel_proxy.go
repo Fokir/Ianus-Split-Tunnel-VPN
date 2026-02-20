@@ -18,11 +18,11 @@ import (
 // important for VPN tunneled traffic over high-latency links.
 const sockBufSize = 2 * 1024 * 1024
 
-// fwdBufPool reuses 256KB buffers for bidirectional TCP forwarding.
+// fwdBufPool reuses 1MB buffers for bidirectional TCP forwarding.
 // Larger buffers reduce syscall overhead during bulk transfers.
 var fwdBufPool = sync.Pool{
 	New: func() any {
-		b := make([]byte, 256*1024)
+		b := make([]byte, 1024*1024)
 		return &b
 	},
 }

@@ -126,6 +126,10 @@ func (p *Provider) Disconnect() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.tnet != nil {
+		p.tnet.SetInboundHandler(nil)
+	}
+
 	if p.dev != nil {
 		p.dev.Close()
 		p.dev = nil
@@ -202,4 +206,31 @@ func (p *Provider) Protocol() string {
 // Used by PacketRouter to add kernel-level static bypass filters.
 func (p *Provider) GetPeerEndpoints() []netip.AddrPort {
 	return p.peerEndpoints
+}
+
+// ---------------------------------------------------------------------------
+// RawForwarder implementation — raw IP forwarding bypassing gVisor
+// ---------------------------------------------------------------------------
+
+// InjectOutbound sends a raw IP packet into the WireGuard tunnel.
+func (p *Provider) InjectOutbound(pkt []byte) bool {
+	p.mu.RLock()
+	tnet := p.tnet
+	p.mu.RUnlock()
+
+	if tnet == nil {
+		return false
+	}
+	return tnet.InjectOutbound(pkt)
+}
+
+// SetInboundHandler installs a callback for packets arriving from the tunnel.
+func (p *Provider) SetInboundHandler(handler func(pkt []byte) bool) {
+	p.mu.RLock()
+	tnet := p.tnet
+	p.mu.RUnlock()
+
+	if tnet != nil {
+		tnet.SetInboundHandler(handler)
+	}
 }

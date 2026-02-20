@@ -7,10 +7,12 @@ import (
 	"encoding/binary"
 	"log"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/process"
+	"awg-split-tunnel/internal/provider"
 )
 
 // DirectTunnelID is the special tunnel ID for unmatched traffic routed via real NIC.
@@ -32,7 +34,13 @@ type TUNRouter struct {
 	wfp       *WFPManager
 	dnsRouter *DNSRouter
 
-	tunIP [4]byte // 10.255.0.1 in network byte order
+	tunIP [4]byte         // 10.255.0.1 in network byte order
+	drops atomic.Uint64   // WritePacket drop counter
+
+	// Raw IP forwarding state.
+	rawMu    sync.RWMutex
+	rawFwders map[string]provider.RawForwarder // tunnelID → forwarder
+	vpnIPs    map[string][4]byte               // tunnelID → VPN IP
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -59,6 +67,8 @@ func NewTUNRouter(
 		wfp:       wfp,
 		dnsRouter: dnsRouter,
 		tunIP:     adapter.IP().As4(),
+		rawFwders: make(map[string]provider.RawForwarder),
+		vpnIPs:    make(map[string][4]byte),
 		done:      make(chan struct{}),
 	}
 }
@@ -70,6 +80,7 @@ func (r *TUNRouter) Start(ctx context.Context) error {
 	r.flows.StartTimestampUpdater(ctx)
 	r.flows.StartTCPCleanup(ctx)
 	r.flows.StartUDPCleanup(ctx)
+	r.flows.StartRawFlowCleanup(ctx)
 
 	go r.packetLoop(ctx)
 
@@ -86,9 +97,22 @@ func (r *TUNRouter) Stop() {
 	log.Printf("[Gateway] TUN Router stopped")
 }
 
+// writePacket sends a packet via the adapter. On failure (ring full after retry),
+// increments the drop counter and logs every 10 000 drops.
+func (r *TUNRouter) writePacket(pkt []byte) {
+	if err := r.adapter.WritePacket(pkt); err != nil {
+		if d := r.drops.Add(1); d == 1 || d%10000 == 0 {
+			log.Printf("[Gateway] Packet drop #%d: %v", d, err)
+		}
+	}
+}
+
 // packetLoop is the main processing goroutine.
+// Uses a single pre-allocated buffer to eliminate per-packet heap allocations.
 func (r *TUNRouter) packetLoop(ctx context.Context) {
 	defer close(r.done)
+
+	buf := make([]byte, maxPacketSize)
 
 	for {
 		select {
@@ -97,7 +121,7 @@ func (r *TUNRouter) packetLoop(ctx context.Context) {
 		default:
 		}
 
-		pkt, err := r.adapter.ReadPacket()
+		n, err := r.adapter.ReadPacket(buf)
 		if err != nil {
 			select {
 			case <-ctx.Done():
@@ -108,7 +132,7 @@ func (r *TUNRouter) packetLoop(ctx context.Context) {
 			}
 		}
 
-		r.processPacket(pkt)
+		r.processPacket(buf[:n])
 	}
 }
 
@@ -199,6 +223,20 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 		// tunnelID and proxyPort already set
 	}
 
+	// Raw forwarding path: non-direct tunnels with a raw forwarder.
+	if tunnelID != DirectTunnelID {
+		if rf, vpnIP, ok := r.getRawForwarder(tunnelID); ok {
+			r.flows.InsertRawFlow(protoTCP, m.dstIP, m.srcP, &RawFlowEntry{
+				LastActivity: r.flows.NowSec(),
+				TunnelID:     tunnelID,
+				VpnIP:        vpnIP,
+			})
+			r.handleRawOutbound(pkt, m, tunnelID, vpnIP, rf, protoTCP)
+			return
+		}
+	}
+
+	// Proxy fallback path (direct tunnel or no raw forwarder).
 	dstIP := netip.AddrFrom4(m.dstIP)
 
 	// Create NAT entry.
@@ -214,7 +252,7 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 	tunSwapIPs(pkt)
 	tunSetTCPPort(pkt, m.tpOff+2, proxyPort, m.tpOff+16)
 
-	r.adapter.WritePacket(pkt)
+	r.writePacket(pkt)
 }
 
 func (r *TUNRouter) handleTCPProxyResponse(pkt []byte, m pktMeta) {
@@ -241,10 +279,28 @@ func (r *TUNRouter) handleTCPProxyResponse(pkt []byte, m pktMeta) {
 	// Overwrite srcIP with original destination IP.
 	tunOverwriteSrcIP(pkt, entry.OriginalDstIP.As4(), tcpCkOff)
 
-	r.adapter.WritePacket(pkt)
+	r.writePacket(pkt)
 }
 
 func (r *TUNRouter) handleTCPExisting(pkt []byte, m pktMeta) {
+	// Check raw flow table first.
+	if rawEntry, ok := r.flows.GetRawFlow(protoTCP, m.dstIP, m.srcP); ok {
+		atomic.StoreInt64(&rawEntry.LastActivity, r.flows.NowSec())
+
+		// RST: clean up raw flow.
+		if m.flags&tcpRST != 0 {
+			r.flows.DeleteRawFlow(protoTCP, m.dstIP, m.srcP)
+		}
+
+		if rf, vpnIP, ok := r.getRawForwarder(rawEntry.TunnelID); ok {
+			r.handleRawOutbound(pkt, m, rawEntry.TunnelID, vpnIP, rf, protoTCP)
+			return
+		}
+		// Forwarder gone — delete stale raw flow and fall through.
+		r.flows.DeleteRawFlow(protoTCP, m.dstIP, m.srcP)
+	}
+
+	// Check proxy NAT table.
 	dstIP := netip.AddrFrom4(m.dstIP)
 	entry, ok := r.flows.GetTCP(dstIP, m.srcP)
 	if !ok {
@@ -265,7 +321,7 @@ func (r *TUNRouter) handleTCPExisting(pkt []byte, m pktMeta) {
 	tunSwapIPs(pkt)
 	tunSetTCPPort(pkt, m.tpOff+2, entry.ProxyPort, m.tpOff+16)
 
-	r.adapter.WritePacket(pkt)
+	r.writePacket(pkt)
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +342,18 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 		return
 	}
 
-	// Fast path: existing NAT entry.
+	// Fast path: existing raw flow.
+	if rawEntry, ok := r.flows.GetRawFlow(protoUDP, m.dstIP, m.srcP); ok {
+		atomic.StoreInt64(&rawEntry.LastActivity, r.flows.NowSec())
+		if rf, vpnIP, ok := r.getRawForwarder(rawEntry.TunnelID); ok {
+			r.handleRawOutbound(pkt, m, rawEntry.TunnelID, vpnIP, rf, protoUDP)
+			return
+		}
+		// Forwarder gone — delete stale raw flow and fall through.
+		r.flows.DeleteRawFlow(protoUDP, m.dstIP, m.srcP)
+	}
+
+	// Fast path: existing proxy NAT entry.
 	entry, exists := r.flows.GetUDP(dstIP, m.srcP)
 	if exists {
 		atomic.StoreInt64(&entry.LastActivity, r.flows.NowSec())
@@ -294,7 +361,7 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 		tunSwapIPs(pkt)
 		tunSetUDPPort(pkt, m.tpOff+2, entry.UDPProxyPort, m.tpOff+6)
 
-		r.adapter.WritePacket(pkt)
+		r.writePacket(pkt)
 		return
 	}
 
@@ -327,6 +394,20 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 		// Already set
 	}
 
+	// Raw forwarding for new UDP flows on non-direct tunnels.
+	if tunnelID != DirectTunnelID {
+		if rf, vpnIP, ok := r.getRawForwarder(tunnelID); ok {
+			r.flows.InsertRawFlow(protoUDP, m.dstIP, m.srcP, &RawFlowEntry{
+				LastActivity: r.flows.NowSec(),
+				TunnelID:     tunnelID,
+				VpnIP:        vpnIP,
+			})
+			r.handleRawOutbound(pkt, m, tunnelID, vpnIP, rf, protoUDP)
+			return
+		}
+	}
+
+	// Proxy fallback path.
 	if udpProxyPort == 0 {
 		return
 	}
@@ -344,7 +425,7 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	tunSwapIPs(pkt)
 	tunSetUDPPort(pkt, m.tpOff+2, udpProxyPort, m.tpOff+6)
 
-	r.adapter.WritePacket(pkt)
+	r.writePacket(pkt)
 }
 
 func (r *TUNRouter) handleUDPProxyResponse(pkt []byte, m pktMeta) {
@@ -363,7 +444,7 @@ func (r *TUNRouter) handleUDPProxyResponse(pkt []byte, m pktMeta) {
 	// Overwrite srcIP with original destination IP.
 	tunOverwriteSrcIP(pkt, entry.OriginalDstIP.As4(), udpCkOff)
 
-	r.adapter.WritePacket(pkt)
+	r.writePacket(pkt)
 }
 
 // ---------------------------------------------------------------------------
@@ -435,4 +516,108 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool) (tunnelID string, pr
 	}
 
 	return result.TunnelID, entry.ProxyPort, flowRoute
+}
+
+// ---------------------------------------------------------------------------
+// Raw IP forwarding — bypass TCP proxy + gVisor for VPN tunnels
+// ---------------------------------------------------------------------------
+
+// RegisterRawForwarder registers a raw forwarder for a VPN tunnel.
+// Must be called after the provider is connected and has a valid VPN IP.
+func (r *TUNRouter) RegisterRawForwarder(tunnelID string, rf provider.RawForwarder, vpnIP [4]byte) {
+	r.rawMu.Lock()
+	r.rawFwders[tunnelID] = rf
+	r.vpnIPs[tunnelID] = vpnIP
+	r.rawMu.Unlock()
+
+	r.flows.RegisterVpnIP(vpnIP, tunnelID)
+
+	// Install inbound handler on the provider so decrypted packets from the
+	// WireGuard tunnel hit handleInboundRaw instead of gVisor.
+	rf.SetInboundHandler(r.handleInboundRaw)
+
+	log.Printf("[Gateway] Raw forwarder registered for tunnel %q (vpnIP=%d.%d.%d.%d)",
+		tunnelID, vpnIP[0], vpnIP[1], vpnIP[2], vpnIP[3])
+}
+
+// getRawForwarder returns the raw forwarder and VPN IP for a tunnel (lock-free fast path).
+func (r *TUNRouter) getRawForwarder(tunnelID string) (provider.RawForwarder, [4]byte, bool) {
+	r.rawMu.RLock()
+	rf, ok := r.rawFwders[tunnelID]
+	vpnIP := r.vpnIPs[tunnelID]
+	r.rawMu.RUnlock()
+	return rf, vpnIP, ok
+}
+
+// handleRawOutbound rewrites the source IP and injects the packet into the tunnel.
+// Returns true if the packet was handled via raw forwarding.
+func (r *TUNRouter) handleRawOutbound(pkt []byte, m pktMeta, tunnelID string, vpnIP [4]byte, rf provider.RawForwarder, proto byte) bool {
+	// Determine transport checksum offset.
+	var transportCkOff int
+	switch proto {
+	case protoTCP:
+		transportCkOff = m.tpOff + 16
+	case protoUDP:
+		transportCkOff = m.tpOff + 6
+	}
+
+	// Rewrite src IP from TUN IP (10.255.0.1) to tunnel's VPN IP.
+	tunOverwriteSrcIP(pkt, vpnIP, transportCkOff)
+
+	if !rf.InjectOutbound(pkt) {
+		return false
+	}
+	return true
+}
+
+// handleInboundRaw is called from WireGuard's receive goroutine for every
+// decrypted IPv4 packet. It performs reverse NAT (VPN IP → TUN IP) and writes
+// the packet to the TUN adapter. Returns true if consumed.
+func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
+	if len(pkt) < minIPv4Hdr {
+		return false
+	}
+
+	// Only handle IPv4.
+	if pkt[0]>>4 != 4 {
+		return false
+	}
+
+	// Extract destination IP (bytes 16-19).
+	var dstIP [4]byte
+	copy(dstIP[:], pkt[16:20])
+
+	// Check if this destination IP is one of our VPN IPs.
+	if _, ok := r.flows.LookupVpnIP(dstIP); !ok {
+		return false // not a raw-forwarded flow; let gVisor handle
+	}
+
+	ihl := int(pkt[0]&0x0f) * 4
+	if ihl < minIPv4Hdr {
+		return false
+	}
+
+	// Determine transport checksum offset based on protocol.
+	var transportCkOff int
+	switch pkt[9] {
+	case protoTCP:
+		if len(pkt) < ihl+minTCPHdr {
+			return false
+		}
+		transportCkOff = ihl + 16
+	case protoUDP:
+		if len(pkt) < ihl+minUDPHdr {
+			return false
+		}
+		transportCkOff = ihl + 6
+	default:
+		return false // ICMP etc — let gVisor handle
+	}
+
+	// Rewrite dst IP from VPN IP to TUN IP (10.255.0.1).
+	tunOverwriteDstIP(pkt, r.tunIP, transportCkOff)
+
+	// Write to TUN adapter — this copies into WinTUN ring buffer.
+	r.writePacket(pkt)
+	return true
 }

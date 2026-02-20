@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -13,13 +14,14 @@ import (
 )
 
 const (
-	adapterName    = "AWG Gateway"
-	adapterType    = "AWG"
-	ringCapacity   = 0x800000 // 8 MiB ring buffer
-	tunIP          = "10.255.0.1"
-	tunPrefixLen   = 24
+	adapterName     = "AWG Gateway"
+	adapterType     = "AWG"
+	ringCapacity    = 0x1000000 // 16 MiB ring buffer (was 8 MiB — reduces overflow under sustained upload)
+	tunIP           = "10.255.0.1"
+	tunPrefixLen    = 24
 	tunInterfaceMTU = 1400
-	tunMetric      = 5
+	tunMetric       = 5
+	maxPacketSize   = 65535 // max IPv4 packet; used for pre-allocated read buffer
 )
 
 // Adapter wraps a WinTUN adapter with IP configuration.
@@ -89,35 +91,40 @@ func (a *Adapter) InterfaceIndex() uint32 { return a.ifIndex }
 // IP returns the adapter's assigned IP address.
 func (a *Adapter) IP() netip.Addr { return a.ip }
 
-// ReadPacket reads one IP packet from the TUN adapter.
+// ReadPacket reads one IP packet into buf and returns the number of bytes read.
+// The caller must provide a buffer of at least maxPacketSize bytes.
 // Blocks until a packet is available or the session is ended.
-func (a *Adapter) ReadPacket() ([]byte, error) {
+func (a *Adapter) ReadPacket(buf []byte) (int, error) {
 	for {
 		pkt, err := a.session.ReceivePacket()
 		if err == nil {
-			// Copy the packet before releasing the ring buffer slot.
-			buf := make([]byte, len(pkt))
-			copy(buf, pkt)
+			n := copy(buf, pkt)
 			a.session.ReleaseReceivePacket(pkt)
-			return buf, nil
+			return n, nil
 		}
 		// ERROR_NO_MORE_ITEMS means the ring is empty — wait for data.
 		if errno, ok := err.(windows.Errno); ok && errno == windows.ERROR_NO_MORE_ITEMS {
 			r, _ := windows.WaitForSingleObject(a.readWait, windows.INFINITE)
 			if r != windows.WAIT_OBJECT_0 {
-				return nil, fmt.Errorf("[Gateway] wait failed: %d", r)
+				return 0, fmt.Errorf("[Gateway] wait failed: %d", r)
 			}
 			continue
 		}
-		return nil, fmt.Errorf("[Gateway] receive: %w", err)
+		return 0, fmt.Errorf("[Gateway] receive: %w", err)
 	}
 }
 
 // WritePacket writes one IP packet to the TUN adapter.
+// Retries once after a brief yield on ring buffer overflow.
 func (a *Adapter) WritePacket(pkt []byte) error {
 	buf, err := a.session.AllocateSendPacket(len(pkt))
 	if err != nil {
-		return err // ERROR_BUFFER_OVERFLOW = ring full, drop
+		// Ring full — yield to let OS drain, then retry once.
+		runtime.Gosched()
+		buf, err = a.session.AllocateSendPacket(len(pkt))
+		if err != nil {
+			return err
+		}
 	}
 	copy(buf, pkt)
 	a.session.SendPacket(buf)
