@@ -680,9 +680,14 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 
 	// Check if this response matches a raw flow entry.
 	// For inbound: srcIP = original destination, dstPort = original source port.
-	if _, ok := r.flows.GetRawFlow(proto, srcIP, dstPort); !ok {
+	rawEntry, ok := r.flows.GetRawFlow(proto, srcIP, dstPort)
+	if !ok {
 		return false // no raw flow — let gVisor handle (proxy/DNS resolver traffic)
 	}
+
+	// Update activity timestamp so inbound-heavy flows (e.g. video streaming)
+	// are not evicted by the cleanup goroutine.
+	atomic.StoreInt64(&rawEntry.LastActivity, r.flows.NowSec())
 
 	// Clamp TCP MSS on inbound SYN-ACK to prevent client sending oversized segments.
 	if proto == protoTCP {
