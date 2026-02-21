@@ -48,6 +48,7 @@ func main() {
 	app := application.New(application.Options{
 		Name:        "AWG Split Tunnel",
 		Description: "Multi-tunnel VPN client with per-process split tunneling",
+		Icon:        trayIconPNG,
 		Services: []application.Service{
 			application.NewService(binding),
 		},

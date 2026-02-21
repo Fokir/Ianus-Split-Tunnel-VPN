@@ -6,7 +6,6 @@ import (
 	"context"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/icons"
 
 	vpnapi "awg-split-tunnel/api/gen"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -14,7 +13,7 @@ import (
 
 func setupTray(app *application.App, mainWindow *application.WebviewWindow, binding *BindingService) {
 	systray := app.SystemTray.New()
-	systray.SetIcon(icons.SystrayLight)
+	systray.SetIcon(trayIconPNG)
 
 	// Left-click on tray icon opens the main window.
 	systray.OnClick(func() {
