@@ -16,6 +16,12 @@ func setupTray(app *application.App, mainWindow *application.WebviewWindow, bind
 	systray := app.SystemTray.New()
 	systray.SetIcon(icons.SystrayLight)
 
+	// Left-click on tray icon opens the main window.
+	systray.OnClick(func() {
+		mainWindow.Show()
+		mainWindow.Focus()
+	})
+
 	menu := app.Menu.New()
 
 	// Connect/Disconnect toggle.

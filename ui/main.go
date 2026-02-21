@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 	"golang.org/x/sys/windows"
 	"google.golang.org/protobuf/types/known/emptypb"
 
@@ -61,6 +62,12 @@ func main() {
 		Windows: application.WindowsWindow{
 			Theme: application.SystemDefault,
 		},
+	})
+
+	// Hide window instead of closing when the user clicks the X button.
+	mainWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		mainWindow.Hide()
+		e.Cancel()
 	})
 
 	// Setup system tray.

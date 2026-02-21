@@ -368,6 +368,14 @@ func main() {
 	// --- Wait for shutdown signal ---
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
+	// Listen for RPC-initiated shutdown (Shutdown RPC publishes this event).
+	bus.Subscribe(core.EventConfigReloaded, func(e core.Event) {
+		if e.Payload == "shutdown" {
+			sig <- syscall.SIGTERM
+		}
+	})
+
 	core.Log.Infof("Core", "Running. Press Ctrl+C to stop.")
 	<-sig
 
