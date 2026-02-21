@@ -58,6 +58,7 @@ message Rule {
   string tunnel_id = 2;       // empty for drop-only rules
   FallbackPolicy fallback = 3;
   string priority = 4;         // "auto", "realtime", "normal", "low"
+  bool active = 5;             // tunnel is connected, rule is active
 }
 
 // ─── DNS config ─────────────────────────────────────────────────────
@@ -310,4 +311,7 @@ service VPNService {
   // -- Autostart --
   rpc GetAutostart(google.protobuf.Empty) returns (AutostartConfig);
   rpc SetAutostart(SetAutostartRequest) returns (SetAutostartResponse);
+
+  // -- Connection restore --
+  rpc RestoreConnections(google.protobuf.Empty) returns (ConnectResponse);
 }

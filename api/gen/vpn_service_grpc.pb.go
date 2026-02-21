@@ -20,25 +20,26 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	VPNService_GetStatus_FullMethodName     = "/awg.vpn.v1.VPNService/GetStatus"
-	VPNService_Shutdown_FullMethodName      = "/awg.vpn.v1.VPNService/Shutdown"
-	VPNService_ListTunnels_FullMethodName   = "/awg.vpn.v1.VPNService/ListTunnels"
-	VPNService_GetTunnel_FullMethodName     = "/awg.vpn.v1.VPNService/GetTunnel"
-	VPNService_AddTunnel_FullMethodName     = "/awg.vpn.v1.VPNService/AddTunnel"
-	VPNService_RemoveTunnel_FullMethodName  = "/awg.vpn.v1.VPNService/RemoveTunnel"
-	VPNService_UpdateTunnel_FullMethodName  = "/awg.vpn.v1.VPNService/UpdateTunnel"
-	VPNService_Connect_FullMethodName       = "/awg.vpn.v1.VPNService/Connect"
-	VPNService_Disconnect_FullMethodName    = "/awg.vpn.v1.VPNService/Disconnect"
-	VPNService_RestartTunnel_FullMethodName = "/awg.vpn.v1.VPNService/RestartTunnel"
-	VPNService_ListRules_FullMethodName     = "/awg.vpn.v1.VPNService/ListRules"
-	VPNService_SaveRules_FullMethodName     = "/awg.vpn.v1.VPNService/SaveRules"
-	VPNService_GetConfig_FullMethodName     = "/awg.vpn.v1.VPNService/GetConfig"
-	VPNService_SaveConfig_FullMethodName    = "/awg.vpn.v1.VPNService/SaveConfig"
-	VPNService_StreamLogs_FullMethodName    = "/awg.vpn.v1.VPNService/StreamLogs"
-	VPNService_StreamStats_FullMethodName   = "/awg.vpn.v1.VPNService/StreamStats"
-	VPNService_ListProcesses_FullMethodName = "/awg.vpn.v1.VPNService/ListProcesses"
-	VPNService_GetAutostart_FullMethodName  = "/awg.vpn.v1.VPNService/GetAutostart"
-	VPNService_SetAutostart_FullMethodName  = "/awg.vpn.v1.VPNService/SetAutostart"
+	VPNService_GetStatus_FullMethodName          = "/awg.vpn.v1.VPNService/GetStatus"
+	VPNService_Shutdown_FullMethodName           = "/awg.vpn.v1.VPNService/Shutdown"
+	VPNService_ListTunnels_FullMethodName        = "/awg.vpn.v1.VPNService/ListTunnels"
+	VPNService_GetTunnel_FullMethodName          = "/awg.vpn.v1.VPNService/GetTunnel"
+	VPNService_AddTunnel_FullMethodName          = "/awg.vpn.v1.VPNService/AddTunnel"
+	VPNService_RemoveTunnel_FullMethodName       = "/awg.vpn.v1.VPNService/RemoveTunnel"
+	VPNService_UpdateTunnel_FullMethodName       = "/awg.vpn.v1.VPNService/UpdateTunnel"
+	VPNService_Connect_FullMethodName            = "/awg.vpn.v1.VPNService/Connect"
+	VPNService_Disconnect_FullMethodName         = "/awg.vpn.v1.VPNService/Disconnect"
+	VPNService_RestartTunnel_FullMethodName      = "/awg.vpn.v1.VPNService/RestartTunnel"
+	VPNService_ListRules_FullMethodName          = "/awg.vpn.v1.VPNService/ListRules"
+	VPNService_SaveRules_FullMethodName          = "/awg.vpn.v1.VPNService/SaveRules"
+	VPNService_GetConfig_FullMethodName          = "/awg.vpn.v1.VPNService/GetConfig"
+	VPNService_SaveConfig_FullMethodName         = "/awg.vpn.v1.VPNService/SaveConfig"
+	VPNService_StreamLogs_FullMethodName         = "/awg.vpn.v1.VPNService/StreamLogs"
+	VPNService_StreamStats_FullMethodName        = "/awg.vpn.v1.VPNService/StreamStats"
+	VPNService_ListProcesses_FullMethodName      = "/awg.vpn.v1.VPNService/ListProcesses"
+	VPNService_GetAutostart_FullMethodName       = "/awg.vpn.v1.VPNService/GetAutostart"
+	VPNService_SetAutostart_FullMethodName       = "/awg.vpn.v1.VPNService/SetAutostart"
+	VPNService_RestoreConnections_FullMethodName = "/awg.vpn.v1.VPNService/RestoreConnections"
 )
 
 // VPNServiceClient is the client API for VPNService service.
@@ -71,6 +72,8 @@ type VPNServiceClient interface {
 	// -- Autostart --
 	GetAutostart(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*AutostartConfig, error)
 	SetAutostart(ctx context.Context, in *SetAutostartRequest, opts ...grpc.CallOption) (*SetAutostartResponse, error)
+	// -- Connection restore --
+	RestoreConnections(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConnectResponse, error)
 }
 
 type vPNServiceClient struct {
@@ -289,6 +292,16 @@ func (c *vPNServiceClient) SetAutostart(ctx context.Context, in *SetAutostartReq
 	return out, nil
 }
 
+func (c *vPNServiceClient) RestoreConnections(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConnectResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConnectResponse)
+	err := c.cc.Invoke(ctx, VPNService_RestoreConnections_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VPNServiceServer is the server API for VPNService service.
 // All implementations must embed UnimplementedVPNServiceServer
 // for forward compatibility.
@@ -319,6 +332,8 @@ type VPNServiceServer interface {
 	// -- Autostart --
 	GetAutostart(context.Context, *emptypb.Empty) (*AutostartConfig, error)
 	SetAutostart(context.Context, *SetAutostartRequest) (*SetAutostartResponse, error)
+	// -- Connection restore --
+	RestoreConnections(context.Context, *emptypb.Empty) (*ConnectResponse, error)
 	mustEmbedUnimplementedVPNServiceServer()
 }
 
@@ -385,6 +400,9 @@ func (UnimplementedVPNServiceServer) GetAutostart(context.Context, *emptypb.Empt
 }
 func (UnimplementedVPNServiceServer) SetAutostart(context.Context, *SetAutostartRequest) (*SetAutostartResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetAutostart not implemented")
+}
+func (UnimplementedVPNServiceServer) RestoreConnections(context.Context, *emptypb.Empty) (*ConnectResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RestoreConnections not implemented")
 }
 func (UnimplementedVPNServiceServer) mustEmbedUnimplementedVPNServiceServer() {}
 func (UnimplementedVPNServiceServer) testEmbeddedByValue()                    {}
@@ -735,6 +753,24 @@ func _VPNService_SetAutostart_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VPNService_RestoreConnections_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).RestoreConnections(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_RestoreConnections_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).RestoreConnections(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // VPNService_ServiceDesc is the grpc.ServiceDesc for VPNService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -809,6 +845,10 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetAutostart",
 			Handler:    _VPNService_SetAutostart_Handler,
+		},
+		{
+			MethodName: "RestoreConnections",
+			Handler:    _VPNService_RestoreConnections_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

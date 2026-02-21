@@ -127,7 +127,14 @@ func (s *Service) ListRules(_ context.Context, _ *emptypb.Empty) (*vpnapi.RuleLi
 	rules := s.rules.GetRules()
 	protoRules := make([]*vpnapi.Rule, 0, len(rules))
 	for _, r := range rules {
-		protoRules = append(protoRules, ruleToProto(r))
+		pr := ruleToProto(r)
+		// Mark rule as active if its tunnel is connected (or if it's a direct/drop rule).
+		if r.TunnelID == "" || r.TunnelID == "__direct__" {
+			pr.Active = true
+		} else {
+			pr.Active = s.rules.IsTunnelActive(r.TunnelID)
+		}
+		protoRules = append(protoRules, pr)
 	}
 	return &vpnapi.RuleListResponse{Rules: protoRules}, nil
 }
@@ -154,6 +161,10 @@ func (s *Service) GetConfig(_ context.Context, _ *emptypb.Empty) (*vpnapi.AppCon
 
 func (s *Service) SaveConfig(ctx context.Context, req *vpnapi.SaveConfigRequest) (*vpnapi.SaveConfigResponse, error) {
 	newCfg := configFromProto(req.Config)
+
+	// Preserve GUI-only fields not present in the proto AppConfig.
+	oldCfg := s.cfg.Get()
+	newCfg.GUI = oldCfg.GUI
 
 	// Check if VPN is connected before saving.
 	wasConnected := false
@@ -269,5 +280,38 @@ func (s *Service) SetAutostart(_ context.Context, req *vpnapi.SetAutostartReques
 	if err := setAutostartEnabled(req.Config.Enabled); err != nil {
 		return &vpnapi.SetAutostartResponse{Success: false, Error: err.Error()}, nil
 	}
+
+	// Persist restore_connections in config.
+	cfg := s.cfg.Get()
+	cfg.GUI.RestoreConnections = req.Config.RestoreConnections
+	s.cfg.SetFromGUI(cfg)
+	if err := s.cfg.Save(); err != nil {
+		return &vpnapi.SetAutostartResponse{Success: false, Error: err.Error()}, nil
+	}
+
 	return &vpnapi.SetAutostartResponse{Success: true}, nil
+}
+
+func (s *Service) RestoreConnections(ctx context.Context, _ *emptypb.Empty) (*vpnapi.ConnectResponse, error) {
+	cfg := s.cfg.Get()
+	if !cfg.GUI.RestoreConnections {
+		return &vpnapi.ConnectResponse{Success: true}, nil
+	}
+
+	activeTunnels := cfg.GUI.ActiveTunnels
+	if len(activeTunnels) == 0 {
+		return &vpnapi.ConnectResponse{Success: true}, nil
+	}
+
+	var lastErr error
+	for _, tunnelID := range activeTunnels {
+		if err := s.ctrl.ConnectTunnel(ctx, tunnelID); err != nil {
+			core.Log.Warnf("Core", "RestoreConnections: failed to connect %q: %v", tunnelID, err)
+			lastErr = err
+		}
+	}
+	if lastErr != nil {
+		return &vpnapi.ConnectResponse{Success: false, Error: lastErr.Error()}, nil
+	}
+	return &vpnapi.ConnectResponse{Success: true}, nil
 }

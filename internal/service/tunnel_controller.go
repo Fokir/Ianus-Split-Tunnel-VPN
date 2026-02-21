@@ -47,6 +47,11 @@ type ControllerDeps struct {
 	// Providers is a shared map for provider lookup (used by proxies).
 	// The controller manages this map's contents.
 	Providers map[string]provider.TunnelProvider
+
+	// RuleEngine for updating active tunnel set on connect/disconnect.
+	Rules *core.RuleEngine
+	// ConfigManager for persisting active tunnels list.
+	Cfg *core.ConfigManager
 }
 
 // TunnelControllerImpl manages tunnel lifecycle: create, connect, disconnect, remove.
@@ -105,6 +110,12 @@ func (tc *TunnelControllerImpl) ConnectTunnel(ctx context.Context, tunnelID stri
 	tc.registerRawForwarder(tunnelID, inst.provider)
 	tc.addBypassRoutes(inst.provider)
 
+	// Mark tunnel as active in rule engine and persist.
+	if tc.deps.Rules != nil {
+		tc.deps.Rules.SetTunnelActive(tunnelID, true)
+	}
+	tc.saveActiveTunnels()
+
 	return nil
 }
 
@@ -122,6 +133,13 @@ func (tc *TunnelControllerImpl) DisconnectTunnel(tunnelID string) error {
 	}
 
 	tc.deps.Registry.SetState(tunnelID, core.TunnelStateDown, nil)
+
+	// Mark tunnel as inactive in rule engine and persist.
+	if tc.deps.Rules != nil {
+		tc.deps.Rules.SetTunnelActive(tunnelID, false)
+	}
+	tc.saveActiveTunnels()
+
 	return nil
 }
 
@@ -365,4 +383,25 @@ func resolveRelativeToExe(path string) string {
 		return path
 	}
 	return filepath.Join(filepath.Dir(exe), path)
+}
+
+// saveActiveTunnels persists the list of currently connected tunnel IDs to config.
+func (tc *TunnelControllerImpl) saveActiveTunnels() {
+	if tc.deps.Cfg == nil {
+		return
+	}
+
+	var active []string
+	for id := range tc.instances {
+		if tc.deps.Registry.GetState(id) == core.TunnelStateUp {
+			active = append(active, id)
+		}
+	}
+
+	cfg := tc.deps.Cfg.Get()
+	cfg.GUI.ActiveTunnels = active
+	tc.deps.Cfg.SetFromGUI(cfg)
+	if err := tc.deps.Cfg.Save(); err != nil {
+		core.Log.Warnf("Core", "Failed to save active tunnels: %v", err)
+	}
 }

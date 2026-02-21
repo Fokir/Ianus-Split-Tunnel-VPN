@@ -187,7 +187,8 @@ type GlobalFilterConfig struct {
 
 // GUIConfig holds GUI-specific settings.
 type GUIConfig struct {
-	RestoreConnections bool `yaml:"restore_connections,omitempty"`
+	RestoreConnections bool     `yaml:"restore_connections,omitempty"`
+	ActiveTunnels      []string `yaml:"active_tunnels,omitempty"`
 }
 
 // Config is the top-level application configuration.

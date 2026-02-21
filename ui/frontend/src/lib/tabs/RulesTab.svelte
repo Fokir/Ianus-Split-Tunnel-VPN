@@ -212,10 +212,15 @@
         </thead>
         <tbody>
           {#each rules as rule, index}
-            <tr class="border-t border-zinc-700/30 hover:bg-zinc-800/30 transition-colors">
-              <td class="px-4 py-2.5 text-zinc-200 font-mono text-xs">{rule.pattern}</td>
-              <td class="px-4 py-2.5 text-zinc-300">{tunnelName(rule.tunnelId)}</td>
-              <td class="px-4 py-2.5 text-zinc-400">{fallbackLabel(rule.fallback)}</td>
+            <tr class="border-t border-zinc-700/30 hover:bg-zinc-800/30 transition-colors {rule.active === false ? 'opacity-50' : ''}">
+              <td class="px-4 py-2.5 font-mono text-xs {rule.active === false ? 'text-zinc-500' : 'text-zinc-200'}">
+                {rule.pattern}
+                {#if rule.active === false}
+                  <span class="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] rounded bg-zinc-700/50 text-zinc-500 font-sans">offline</span>
+                {/if}
+              </td>
+              <td class="px-4 py-2.5 {rule.active === false ? 'text-zinc-500' : 'text-zinc-300'}">{tunnelName(rule.tunnelId)}</td>
+              <td class="px-4 py-2.5 {rule.active === false ? 'text-zinc-500' : 'text-zinc-400'}">{fallbackLabel(rule.fallback)}</td>
               <td class="px-4 py-2.5">
                 <span class="inline-block px-1.5 py-0.5 text-xs rounded {priorityColor(rule.priority)}">
                   {priorityLabel(rule.priority)}

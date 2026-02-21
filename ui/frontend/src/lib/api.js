@@ -76,8 +76,8 @@ export function getAutostart() {
   return BindingService.GetAutostart();
 }
 
-export function setAutostart(enabled) {
-  return BindingService.SetAutostart(enabled);
+export function setAutostart(enabled, restoreConnections) {
+  return BindingService.SetAutostart(enabled, restoreConnections);
 }
 
 // ─── Stats streaming ──────────────────────────────────────────────

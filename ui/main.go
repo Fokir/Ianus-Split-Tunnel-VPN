@@ -39,6 +39,11 @@ func main() {
 	// Create the binding service that exposes gRPC methods to the frontend.
 	binding := NewBindingService(client)
 
+	// Restore previously active tunnel connections (if enabled in settings).
+	if err := binding.RestoreConnections(); err != nil {
+		log.Printf("[UI] RestoreConnections: %v", err)
+	}
+
 	// Create Wails application.
 	app := application.New(application.Options{
 		Name:        "AWG Split Tunnel",

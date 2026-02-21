@@ -30,13 +30,13 @@
       autostart = as || { enabled: false, restoreConnections: false };
       tunnels = tl || [];
 
-      // Ensure nested objects exist
+      // Ensure nested objects exist (field names must match proto JSON: snake_case)
       if (!config.dns) config.dns = {};
       if (!config.dns.servers || config.dns.servers.length === 0) {
         config.dns.servers = ['1.1.1.1', '8.8.8.8', '8.8.4.4', '9.9.9.9'];
       }
-      if (!config.dnsCache) config.dnsCache = { enabled: true, maxTtl: 300, maxEntries: 10000 };
-      if (!config.log) config.log = { level: 'INFO' };
+      if (!config.dns.cache) config.dns.cache = { enabled: true, max_size: 10000, max_ttl: '5m', min_ttl: '30s', neg_ttl: '60s' };
+      if (!config.logging) config.logging = { level: 'INFO' };
     } catch (e) {
       error = e.message || 'Не удалось загрузить конфигурацию';
     } finally {
@@ -55,8 +55,8 @@
       // Save config (with restart if connected)
       await api.saveConfig(config, true);
 
-      // Save autostart separately
-      await api.setAutostart(autostart.enabled);
+      // Save autostart separately (both enabled and restoreConnections)
+      await api.setAutostart(autostart.enabled, autostart.restoreConnections);
 
       dirty = false;
     } catch (e) {
@@ -172,7 +172,7 @@
           <label for="dns-tunnel" class="block text-xs font-medium text-zinc-400 mb-1">Туннель для DNS</label>
           <select
             id="dns-tunnel"
-            bind:value={config.dns.tunnelId}
+            bind:value={config.dns.tunnel_id}
             on:change={markDirty}
             class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
           >
@@ -237,7 +237,7 @@
             </div>
             <input
               type="checkbox"
-              bind:checked={config.dnsCache.enabled}
+              bind:checked={config.dns.cache.enabled}
               on:change={markDirty}
               class="w-9 h-5 bg-zinc-700 rounded-full appearance-none relative cursor-pointer
                      checked:bg-blue-600 transition-colors
@@ -248,13 +248,14 @@
           </label>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label for="dns-cache-ttl" class="block text-xs font-medium text-zinc-400 mb-1">Max TTL (сек)</label>
+              <label for="dns-cache-ttl" class="block text-xs font-medium text-zinc-400 mb-1">Max TTL</label>
               <input
                 id="dns-cache-ttl"
-                type="number"
-                bind:value={config.dnsCache.maxTtl}
+                type="text"
+                bind:value={config.dns.cache.max_ttl}
                 on:input={markDirty}
-                class="w-full px-3 py-1.5 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
+                placeholder="5m"
+                class="w-full px-3 py-1.5 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50"
               />
             </div>
             <div>
@@ -262,7 +263,7 @@
               <input
                 id="dns-cache-entries"
                 type="number"
-                bind:value={config.dnsCache.maxEntries}
+                bind:value={config.dns.cache.max_size}
                 on:input={markDirty}
                 class="w-full px-3 py-1.5 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
               />
@@ -279,7 +280,7 @@
         <label for="log-level" class="block text-xs font-medium text-zinc-400 mb-1">Уровень логирования</label>
         <select
           id="log-level"
-          bind:value={config.log.level}
+          bind:value={config.logging.level}
           on:change={markDirty}
           class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
         >

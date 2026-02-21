@@ -356,6 +356,7 @@ type Rule struct {
 	TunnelId      string                 `protobuf:"bytes,2,opt,name=tunnel_id,json=tunnelId,proto3" json:"tunnel_id,omitempty"` // empty for drop-only rules
 	Fallback      FallbackPolicy         `protobuf:"varint,3,opt,name=fallback,proto3,enum=awg.vpn.v1.FallbackPolicy" json:"fallback,omitempty"`
 	Priority      string                 `protobuf:"bytes,4,opt,name=priority,proto3" json:"priority,omitempty"` // "auto", "realtime", "normal", "low"
+	Active        bool                   `protobuf:"varint,5,opt,name=active,proto3" json:"active,omitempty"`    // tunnel is connected, rule is active
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -416,6 +417,13 @@ func (x *Rule) GetPriority() string {
 		return x.Priority
 	}
 	return ""
+}
+
+func (x *Rule) GetActive() bool {
+	if x != nil {
+		return x.Active
+	}
+	return false
 }
 
 type DNSCacheConfig struct {
@@ -2314,12 +2322,13 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\x05state\x18\x03 \x01(\x0e2\x17.awg.vpn.v1.TunnelStateR\x05state\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12\x1d\n" +
 	"\n" +
-	"adapter_ip\x18\x05 \x01(\tR\tadapterIp\"\x91\x01\n" +
+	"adapter_ip\x18\x05 \x01(\tR\tadapterIp\"\xa9\x01\n" +
 	"\x04Rule\x12\x18\n" +
 	"\apattern\x18\x01 \x01(\tR\apattern\x12\x1b\n" +
 	"\ttunnel_id\x18\x02 \x01(\tR\btunnelId\x126\n" +
 	"\bfallback\x18\x03 \x01(\x0e2\x1a.awg.vpn.v1.FallbackPolicyR\bfallback\x12\x1a\n" +
-	"\bpriority\x18\x04 \x01(\tR\bpriority\"\x90\x01\n" +
+	"\bpriority\x18\x04 \x01(\tR\bpriority\x12\x16\n" +
+	"\x06active\x18\x05 \x01(\bR\x06active\"\x90\x01\n" +
 	"\x0eDNSCacheConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x19\n" +
 	"\bmax_size\x18\x02 \x01(\x05R\amaxSize\x12\x17\n" +
@@ -2463,8 +2472,7 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\x0eLOG_LEVEL_INFO\x10\x01\x12\x12\n" +
 	"\x0eLOG_LEVEL_WARN\x10\x02\x12\x13\n" +
 	"\x0fLOG_LEVEL_ERROR\x10\x03\x12\x11\n" +
-	"\rLOG_LEVEL_OFF\x10\x042\xef\n" +
-	"\n" +
+	"\rLOG_LEVEL_OFF\x10\x042\xba\v\n" +
 	"\n" +
 	"VPNService\x12>\n" +
 	"\tGetStatus\x12\x16.google.protobuf.Empty\x1a\x19.awg.vpn.v1.ServiceStatus\x12:\n" +
@@ -2488,7 +2496,8 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\vStreamStats\x12\x1e.awg.vpn.v1.StatsStreamRequest\x1a\x19.awg.vpn.v1.StatsSnapshot0\x01\x12P\n" +
 	"\rListProcesses\x12\x1e.awg.vpn.v1.ProcessListRequest\x1a\x1f.awg.vpn.v1.ProcessListResponse\x12C\n" +
 	"\fGetAutostart\x12\x16.google.protobuf.Empty\x1a\x1b.awg.vpn.v1.AutostartConfig\x12Q\n" +
-	"\fSetAutostart\x12\x1f.awg.vpn.v1.SetAutostartRequest\x1a .awg.vpn.v1.SetAutostartResponseB!Z\x1fawg-split-tunnel/api/gen;vpnapib\x06proto3"
+	"\fSetAutostart\x12\x1f.awg.vpn.v1.SetAutostartRequest\x1a .awg.vpn.v1.SetAutostartResponse\x12I\n" +
+	"\x12RestoreConnections\x12\x16.google.protobuf.Empty\x1a\x1b.awg.vpn.v1.ConnectResponseB!Z\x1fawg-split-tunnel/api/gen;vpnapib\x06proto3"
 
 var (
 	file_vpn_service_proto_rawDescOnce sync.Once
@@ -2596,27 +2605,29 @@ var file_vpn_service_proto_depIdxs = []int32{
 	34, // 42: awg.vpn.v1.VPNService.ListProcesses:input_type -> awg.vpn.v1.ProcessListRequest
 	43, // 43: awg.vpn.v1.VPNService.GetAutostart:input_type -> google.protobuf.Empty
 	38, // 44: awg.vpn.v1.VPNService.SetAutostart:input_type -> awg.vpn.v1.SetAutostartRequest
-	36, // 45: awg.vpn.v1.VPNService.GetStatus:output_type -> awg.vpn.v1.ServiceStatus
-	43, // 46: awg.vpn.v1.VPNService.Shutdown:output_type -> google.protobuf.Empty
-	26, // 47: awg.vpn.v1.VPNService.ListTunnels:output_type -> awg.vpn.v1.TunnelListResponse
-	4,  // 48: awg.vpn.v1.VPNService.GetTunnel:output_type -> awg.vpn.v1.TunnelStatus
-	20, // 49: awg.vpn.v1.VPNService.AddTunnel:output_type -> awg.vpn.v1.AddTunnelResponse
-	22, // 50: awg.vpn.v1.VPNService.RemoveTunnel:output_type -> awg.vpn.v1.RemoveTunnelResponse
-	24, // 51: awg.vpn.v1.VPNService.UpdateTunnel:output_type -> awg.vpn.v1.UpdateTunnelResponse
-	16, // 52: awg.vpn.v1.VPNService.Connect:output_type -> awg.vpn.v1.ConnectResponse
-	18, // 53: awg.vpn.v1.VPNService.Disconnect:output_type -> awg.vpn.v1.DisconnectResponse
-	16, // 54: awg.vpn.v1.VPNService.RestartTunnel:output_type -> awg.vpn.v1.ConnectResponse
-	27, // 55: awg.vpn.v1.VPNService.ListRules:output_type -> awg.vpn.v1.RuleListResponse
-	29, // 56: awg.vpn.v1.VPNService.SaveRules:output_type -> awg.vpn.v1.SaveRulesResponse
-	10, // 57: awg.vpn.v1.VPNService.GetConfig:output_type -> awg.vpn.v1.AppConfig
-	31, // 58: awg.vpn.v1.VPNService.SaveConfig:output_type -> awg.vpn.v1.SaveConfigResponse
-	13, // 59: awg.vpn.v1.VPNService.StreamLogs:output_type -> awg.vpn.v1.LogEntry
-	12, // 60: awg.vpn.v1.VPNService.StreamStats:output_type -> awg.vpn.v1.StatsSnapshot
-	35, // 61: awg.vpn.v1.VPNService.ListProcesses:output_type -> awg.vpn.v1.ProcessListResponse
-	37, // 62: awg.vpn.v1.VPNService.GetAutostart:output_type -> awg.vpn.v1.AutostartConfig
-	39, // 63: awg.vpn.v1.VPNService.SetAutostart:output_type -> awg.vpn.v1.SetAutostartResponse
-	45, // [45:64] is the sub-list for method output_type
-	26, // [26:45] is the sub-list for method input_type
+	43, // 45: awg.vpn.v1.VPNService.RestoreConnections:input_type -> google.protobuf.Empty
+	36, // 46: awg.vpn.v1.VPNService.GetStatus:output_type -> awg.vpn.v1.ServiceStatus
+	43, // 47: awg.vpn.v1.VPNService.Shutdown:output_type -> google.protobuf.Empty
+	26, // 48: awg.vpn.v1.VPNService.ListTunnels:output_type -> awg.vpn.v1.TunnelListResponse
+	4,  // 49: awg.vpn.v1.VPNService.GetTunnel:output_type -> awg.vpn.v1.TunnelStatus
+	20, // 50: awg.vpn.v1.VPNService.AddTunnel:output_type -> awg.vpn.v1.AddTunnelResponse
+	22, // 51: awg.vpn.v1.VPNService.RemoveTunnel:output_type -> awg.vpn.v1.RemoveTunnelResponse
+	24, // 52: awg.vpn.v1.VPNService.UpdateTunnel:output_type -> awg.vpn.v1.UpdateTunnelResponse
+	16, // 53: awg.vpn.v1.VPNService.Connect:output_type -> awg.vpn.v1.ConnectResponse
+	18, // 54: awg.vpn.v1.VPNService.Disconnect:output_type -> awg.vpn.v1.DisconnectResponse
+	16, // 55: awg.vpn.v1.VPNService.RestartTunnel:output_type -> awg.vpn.v1.ConnectResponse
+	27, // 56: awg.vpn.v1.VPNService.ListRules:output_type -> awg.vpn.v1.RuleListResponse
+	29, // 57: awg.vpn.v1.VPNService.SaveRules:output_type -> awg.vpn.v1.SaveRulesResponse
+	10, // 58: awg.vpn.v1.VPNService.GetConfig:output_type -> awg.vpn.v1.AppConfig
+	31, // 59: awg.vpn.v1.VPNService.SaveConfig:output_type -> awg.vpn.v1.SaveConfigResponse
+	13, // 60: awg.vpn.v1.VPNService.StreamLogs:output_type -> awg.vpn.v1.LogEntry
+	12, // 61: awg.vpn.v1.VPNService.StreamStats:output_type -> awg.vpn.v1.StatsSnapshot
+	35, // 62: awg.vpn.v1.VPNService.ListProcesses:output_type -> awg.vpn.v1.ProcessListResponse
+	37, // 63: awg.vpn.v1.VPNService.GetAutostart:output_type -> awg.vpn.v1.AutostartConfig
+	39, // 64: awg.vpn.v1.VPNService.SetAutostart:output_type -> awg.vpn.v1.SetAutostartResponse
+	16, // 65: awg.vpn.v1.VPNService.RestoreConnections:output_type -> awg.vpn.v1.ConnectResponse
+	46, // [46:66] is the sub-list for method output_type
+	26, // [26:46] is the sub-list for method input_type
 	26, // [26:26] is the sub-list for extension type_name
 	26, // [26:26] is the sub-list for extension extendee
 	0,  // [0:26] is the sub-list for field type_name

@@ -203,6 +203,7 @@ type RuleInfo struct {
 	TunnelID string `json:"tunnelId"`
 	Fallback string `json:"fallback"` // "allow_direct", "block", "drop", "failover"
 	Priority string `json:"priority"` // "auto", "realtime", "normal", "low"
+	Active   bool   `json:"active"`   // tunnel is connected, rule is active
 }
 
 func fallbackStr(f vpnapi.FallbackPolicy) string {
@@ -249,6 +250,7 @@ func (b *BindingService) ListRules() ([]RuleInfo, error) {
 			TunnelID: r.TunnelId,
 			Fallback: fallbackStr(r.Fallback),
 			Priority: prio,
+			Active:   r.Active,
 		})
 	}
 	return rules, nil
@@ -340,10 +342,24 @@ func (b *BindingService) GetAutostart() (*AutostartInfo, error) {
 	}, nil
 }
 
-func (b *BindingService) SetAutostart(enabled bool) error {
+func (b *BindingService) SetAutostart(enabled bool, restoreConnections bool) error {
 	resp, err := b.client.Service.SetAutostart(context.Background(), &vpnapi.SetAutostartRequest{
-		Config: &vpnapi.AutostartConfig{Enabled: enabled},
+		Config: &vpnapi.AutostartConfig{
+			Enabled:            enabled,
+			RestoreConnections: restoreConnections,
+		},
 	})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
+func (b *BindingService) RestoreConnections() error {
+	resp, err := b.client.Service.RestoreConnections(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		return err
 	}

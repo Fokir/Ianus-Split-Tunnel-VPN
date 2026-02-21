@@ -20,11 +20,12 @@ type MatchResult struct {
 
 // RuleEngine evaluates process paths against configured rules.
 type RuleEngine struct {
-	mu         sync.RWMutex
-	rules      []Rule
-	rulesLower []string // pre-lowercased patterns, parallel to rules
-	bus        *EventBus
-	matcher    *process.Matcher
+	mu            sync.RWMutex
+	rules         []Rule
+	rulesLower    []string // pre-lowercased patterns, parallel to rules
+	activeTunnels map[string]bool // set of connected tunnel IDs
+	bus           *EventBus
+	matcher       *process.Matcher
 }
 
 // NewRuleEngine creates a rule engine with the given initial rules.
@@ -34,10 +35,11 @@ func NewRuleEngine(rules []Rule, bus *EventBus, matcher *process.Matcher) *RuleE
 		lower[i] = strings.ToLower(r.Pattern)
 	}
 	return &RuleEngine{
-		rules:      rules,
-		rulesLower: lower,
-		bus:        bus,
-		matcher:    matcher,
+		rules:         rules,
+		rulesLower:    lower,
+		activeTunnels: make(map[string]bool),
+		bus:           bus,
+		matcher:       matcher,
 	}
 }
 
@@ -53,6 +55,9 @@ func (re *RuleEngine) Match(exePath string) MatchResult {
 
 	for i, rule := range re.rules {
 		if process.MatchPreprocessed(exeLower, baseLower, rule.Pattern, re.rulesLower[i]) {
+			if rule.TunnelID != "" && rule.TunnelID != "__direct__" && !re.activeTunnels[rule.TunnelID] {
+				continue // skip rule — its tunnel is not connected
+			}
 			return MatchResult{
 				Matched:  true,
 				TunnelID: rule.TunnelID,
@@ -74,6 +79,9 @@ func (re *RuleEngine) MatchPreLowered(exeLower, baseLower string) MatchResult {
 
 	for i, rule := range re.rules {
 		if process.MatchPreprocessed(exeLower, baseLower, rule.Pattern, re.rulesLower[i]) {
+			if rule.TunnelID != "" && rule.TunnelID != "__direct__" && !re.activeTunnels[rule.TunnelID] {
+				continue
+			}
 			return MatchResult{
 				Matched:  true,
 				TunnelID: rule.TunnelID,
@@ -96,6 +104,9 @@ func (re *RuleEngine) MatchPreLoweredFrom(exeLower, baseLower string, startIdx i
 
 	for i := startIdx; i < len(re.rules); i++ {
 		if process.MatchPreprocessed(exeLower, baseLower, re.rules[i].Pattern, re.rulesLower[i]) {
+			if re.rules[i].TunnelID != "" && re.rules[i].TunnelID != "__direct__" && !re.activeTunnels[re.rules[i].TunnelID] {
+				continue
+			}
 			return MatchResult{
 				Matched:  true,
 				TunnelID: re.rules[i].TunnelID,
@@ -172,4 +183,24 @@ func (re *RuleEngine) GetRules() []Rule {
 	result := make([]Rule, len(re.rules))
 	copy(result, re.rules)
 	return result
+}
+
+// SetTunnelActive marks a tunnel as connected or disconnected.
+// Rules referencing inactive tunnels are skipped during matching.
+func (re *RuleEngine) SetTunnelActive(tunnelID string, active bool) {
+	re.mu.Lock()
+	defer re.mu.Unlock()
+	if active {
+		re.activeTunnels[tunnelID] = true
+	} else {
+		delete(re.activeTunnels, tunnelID)
+	}
+	Log.Infof("Rule", "Tunnel %q active=%v (active tunnels: %d)", tunnelID, active, len(re.activeTunnels))
+}
+
+// IsTunnelActive returns true if the tunnel is marked as connected.
+func (re *RuleEngine) IsTunnelActive(tunnelID string) bool {
+	re.mu.RLock()
+	defer re.mu.RUnlock()
+	return re.activeTunnels[tunnelID]
 }

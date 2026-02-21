@@ -278,6 +278,8 @@ func main() {
 		RealNICLocalIP: realNIC.LocalIP,
 		RealNICLUID:    realNIC.LUID,
 		Providers:      providers,
+		Rules:          ruleEngine,
+		Cfg:            cfgManager,
 	}, nextProxyPort)
 
 	// Register all VPN tunnels created above with the controller.
