@@ -33,9 +33,9 @@ type LogHook func(level LogLevel, tag, message string)
 
 // Logger provides per-component log level filtering.
 type Logger struct {
-	mu          sync.RWMutex
 	globalLevel LogLevel
-	components  map[string]LogLevel // lowercase component name → level
+	components  map[string]LogLevel // lowercase component name → level (immutable after init)
+	levelCache  sync.Map            // tag → LogLevel (lock-free cache)
 	hook        atomic.Pointer[LogHook]
 }
 
@@ -71,13 +71,18 @@ func NewLogger(cfg LogConfig) *Logger {
 }
 
 // levelFor returns the effective log level for a component tag.
+// Results are cached lock-free after the first lookup per tag.
 func (l *Logger) levelFor(tag string) LogLevel {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	if lvl, ok := l.components[strings.ToLower(tag)]; ok {
-		return lvl
+	if v, ok := l.levelCache.Load(tag); ok {
+		return v.(LogLevel)
 	}
-	return l.globalLevel
+	// Slow path: normalize + lookup + cache.
+	lvl := l.globalLevel
+	if cl, ok := l.components[strings.ToLower(tag)]; ok {
+		lvl = cl
+	}
+	l.levelCache.Store(tag, lvl)
+	return lvl
 }
 
 // SetHook installs a callback that receives every log message passing level filtering.
@@ -90,10 +95,9 @@ func (l *Logger) SetHook(h LogHook) {
 	}
 }
 
-// emit calls the hook if one is installed.
-func (l *Logger) emit(level LogLevel, tag, format string, args ...any) {
+// emit calls the hook if one is installed. Accepts a pre-formatted message.
+func (l *Logger) emit(level LogLevel, tag, msg string) {
 	if hp := l.hook.Load(); hp != nil {
-		msg := fmt.Sprintf(format, args...)
 		(*hp)(level, tag, msg)
 	}
 }
@@ -101,39 +105,44 @@ func (l *Logger) emit(level LogLevel, tag, format string, args ...any) {
 // Debugf logs at debug level.
 func (l *Logger) Debugf(tag, format string, args ...any) {
 	if l.levelFor(tag) <= LevelDebug {
-		log.Printf("["+tag+"] "+format, args...)
-		l.emit(LevelDebug, tag, format, args...)
+		msg := fmt.Sprintf(format, args...)
+		log.Printf("[%s] %s", tag, msg)
+		l.emit(LevelDebug, tag, msg)
 	}
 }
 
 // Infof logs at info level.
 func (l *Logger) Infof(tag, format string, args ...any) {
 	if l.levelFor(tag) <= LevelInfo {
-		log.Printf("["+tag+"] "+format, args...)
-		l.emit(LevelInfo, tag, format, args...)
+		msg := fmt.Sprintf(format, args...)
+		log.Printf("[%s] %s", tag, msg)
+		l.emit(LevelInfo, tag, msg)
 	}
 }
 
 // Warnf logs at warn level.
 func (l *Logger) Warnf(tag, format string, args ...any) {
 	if l.levelFor(tag) <= LevelWarn {
-		log.Printf("["+tag+"] "+format, args...)
-		l.emit(LevelWarn, tag, format, args...)
+		msg := fmt.Sprintf(format, args...)
+		log.Printf("[%s] %s", tag, msg)
+		l.emit(LevelWarn, tag, msg)
 	}
 }
 
 // Errorf logs at error level.
 func (l *Logger) Errorf(tag, format string, args ...any) {
 	if l.levelFor(tag) <= LevelError {
-		log.Printf("["+tag+"] "+format, args...)
-		l.emit(LevelError, tag, format, args...)
+		msg := fmt.Sprintf(format, args...)
+		log.Printf("[%s] %s", tag, msg)
+		l.emit(LevelError, tag, msg)
 	}
 }
 
 // Fatalf always logs and calls os.Exit(1).
 func (l *Logger) Fatalf(tag, format string, args ...any) {
-	log.Printf("["+tag+"] "+format, args...)
-	l.emit(LevelError, tag, format, args...)
+	msg := fmt.Sprintf(format, args...)
+	log.Printf("[%s] %s", tag, msg)
+	l.emit(LevelError, tag, msg)
 	os.Exit(1)
 }
 
