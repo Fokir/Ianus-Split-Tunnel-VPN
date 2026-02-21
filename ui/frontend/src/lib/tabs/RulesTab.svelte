@@ -13,6 +13,50 @@
   let editIndex = -1;
   let modalRule = { pattern: '', tunnelId: '', fallback: 'allow_direct', priority: 'auto' };
 
+  // Drag & drop reorder
+  let dragIndex = -1;
+  let dragOverIndex = -1;
+
+  function handleDragStart(e, index) {
+    dragIndex = index;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(index));
+    // Semi-transparent drag image
+    e.currentTarget.closest('tr').style.opacity = '0.4';
+  }
+
+  function handleDragEnd(e) {
+    e.currentTarget.closest('tr').style.opacity = '';
+    dragIndex = -1;
+    dragOverIndex = -1;
+  }
+
+  function handleDragOver(e, index) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    dragOverIndex = index;
+  }
+
+  function handleDragLeave() {
+    dragOverIndex = -1;
+  }
+
+  function handleDrop(e, index) {
+    e.preventDefault();
+    if (dragIndex < 0 || dragIndex === index) {
+      dragIndex = -1;
+      dragOverIndex = -1;
+      return;
+    }
+    const reordered = [...rules];
+    const [moved] = reordered.splice(dragIndex, 1);
+    reordered.splice(index, 0, moved);
+    rules = reordered;
+    dirty = true;
+    dragIndex = -1;
+    dragOverIndex = -1;
+  }
+
   // Process picker
   let showProcessPicker = false;
   let processes = [];
@@ -203,6 +247,7 @@
       <table class="w-full text-sm">
         <thead>
           <tr class="bg-zinc-800/60 text-zinc-400 text-xs uppercase tracking-wider">
+            <th class="w-8 px-0 py-2.5"></th>
             <th class="text-left px-4 py-2.5 font-medium">Паттерн</th>
             <th class="text-left px-4 py-2.5 font-medium">Туннель</th>
             <th class="text-left px-4 py-2.5 font-medium">Fallback</th>
@@ -211,8 +256,29 @@
           </tr>
         </thead>
         <tbody>
-          {#each rules as rule, index}
-            <tr class="border-t border-zinc-700/30 hover:bg-zinc-800/30 transition-colors {rule.active === false ? 'opacity-50' : ''}">
+          {#each rules as rule, index (rule.pattern + '-' + index)}
+            <tr
+              class="border-t border-zinc-700/30 hover:bg-zinc-800/30 transition-colors {rule.active === false ? 'opacity-50' : ''} {dragOverIndex === index ? 'border-t-2 !border-t-blue-500' : ''}"
+              on:dragover={e => handleDragOver(e, index)}
+              on:dragleave={handleDragLeave}
+              on:drop={e => handleDrop(e, index)}
+            >
+              <!-- Drag handle -->
+              <td class="w-8 px-0 py-2.5 text-center">
+                <!-- svelte-ignore a11y-no-static-element-interactions -->
+                <div
+                  class="inline-flex items-center justify-center w-6 h-6 cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-400 transition-colors"
+                  draggable="true"
+                  on:dragstart={e => handleDragStart(e, index)}
+                  on:dragend={handleDragEnd}
+                >
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/>
+                    <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+                    <circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/>
+                  </svg>
+                </div>
+              </td>
               <td class="px-4 py-2.5 font-mono text-xs {rule.active === false ? 'text-zinc-500' : 'text-zinc-200'}">
                 {rule.pattern}
                 {#if rule.active === false}
