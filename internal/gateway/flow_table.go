@@ -355,6 +355,7 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				cleanupStart := time.Now()
 				now := time.Now().Unix()
 				const timeout int64 = 300 // 5 minutes
 				totalRemoved := 0
@@ -381,7 +382,9 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 					}
 				}
 
-				if totalRemoved > 0 {
+				if elapsed := time.Since(cleanupStart); elapsed > 5*time.Millisecond {
+					core.Log.Warnf("Perf", "Raw flow cleanup took %s (removed %d)", elapsed, totalRemoved)
+				} else if totalRemoved > 0 {
 					core.Log.Debugf("Gateway", "Raw flow cleanup: removed %d stale entries", totalRemoved)
 				}
 			}
@@ -469,6 +472,7 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				cleanupStart := time.Now()
 				now := time.Now().Unix()
 				const timeout int64 = 300 // 5 minutes
 				totalRemoved := 0
@@ -495,7 +499,9 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 					}
 				}
 
-				if totalRemoved > 0 {
+				if elapsed := time.Since(cleanupStart); elapsed > 5*time.Millisecond {
+					core.Log.Warnf("Perf", "TCP NAT cleanup took %s (removed %d)", elapsed, totalRemoved)
+				} else if totalRemoved > 0 {
 					core.Log.Debugf("Gateway", "TCP NAT cleanup: removed %d stale entries", totalRemoved)
 				}
 			}
@@ -514,7 +520,9 @@ func (ft *FlowTable) StartUDPCleanup(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				cleanupStart := time.Now()
 				now := time.Now().Unix()
+				totalRemoved := 0
 
 				for i := range ft.udp {
 					shard := &ft.udp[i]
@@ -538,7 +546,12 @@ func (ft *FlowTable) StartUDPCleanup(ctx context.Context) {
 							delete(shard.m, key)
 						}
 						shard.mu.Unlock()
+						totalRemoved += len(stale)
 					}
+				}
+
+				if elapsed := time.Since(cleanupStart); elapsed > 5*time.Millisecond {
+					core.Log.Warnf("Perf", "UDP NAT cleanup took %s (removed %d)", elapsed, totalRemoved)
 				}
 			}
 		}

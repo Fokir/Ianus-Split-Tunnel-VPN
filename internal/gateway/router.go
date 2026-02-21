@@ -8,9 +8,11 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/process"
@@ -40,6 +42,11 @@ type TUNRouter struct {
 	tunIP   [4]byte       // 10.255.0.1 in network byte order
 	selfPID uint32        // current process PID (loop prevention)
 	drops   atomic.Uint64 // WritePacket drop counter
+
+	// Perf: inbound raw stats (reset every 10s by packetLoop).
+	maxInboundRawNs atomic.Int64
+	inboundCount    atomic.Int64 // total inbound raw packets
+	inboundSlow     atomic.Int64 // inbound raw packets > 500µs
 
 	// Raw IP forwarding state.
 	rawMu    sync.RWMutex
@@ -93,6 +100,7 @@ func (r *TUNRouter) Start(ctx context.Context) error {
 	r.flows.StartRawFlowCleanup(ctx)
 
 	go r.packetLoop(ctx)
+	go r.gcPauseMonitor(ctx)
 
 	core.Log.Infof("Gateway", "TUN Router started")
 	return nil
@@ -117,6 +125,43 @@ func (r *TUNRouter) writePacket(pkt []byte) {
 	}
 }
 
+// gcPauseMonitor periodically reports GC pause statistics.
+func (r *TUNRouter) gcPauseMonitor(ctx context.Context) {
+	var prevNumGC uint32
+	var stats runtime.MemStats
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runtime.ReadMemStats(&stats)
+			if stats.NumGC == prevNumGC {
+				continue
+			}
+			// Report new GC cycles since last check.
+			cycles := stats.NumGC - prevNumGC
+			if cycles > 256 {
+				cycles = 256 // PauseNs is a circular buffer of 256
+			}
+			var maxPause time.Duration
+			for i := prevNumGC; i < stats.NumGC; i++ {
+				p := time.Duration(stats.PauseNs[i%256])
+				if p > maxPause {
+					maxPause = p
+				}
+			}
+			prevNumGC = stats.NumGC
+			if maxPause > 500*time.Microsecond {
+				core.Log.Warnf("Perf", "GC: %d cycles, maxPause=%s, heapAlloc=%dMB",
+					cycles, maxPause, stats.HeapAlloc/1024/1024)
+			}
+		}
+	}
+}
+
 // packetLoop is the main processing goroutine.
 // Uses a single pre-allocated buffer to eliminate per-packet heap allocations.
 func (r *TUNRouter) packetLoop(ctx context.Context) {
@@ -124,10 +169,26 @@ func (r *TUNRouter) packetLoop(ctx context.Context) {
 
 	buf := make([]byte, maxPacketSize)
 
+	// Perf: track stall stats per 10-second window.
+	var maxProcStall time.Duration
+	var totalPkts, slowProcPkts int64
+	stallTicker := time.NewTicker(10 * time.Second)
+	defer stallTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-stallTicker.C:
+			maxInbound := time.Duration(r.maxInboundRawNs.Swap(0))
+			inCount := r.inboundCount.Swap(0)
+			inSlow := r.inboundSlow.Swap(0)
+			core.Log.Warnf("Perf", "10s: outPkts=%d slowOut=%d maxProc=%s | inPkts=%d slowIn=%d maxIn=%s",
+				totalPkts, slowProcPkts, maxProcStall,
+				inCount, inSlow, maxInbound)
+			maxProcStall = 0
+			totalPkts = 0
+			slowProcPkts = 0
 		default:
 		}
 
@@ -142,7 +203,16 @@ func (r *TUNRouter) packetLoop(ctx context.Context) {
 			}
 		}
 
+		totalPkts++
+		procStart := time.Now()
 		r.processPacket(buf[:n])
+		procElapsed := time.Since(procStart)
+		if procElapsed > maxProcStall {
+			maxProcStall = procElapsed
+		}
+		if procElapsed > 500*time.Microsecond {
+			slowProcPkts++
+		}
 	}
 }
 
@@ -471,6 +541,14 @@ const (
 )
 
 func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunnelID string, proxyPort uint16, action flowAction) {
+	resolveStart := time.Now()
+	defer func() {
+		if elapsed := time.Since(resolveStart); elapsed > time.Millisecond {
+			core.Log.Warnf("Perf", "resolveFlow took %s (port=%d udp=%v dst=%d.%d.%d.%d)",
+				elapsed, srcPort, isUDP, dstIP[0], dstIP[1], dstIP[2], dstIP[3])
+		}
+	}()
+
 	f := r.ipFilter.Load() // may be nil
 
 	// Early drop: if a local/private IP reached TUN, there is no direct route
@@ -482,7 +560,11 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	}
 
 	// Look up PID by source port.
+	pidStart := time.Now()
 	pid, err := r.procID.FindPIDByPort(srcPort, isUDP)
+	if pidElapsed := time.Since(pidStart); pidElapsed > time.Millisecond {
+		core.Log.Warnf("Perf", "FindPIDByPort took %s (port=%d udp=%v)", pidElapsed, srcPort, isUDP)
+	}
 	if err != nil {
 		return "", 0, flowPass
 	}
@@ -550,7 +632,11 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 
 	// Lazy WFP rule: block this process on real NIC.
 	if r.wfp != nil {
+		wfpStart := time.Now()
 		r.wfp.EnsureBlocked(exePath)
+		if wfpElapsed := time.Since(wfpStart); wfpElapsed > time.Millisecond {
+			core.Log.Warnf("Perf", "EnsureBlocked took %s (%s)", wfpElapsed, exePath)
+		}
 	}
 
 	if isUDP {
@@ -680,6 +766,7 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 
 	// Check if this response matches a raw flow entry.
 	// For inbound: srcIP = original destination, dstPort = original source port.
+	inboundStart := time.Now()
 	rawEntry, ok := r.flows.GetRawFlow(proto, srcIP, dstPort)
 	if !ok {
 		return false // no raw flow — let gVisor handle (proxy/DNS resolver traffic)
@@ -699,5 +786,15 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 
 	// Write to TUN adapter — this copies into WinTUN ring buffer.
 	r.writePacket(pkt)
+
+	// Perf: track inbound stats.
+	r.inboundCount.Add(1)
+	elapsedNs := time.Since(inboundStart).Nanoseconds()
+	if elapsedNs > 500_000 { // >500µs
+		r.inboundSlow.Add(1)
+	}
+	if elapsedNs > r.maxInboundRawNs.Load() {
+		r.maxInboundRawNs.CompareAndSwap(r.maxInboundRawNs.Load(), elapsedNs)
+	}
 	return true
 }

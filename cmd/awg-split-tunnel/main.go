@@ -248,6 +248,10 @@ func main() {
 			}
 		}
 
+		// Start jitter probe for VPN tunnels.
+		probe := gateway.NewJitterProbe(prov, tcfg.ID, "8.8.8.8:53")
+		go probe.Run(ctx)
+
 		// === 10. Add bypass route for VPN server endpoints ===
 		if awgProv, ok := prov.(*amneziawg.Provider); ok {
 			for _, ep := range awgProv.GetPeerEndpoints() {

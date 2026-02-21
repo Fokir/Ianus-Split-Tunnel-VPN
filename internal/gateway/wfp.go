@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"time"
 
 	"awg-split-tunnel/internal/core"
 
@@ -107,6 +108,13 @@ func (w *WFPManager) EnsureBlocked(exePath string) {
 // 1. ALE_AUTH_CONNECT_V4: Block if AppID matches AND LocalInterface != TUN LUID
 // 2. ALE_AUTH_RECV_ACCEPT_V4: Block inbound (e.g. STUN responses) on non-TUN interface
 func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
+	blockStart := time.Now()
+	defer func() {
+		if elapsed := time.Since(blockStart); elapsed > time.Millisecond {
+			core.Log.Warnf("Perf", "BlockProcessOnRealNIC took %s (%s)", elapsed, exePath)
+		}
+	}()
+
 	key := strings.ToLower(exePath)
 
 	appID, err := wf.AppID(exePath)
