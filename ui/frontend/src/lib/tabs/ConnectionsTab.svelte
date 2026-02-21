@@ -15,7 +15,7 @@
     loading = true;
     error = '';
     try {
-      tunnels = await api.listTunnels() || [];
+      tunnels = (await api.listTunnels() || []).filter(t => t.id !== '__direct__');
     } catch (e) {
       error = e.message || 'Не удалось загрузить список туннелей';
     } finally {
