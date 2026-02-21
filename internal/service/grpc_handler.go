@@ -231,8 +231,11 @@ func (s *Service) StreamStats(req *vpnapi.StatsStreamRequest, stream vpnapi.VPNS
 					State:    vpnapi.TunnelState(ts.State),
 					BytesTx:  ts.BytesTx,
 					BytesRx:  ts.BytesRx,
-					SpeedTx:  ts.SpeedTx,
-					SpeedRx:  ts.SpeedRx,
+					SpeedTx:    ts.SpeedTx,
+					SpeedRx:    ts.SpeedRx,
+					PacketLoss: ts.PacketLoss,
+					LatencyMs:  ts.LatencyMs,
+					JitterMs:   ts.JitterMs,
 				})
 			}
 			if err := stream.Send(protoSnap); err != nil {

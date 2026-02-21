@@ -61,6 +61,7 @@ type Config struct {
 	EventBus       *core.EventBus
 	TunnelCtrl     TunnelController
 	LogStreamer    *LogStreamer
+	StatsCollector *StatsCollector // optional: use externally-created collector
 	Version        string
 }
 
@@ -80,7 +81,11 @@ func New(c Config) *Service {
 	} else {
 		s.logs = NewLogStreamer(c.EventBus)
 	}
-	s.stats = NewStatsCollector(c.TunnelRegistry, c.EventBus)
+	if c.StatsCollector != nil {
+		s.stats = c.StatsCollector
+	} else {
+		s.stats = NewStatsCollector(c.TunnelRegistry, c.EventBus)
+	}
 	return s
 }
 

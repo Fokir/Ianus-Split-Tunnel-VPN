@@ -112,6 +112,7 @@ message TunnelStats {
   double packet_loss = 7;     // 0.0-1.0, fraction of lost packets
   int64 latency_ms = 8;       // RTT in milliseconds
   google.protobuf.Timestamp last_handshake = 9;
+  int64 jitter_ms = 10;       // max-min RTT in milliseconds (1-min window)
 }
 
 message StatsSnapshot {

@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"net"
+	"sync"
 	"time"
 
 	"awg-split-tunnel/internal/core"
@@ -16,7 +17,7 @@ import (
 const (
 	probeInterval  = 500 * time.Millisecond
 	probeTimeout   = 3 * time.Second
-	probeWindow    = 20
+	probeWindow    = 120 // 120 * 500ms = 60s window
 	reportInterval = 10 * time.Second
 )
 
@@ -27,11 +28,15 @@ type JitterProbe struct {
 	tunnelID string
 	target   string // "host:port", e.g. "8.8.8.8:53"
 
+	mu     sync.Mutex
 	rtts   [probeWindow]time.Duration
 	valid  [probeWindow]bool
 	cursor int
 	count  int
 }
+
+// Compile-time check: JitterProbe implements DiagnosticsProvider.
+var _ DiagnosticsProvider = (*JitterProbe)(nil)
 
 // NewJitterProbe creates a probe that sends DNS queries to target via the
 // given tunnel provider.
@@ -40,6 +45,57 @@ func NewJitterProbe(prov provider.TunnelProvider, tunnelID, target string) *Jitt
 		provider: prov,
 		tunnelID: tunnelID,
 		target:   target,
+	}
+}
+
+// TunnelID returns the tunnel ID this probe is associated with.
+func (p *JitterProbe) TunnelID() string {
+	return p.tunnelID
+}
+
+// Snapshot computes network quality metrics from the circular buffer.
+func (p *JitterProbe) Snapshot() DiagnosticsSnapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.count == 0 {
+		return DiagnosticsSnapshot{}
+	}
+
+	n := p.count
+	var minRTT, maxRTT, sumRTT time.Duration
+	var goodCount, lostCount int
+	first := true
+
+	for i := 0; i < n; i++ {
+		if !p.valid[i] {
+			lostCount++
+			continue
+		}
+		rtt := p.rtts[i]
+		sumRTT += rtt
+		goodCount++
+		if first || rtt < minRTT {
+			minRTT = rtt
+		}
+		if first || rtt > maxRTT {
+			maxRTT = rtt
+		}
+		first = false
+	}
+
+	if goodCount == 0 {
+		return DiagnosticsSnapshot{
+			PacketLoss:  1.0,
+			SampleCount: n,
+		}
+	}
+
+	return DiagnosticsSnapshot{
+		PacketLoss:  float64(lostCount) / float64(n),
+		AvgRTT:      sumRTT / time.Duration(goodCount),
+		Jitter:      maxRTT - minRTT,
+		SampleCount: n,
 	}
 }
 
@@ -96,6 +152,9 @@ func (p *JitterProbe) probe(ctx context.Context) (time.Duration, bool) {
 
 // record stores an RTT sample in the circular buffer.
 func (p *JitterProbe) record(rtt time.Duration, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	p.rtts[p.cursor] = rtt
 	p.valid[p.cursor] = ok
 	p.cursor = (p.cursor + 1) % probeWindow
@@ -106,46 +165,24 @@ func (p *JitterProbe) record(rtt time.Duration, ok bool) {
 
 // report logs aggregated jitter stats for the current window.
 func (p *JitterProbe) report() {
-	if p.count == 0 {
+	snap := p.Snapshot()
+	if snap.SampleCount == 0 {
 		return
 	}
 
-	n := p.count
-	var minRTT, maxRTT, sumRTT time.Duration
-	var goodCount, lostCount int
-	first := true
-
-	for i := 0; i < n; i++ {
-		if !p.valid[i] {
-			lostCount++
-			continue
-		}
-		rtt := p.rtts[i]
-		sumRTT += rtt
-		goodCount++
-		if first || rtt < minRTT {
-			minRTT = rtt
-		}
-		if first || rtt > maxRTT {
-			maxRTT = rtt
-		}
-		first = false
-	}
-
-	if goodCount == 0 {
-		core.Log.Warnf("Perf", "Jitter %s: all %d probes lost", p.tunnelID, n)
+	if snap.PacketLoss >= 1.0 {
+		core.Log.Warnf("Perf", "Jitter %s: all %d probes lost", p.tunnelID, snap.SampleCount)
 		return
 	}
 
-	avgRTT := sumRTT / time.Duration(goodCount)
-	jitter := maxRTT - minRTT
+	lostCount := int(snap.PacketLoss * float64(snap.SampleCount))
 
-	if jitter > 20*time.Millisecond || lostCount > 0 {
-		core.Log.Warnf("Perf", "Jitter %s: min=%s avg=%s max=%s jitter=%s lost=%d/%d",
-			p.tunnelID, minRTT, avgRTT, maxRTT, jitter, lostCount, n)
+	if snap.Jitter > 20*time.Millisecond || lostCount > 0 {
+		core.Log.Warnf("Perf", "Jitter %s: avg=%s jitter=%s lost=%d/%d",
+			p.tunnelID, snap.AvgRTT, snap.Jitter, lostCount, snap.SampleCount)
 	} else {
-		core.Log.Infof("Perf", "Jitter %s: min=%s avg=%s max=%s jitter=%s lost=%d/%d",
-			p.tunnelID, minRTT, avgRTT, maxRTT, jitter, lostCount, n)
+		core.Log.Infof("Perf", "Jitter %s: avg=%s jitter=%s lost=%d/%d",
+			p.tunnelID, snap.AvgRTT, snap.Jitter, lostCount, snap.SampleCount)
 	}
 }
 

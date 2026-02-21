@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/gateway"
 )
 
 const (
@@ -17,12 +18,15 @@ const (
 
 // TunnelStats holds traffic statistics for a single tunnel.
 type TunnelStats struct {
-	TunnelID  string
-	State     core.TunnelState
-	BytesTx   int64
-	BytesRx   int64
-	SpeedTx   int64 // bytes/sec
-	SpeedRx   int64 // bytes/sec
+	TunnelID   string
+	State      core.TunnelState
+	BytesTx    int64
+	BytesRx    int64
+	SpeedTx    int64   // bytes/sec
+	SpeedRx    int64   // bytes/sec
+	PacketLoss float64 // 0.0-1.0
+	LatencyMs  int64   // avg RTT ms
+	JitterMs   int64   // max-min RTT ms
 }
 
 // StatsSnapshot is a point-in-time snapshot of all tunnel stats.
@@ -45,6 +49,10 @@ type StatsCollector struct {
 
 	// Per-tunnel byte counters (updated externally).
 	counters sync.Map // tunnelID -> *tunnelCounters
+
+	// Diagnostics providers (jitter probes).
+	diagMu    sync.RWMutex
+	diagProvs map[string]gateway.DiagnosticsProvider
 }
 
 type tunnelCounters struct {
@@ -55,9 +63,10 @@ type tunnelCounters struct {
 // NewStatsCollector creates a StatsCollector.
 func NewStatsCollector(registry *core.TunnelRegistry, bus *core.EventBus) *StatsCollector {
 	return &StatsCollector{
-		registry: registry,
-		bus:      bus,
-		done:     make(chan struct{}),
+		registry:  registry,
+		bus:       bus,
+		done:      make(chan struct{}),
+		diagProvs: make(map[string]gateway.DiagnosticsProvider),
 	}
 }
 
@@ -117,6 +126,20 @@ func (sc *StatsCollector) AddBytes(tunnelID string, tx, rx int64) {
 	}
 }
 
+// RegisterDiagnostics adds a diagnostics provider (e.g. JitterProbe) for a tunnel.
+func (sc *StatsCollector) RegisterDiagnostics(dp gateway.DiagnosticsProvider) {
+	sc.diagMu.Lock()
+	sc.diagProvs[dp.TunnelID()] = dp
+	sc.diagMu.Unlock()
+}
+
+// UnregisterDiagnostics removes a diagnostics provider by tunnel ID.
+func (sc *StatsCollector) UnregisterDiagnostics(tunnelID string) {
+	sc.diagMu.Lock()
+	delete(sc.diagProvs, tunnelID)
+	sc.diagMu.Unlock()
+}
+
 // Latest returns the most recent stats snapshot.
 func (sc *StatsCollector) Latest() StatsSnapshot {
 	sc.mu.RLock()
@@ -160,6 +183,14 @@ func (sc *StatsCollector) collect(prevTx, prevRx map[string]int64) StatsSnapshot
 	tunnels := sc.registry.All()
 	stats := make([]TunnelStats, 0, len(tunnels))
 
+	// Snapshot diagnostics providers under read lock.
+	sc.diagMu.RLock()
+	diagSnaps := make(map[string]gateway.DiagnosticsSnapshot, len(sc.diagProvs))
+	for id, dp := range sc.diagProvs {
+		diagSnaps[id] = dp.Snapshot()
+	}
+	sc.diagMu.RUnlock()
+
 	for _, t := range tunnels {
 		var tx, rx int64
 		if val, ok := sc.counters.Load(t.ID); ok {
@@ -179,14 +210,22 @@ func (sc *StatsCollector) collect(prevTx, prevRx map[string]int64) StatsSnapshot
 		prevTx[t.ID] = tx
 		prevRx[t.ID] = rx
 
-		stats = append(stats, TunnelStats{
+		ts := TunnelStats{
 			TunnelID: t.ID,
 			State:    t.State,
 			BytesTx:  tx,
 			BytesRx:  rx,
 			SpeedTx:  speedTx,
 			SpeedRx:  speedRx,
-		})
+		}
+
+		if ds, ok := diagSnaps[t.ID]; ok && ds.SampleCount > 0 {
+			ts.PacketLoss = ds.PacketLoss
+			ts.LatencyMs = ds.AvgRTT.Milliseconds()
+			ts.JitterMs = ds.Jitter.Milliseconds()
+		}
+
+		stats = append(stats, ts)
 	}
 
 	return StatsSnapshot{

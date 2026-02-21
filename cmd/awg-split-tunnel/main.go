@@ -177,6 +177,7 @@ func main() {
 	}
 
 	// === 9. VPN Providers + proxies ===
+	var jitterProbes []*gateway.JitterProbe
 	for _, tcfg := range cfg.Tunnels {
 		proxyPort := nextProxyPort
 		udpProxyPort := nextProxyPort + 1
@@ -250,6 +251,7 @@ func main() {
 
 		// Start jitter probe for VPN tunnels.
 		probe := gateway.NewJitterProbe(prov, tcfg.ID, "8.8.8.8:53")
+		jitterProbes = append(jitterProbes, probe)
 		go probe.Run(ctx)
 
 		// === 10. Add bypass route for VPN server endpoints ===
@@ -343,6 +345,13 @@ func main() {
 		}
 	}
 
+	// === 11b. Stats Collector (created before TUN router start to wire bytesReporter) ===
+	statsCollector := service.NewStatsCollector(registry, bus)
+	tunRouter.SetBytesReporter(statsCollector.AddBytes)
+	for _, probe := range jitterProbes {
+		statsCollector.RegisterDiagnostics(probe)
+	}
+
 	// === 12. Start TUN Router ===
 	if err := tunRouter.Start(ctx); err != nil {
 		core.Log.Fatalf("Core", "Failed to start TUN router: %v", err)
@@ -363,6 +372,7 @@ func main() {
 		EventBus:       bus,
 		TunnelCtrl:     tunnelCtrl,
 		LogStreamer:    logStreamer,
+		StatsCollector: statsCollector,
 		Version:        version,
 	})
 	svc.Start(ctx)

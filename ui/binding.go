@@ -21,8 +21,9 @@ import (
 // BindingService is exposed to the Svelte frontend via Wails bindings.
 // Each public method becomes callable from JavaScript.
 type BindingService struct {
-	client        *ipc.Client
-	logStreamOnce sync.Once
+	client          *ipc.Client
+	logStreamOnce   sync.Once
+	statsStreamOnce sync.Once
 }
 
 // NewBindingService creates a BindingService wrapping the IPC client.
@@ -378,6 +379,54 @@ func (b *BindingService) runLogStream() {
 			"level":     logLevelStr(entry.Level),
 			"tag":       entry.Tag,
 			"message":   entry.Message,
+		})
+	}
+}
+
+// ─── Stats streaming ─────────────────────────────────────────────
+
+// StartStatsStream begins streaming stats from the VPN service and emitting
+// them as Wails "stats-update" events. Safe to call multiple times; only the
+// first call starts the stream.
+func (b *BindingService) StartStatsStream() {
+	b.statsStreamOnce.Do(func() {
+		go b.runStatsStream()
+	})
+}
+
+func (b *BindingService) runStatsStream() {
+	app := application.Get()
+	ctx := context.Background()
+
+	stream, err := b.client.Service.StreamStats(ctx, &vpnapi.StatsStreamRequest{
+		IntervalMs: 2000,
+	})
+	if err != nil {
+		log.Printf("[UI] Failed to start stats stream: %v", err)
+		return
+	}
+
+	for {
+		snap, err := stream.Recv()
+		if err != nil {
+			return
+		}
+
+		tunnels := make([]map[string]interface{}, 0, len(snap.Tunnels))
+		for _, t := range snap.Tunnels {
+			tunnels = append(tunnels, map[string]interface{}{
+				"tunnelId":   t.TunnelId,
+				"state":      tunnelStateStr(t.State),
+				"speedTx":    t.SpeedTx,
+				"speedRx":    t.SpeedRx,
+				"packetLoss": t.PacketLoss,
+				"latencyMs":  t.LatencyMs,
+				"jitterMs":   t.JitterMs,
+			})
+		}
+
+		app.Event.Emit("stats-update", map[string]interface{}{
+			"tunnels": tunnels,
 		})
 	}
 }

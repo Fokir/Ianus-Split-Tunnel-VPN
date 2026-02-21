@@ -53,6 +53,9 @@ type TUNRouter struct {
 	rawFwders map[string]provider.RawForwarder // tunnelID → forwarder
 	vpnIPs    map[string][4]byte               // tunnelID → VPN IP
 
+	// External byte reporting callback (for StatsCollector).
+	bytesReporter func(tunnelID string, tx, rx int64)
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -88,6 +91,12 @@ func NewTUNRouter(
 // SetIPFilter atomically sets the IP/app filter. Safe for concurrent use.
 func (r *TUNRouter) SetIPFilter(filter *IPFilter) {
 	r.ipFilter.Store(filter)
+}
+
+// SetBytesReporter sets a callback invoked on every packet to report
+// per-tunnel TX/RX byte counts. Must be called before Start.
+func (r *TUNRouter) SetBytesReporter(fn func(tunnelID string, tx, rx int64)) {
+	r.bytesReporter = fn
 }
 
 // Start begins the packet processing loop.
@@ -332,6 +341,9 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 	tunSwapIPs(pkt)
 	tunSetTCPPort(pkt, m.tpOff+2, proxyPort, m.tpOff+16)
 
+	if r.bytesReporter != nil {
+		r.bytesReporter(tunnelID, int64(len(pkt)), 0)
+	}
 	r.writePacket(pkt)
 }
 
@@ -359,6 +371,9 @@ func (r *TUNRouter) handleTCPProxyResponse(pkt []byte, m pktMeta) {
 	// Overwrite srcIP with original destination IP.
 	tunOverwriteSrcIP(pkt, entry.OriginalDstIP.As4(), tcpCkOff)
 
+	if r.bytesReporter != nil {
+		r.bytesReporter(entry.TunnelID, 0, int64(len(pkt)))
+	}
 	r.writePacket(pkt)
 }
 
@@ -525,6 +540,9 @@ func (r *TUNRouter) handleUDPProxyResponse(pkt []byte, m pktMeta) {
 	// Overwrite srcIP with original destination IP.
 	tunOverwriteSrcIP(pkt, entry.OriginalDstIP.As4(), udpCkOff)
 
+	if r.bytesReporter != nil {
+		r.bytesReporter(entry.TunnelID, 0, int64(len(pkt)))
+	}
 	r.writePacket(pkt)
 }
 
@@ -704,6 +722,9 @@ func (r *TUNRouter) handleRawOutbound(pkt []byte, m pktMeta, tunnelID string, vp
 	if !rf.InjectOutbound(pkt) {
 		return false
 	}
+	if r.bytesReporter != nil {
+		r.bytesReporter(tunnelID, int64(len(pkt)), 0)
+	}
 	return true
 }
 
@@ -786,6 +807,9 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 
 	// Write to TUN adapter — this copies into WinTUN ring buffer.
 	r.writePacket(pkt)
+	if r.bytesReporter != nil {
+		r.bytesReporter(rawEntry.TunnelID, 0, int64(len(pkt)))
+	}
 
 	// Perf: track inbound stats.
 	r.inboundCount.Add(1)
