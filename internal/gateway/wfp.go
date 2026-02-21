@@ -124,6 +124,7 @@ func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 	var ruleIDs []wf.RuleID
 
 	// Rule 1: Block outbound connections on non-TUN interfaces.
+	// Exclude loopback traffic so localhost (127.0.0.1) remains reachable.
 	connectRuleID := w.nextRuleID()
 	if err := w.session.AddRule(&wf.Rule{
 		ID:       connectRuleID,
@@ -142,6 +143,11 @@ func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 				Op:    wf.MatchTypeNotEqual,
 				Value: uint64(w.tunLUID),
 			},
+			{
+				Field: wf.FieldFlags,
+				Op:    wf.MatchTypeFlagsNoneSet,
+				Value: wf.ConditionFlagIsLoopback,
+			},
 		},
 		Action: wf.ActionBlock,
 	}); err != nil {
@@ -150,6 +156,7 @@ func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 	ruleIDs = append(ruleIDs, connectRuleID)
 
 	// Rule 2: Block inbound accept (STUN responses) on non-TUN interfaces.
+	// Exclude loopback traffic so localhost (127.0.0.1) remains reachable.
 	recvRuleID := w.nextRuleID()
 	if err := w.session.AddRule(&wf.Rule{
 		ID:       recvRuleID,
@@ -167,6 +174,11 @@ func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 				Field: wf.FieldIPLocalInterface,
 				Op:    wf.MatchTypeNotEqual,
 				Value: uint64(w.tunLUID),
+			},
+			{
+				Field: wf.FieldFlags,
+				Op:    wf.MatchTypeFlagsNoneSet,
+				Value: wf.ConditionFlagIsLoopback,
 			},
 		},
 		Action: wf.ActionBlock,
