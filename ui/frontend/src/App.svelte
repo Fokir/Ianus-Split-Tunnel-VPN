@@ -7,6 +7,7 @@
   import LogsTab from './lib/tabs/LogsTab.svelte';
   import AboutTab from './lib/tabs/AboutTab.svelte';
   import StatusBar from './lib/StatusBar.svelte';
+  import TitleBar from './lib/TitleBar.svelte';
 
   const tabs = [
     { id: 'connections', label: 'Подключения', icon: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z' },
@@ -37,16 +38,17 @@
 </script>
 
 <div class="flex flex-col h-screen bg-zinc-900 text-zinc-100 select-none">
+  <!-- Custom titlebar -->
+  <TitleBar />
+
   <!-- Tab bar -->
-  <nav class="flex border-b border-zinc-700/60 bg-zinc-900/80 backdrop-blur-sm shrink-0"
-       style="--wails-draggable: drag">
+  <nav class="flex border-b border-zinc-700/60 bg-zinc-900/80 backdrop-blur-sm shrink-0">
     {#each tabs as tab}
       <button
         class="relative flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors
                {activeTab === tab.id
                  ? 'text-blue-400'
                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'}"
-        style="--wails-draggable: no-drag"
         on:click={() => activeTab = tab.id}
       >
         <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
