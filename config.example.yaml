@@ -62,6 +62,25 @@ rules:
     tunnel_id: awg-germany
     fallback: block
 
+  # Discord: realtime priority — voice/video packets skip the bulk queue
+  - pattern: "discord.exe"
+    tunnel_id: awg-germany
+    fallback: block
+    priority: realtime
+
+  # Torrent client: low priority — bulk downloads yield to interactive traffic
+  - pattern: "qbittorrent.exe"
+    tunnel_id: awg-germany
+    fallback: allow_direct
+    priority: low
+
+  # Priority values: auto (default), realtime, normal, low
+  # "auto" classifies packets by their characteristics:
+  #   - Small UDP (<300 bytes, both ports >=1024) → high (voice/game)
+  #   - DNS (port 53) → high
+  #   - TCP SYN/FIN/RST → high (per-packet boost)
+  #   - Everything else → normal
+
 # DNS routing configuration (optional).
 # Controls how DNS queries are routed per-process.
 dns:

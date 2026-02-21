@@ -352,6 +352,7 @@ type Rule struct {
 	Pattern       string                 `protobuf:"bytes,1,opt,name=pattern,proto3" json:"pattern,omitempty"`
 	TunnelId      string                 `protobuf:"bytes,2,opt,name=tunnel_id,json=tunnelId,proto3" json:"tunnel_id,omitempty"` // empty for drop-only rules
 	Fallback      FallbackPolicy         `protobuf:"varint,3,opt,name=fallback,proto3,enum=awg.vpn.v1.FallbackPolicy" json:"fallback,omitempty"`
+	Priority      string                 `protobuf:"bytes,4,opt,name=priority,proto3" json:"priority,omitempty"` // "auto", "realtime", "normal", "low"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -405,6 +406,13 @@ func (x *Rule) GetFallback() FallbackPolicy {
 		return x.Fallback
 	}
 	return FallbackPolicy_FALLBACK_ALLOW_DIRECT
+}
+
+func (x *Rule) GetPriority() string {
+	if x != nil {
+		return x.Priority
+	}
+	return ""
 }
 
 type DNSCacheConfig struct {
@@ -2303,11 +2311,12 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\x05state\x18\x03 \x01(\x0e2\x17.awg.vpn.v1.TunnelStateR\x05state\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12\x1d\n" +
 	"\n" +
-	"adapter_ip\x18\x05 \x01(\tR\tadapterIp\"u\n" +
+	"adapter_ip\x18\x05 \x01(\tR\tadapterIp\"\x91\x01\n" +
 	"\x04Rule\x12\x18\n" +
 	"\apattern\x18\x01 \x01(\tR\apattern\x12\x1b\n" +
 	"\ttunnel_id\x18\x02 \x01(\tR\btunnelId\x126\n" +
-	"\bfallback\x18\x03 \x01(\x0e2\x1a.awg.vpn.v1.FallbackPolicyR\bfallback\"\x90\x01\n" +
+	"\bfallback\x18\x03 \x01(\x0e2\x1a.awg.vpn.v1.FallbackPolicyR\bfallback\x12\x1a\n" +
+	"\bpriority\x18\x04 \x01(\tR\bpriority\"\x90\x01\n" +
 	"\x0eDNSCacheConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x19\n" +
 	"\bmax_size\x18\x02 \x01(\x05R\amaxSize\x12\x17\n" +

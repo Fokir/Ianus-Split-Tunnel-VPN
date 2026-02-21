@@ -15,9 +15,13 @@ import (
 // raw forwarding (e.g. AmneziaWG) implement this interface in addition to
 // TunnelProvider. The TUNRouter uses a type assertion to detect support.
 type RawForwarder interface {
-	// InjectOutbound sends a raw IP packet into the tunnel for encryption.
-	// Returns true on success, false if the packet was dropped.
+	// InjectOutbound sends a raw IP packet into the tunnel for encryption
+	// at Normal priority. Returns true on success, false if dropped.
 	InjectOutbound(pkt []byte) bool
+
+	// InjectOutboundPriority sends a raw IP packet at the specified priority
+	// (0=High, 1=Normal, 2=Low). High-priority packets are drained first.
+	InjectOutboundPriority(pkt []byte, prio byte) bool
 
 	// SetInboundHandler installs a callback for packets arriving from the tunnel.
 	// If the handler returns true, the packet is consumed (raw path); false falls

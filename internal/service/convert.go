@@ -61,10 +61,15 @@ func tunnelConfigFromProto(pc *vpnapi.TunnelConfig) core.TunnelConfig {
 // ─── Rule conversions ───────────────────────────────────────────────
 
 func ruleToProto(r core.Rule) *vpnapi.Rule {
+	var prio string
+	if r.Priority != core.PriorityAuto {
+		prio = r.Priority.String()
+	}
 	return &vpnapi.Rule{
 		Pattern:  r.Pattern,
 		TunnelId: r.TunnelID,
 		Fallback: vpnapi.FallbackPolicy(r.Fallback),
+		Priority: prio,
 	}
 }
 
@@ -73,7 +78,13 @@ func ruleFromProto(pr *vpnapi.Rule) core.Rule {
 		Pattern:  pr.Pattern,
 		TunnelID: pr.TunnelId,
 		Fallback: core.FallbackPolicy(pr.Fallback),
+		Priority: parsePriorityProto(pr.Priority),
 	}
+}
+
+func parsePriorityProto(s string) core.RulePriority {
+	p, _ := core.ParseRulePriority(s)
+	return p
 }
 
 // ─── Config conversions ─────────────────────────────────────────────

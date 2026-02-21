@@ -56,6 +56,8 @@ type RawFlowEntry struct {
 	LastActivity int64   // atomic; Unix seconds
 	TunnelID     string
 	VpnIP        [4]byte // cached VPN IP for fast src IP rewrite
+	Priority     byte    // cached QoS priority (PrioHigh/PrioNormal/PrioLow)
+	IsAuto       bool    // true when rule priority was "auto" (per-packet classification)
 }
 
 // rawFlowKey is a compact key: proto(1) + dstIP(4) + srcPort(2) = 7 bytes.

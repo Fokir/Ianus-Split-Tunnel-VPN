@@ -11,7 +11,7 @@
   // Modal state
   let showModal = false;
   let editIndex = -1;
-  let modalRule = { pattern: '', tunnelId: '', fallback: 'allow_direct' };
+  let modalRule = { pattern: '', tunnelId: '', fallback: 'allow_direct', priority: 'auto' };
 
   // Process picker
   let showProcessPicker = false;
@@ -39,7 +39,7 @@
 
   function openAddModal() {
     editIndex = -1;
-    modalRule = { pattern: '', tunnelId: '', fallback: 'allow_direct' };
+    modalRule = { pattern: '', tunnelId: '', fallback: 'allow_direct', priority: 'auto' };
     showModal = true;
   }
 
@@ -127,6 +127,24 @@
       default: return 'Прямой доступ';
     }
   }
+
+  function priorityLabel(p) {
+    switch (p) {
+      case 'realtime': return 'Realtime';
+      case 'normal': return 'Normal';
+      case 'low': return 'Low';
+      default: return 'Auto';
+    }
+  }
+
+  function priorityColor(p) {
+    switch (p) {
+      case 'realtime': return 'text-orange-400 bg-orange-400/10';
+      case 'normal': return 'text-blue-400 bg-blue-400/10';
+      case 'low': return 'text-zinc-400 bg-zinc-400/10';
+      default: return 'text-green-400 bg-green-400/10';
+    }
+  }
 </script>
 
 <div class="p-4 space-y-4">
@@ -187,6 +205,7 @@
             <th class="text-left px-4 py-2.5 font-medium">Паттерн</th>
             <th class="text-left px-4 py-2.5 font-medium">Туннель</th>
             <th class="text-left px-4 py-2.5 font-medium">Fallback</th>
+            <th class="text-left px-4 py-2.5 font-medium">Приоритет</th>
             <th class="text-right px-4 py-2.5 font-medium w-24"></th>
           </tr>
         </thead>
@@ -196,6 +215,11 @@
               <td class="px-4 py-2.5 text-zinc-200 font-mono text-xs">{rule.pattern}</td>
               <td class="px-4 py-2.5 text-zinc-300">{tunnelName(rule.tunnelId)}</td>
               <td class="px-4 py-2.5 text-zinc-400">{fallbackLabel(rule.fallback)}</td>
+              <td class="px-4 py-2.5">
+                <span class="inline-block px-1.5 py-0.5 text-xs rounded {priorityColor(rule.priority)}">
+                  {priorityLabel(rule.priority)}
+                </span>
+              </td>
               <td class="px-4 py-2.5 text-right">
                 <button
                   class="text-zinc-500 hover:text-zinc-200 transition-colors mr-2"
@@ -314,6 +338,21 @@
             <option value="allow_direct">Прямой доступ</option>
             <option value="block">Блокировать</option>
             <option value="drop">Отбросить</option>
+          </select>
+        </div>
+
+        <!-- Priority -->
+        <div>
+          <label for="rule-priority" class="block text-xs font-medium text-zinc-400 mb-1">Приоритет QoS</label>
+          <select
+            id="rule-priority"
+            bind:value={modalRule.priority}
+            class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
+          >
+            <option value="auto">Auto (по характеристикам пакета)</option>
+            <option value="realtime">Realtime (высокий приоритет)</option>
+            <option value="normal">Normal (обычный приоритет)</option>
+            <option value="low">Low (низкий приоритет)</option>
           </select>
         </div>
       </div>

@@ -202,6 +202,7 @@ type RuleInfo struct {
 	Pattern  string `json:"pattern"`
 	TunnelID string `json:"tunnelId"`
 	Fallback string `json:"fallback"` // "allow_direct", "block", "drop"
+	Priority string `json:"priority"` // "auto", "realtime", "normal", "low"
 }
 
 func fallbackStr(f vpnapi.FallbackPolicy) string {
@@ -235,10 +236,15 @@ func (b *BindingService) ListRules() ([]RuleInfo, error) {
 	}
 	rules := make([]RuleInfo, 0, len(resp.Rules))
 	for _, r := range resp.Rules {
+		prio := r.Priority
+		if prio == "" {
+			prio = "auto"
+		}
 		rules = append(rules, RuleInfo{
 			Pattern:  r.Pattern,
 			TunnelID: r.TunnelId,
 			Fallback: fallbackStr(r.Fallback),
+			Priority: prio,
 		})
 	}
 	return rules, nil
@@ -247,10 +253,15 @@ func (b *BindingService) ListRules() ([]RuleInfo, error) {
 func (b *BindingService) SaveRules(rules []RuleInfo) error {
 	protoRules := make([]*vpnapi.Rule, 0, len(rules))
 	for _, r := range rules {
+		prio := r.Priority
+		if prio == "auto" {
+			prio = ""
+		}
 		protoRules = append(protoRules, &vpnapi.Rule{
 			Pattern:  r.Pattern,
 			TunnelId: r.TunnelID,
 			Fallback: fallbackFromStr(r.Fallback),
+			Priority: prio,
 		})
 	}
 	resp, err := b.client.Service.SaveRules(context.Background(), &vpnapi.SaveRulesRequest{Rules: protoRules})

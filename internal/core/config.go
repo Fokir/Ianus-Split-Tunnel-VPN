@@ -73,6 +73,51 @@ func ParseFallbackPolicy(s string) (FallbackPolicy, error) {
 	}
 }
 
+// RulePriority defines packet scheduling priority for a rule.
+type RulePriority int
+
+const (
+	// PriorityAuto classifies packets by their characteristics (default).
+	PriorityAuto RulePriority = iota
+	// PriorityRealtime forces all packets to high priority queue.
+	PriorityRealtime
+	// PriorityNormal forces all packets to normal priority queue.
+	PriorityNormal
+	// PriorityLow forces all packets to low priority queue.
+	PriorityLow
+)
+
+func (p RulePriority) String() string {
+	switch p {
+	case PriorityAuto:
+		return "auto"
+	case PriorityRealtime:
+		return "realtime"
+	case PriorityNormal:
+		return "normal"
+	case PriorityLow:
+		return "low"
+	default:
+		return "unknown"
+	}
+}
+
+// ParseRulePriority parses a string into a RulePriority.
+func ParseRulePriority(s string) (RulePriority, error) {
+	switch s {
+	case "auto", "":
+		return PriorityAuto, nil
+	case "realtime", "high":
+		return PriorityRealtime, nil
+	case "normal":
+		return PriorityNormal, nil
+	case "low", "bulk":
+		return PriorityLow, nil
+	default:
+		return PriorityAuto, fmt.Errorf("unknown rule priority: %q", s)
+	}
+}
+
 // Rule maps a process pattern to a tunnel with a fallback policy.
 type Rule struct {
 	// Pattern is the matching expression: "firefox.exe", "chrome", "C:\Games\*"
@@ -81,6 +126,8 @@ type Rule struct {
 	TunnelID string `yaml:"tunnel_id,omitempty"`
 	// Fallback defines behavior when the tunnel is unavailable.
 	Fallback FallbackPolicy `yaml:"fallback"`
+	// Priority defines packet scheduling priority: auto (default), realtime, normal, low.
+	Priority RulePriority `yaml:"priority,omitempty"`
 }
 
 // TunnelConfig holds the configuration for a single VPN tunnel.
@@ -282,5 +329,27 @@ func (p *FallbackPolicy) UnmarshalYAML(value *yaml.Node) error {
 
 // MarshalYAML implements yaml.Marshaler for FallbackPolicy.
 func (p FallbackPolicy) MarshalYAML() (any, error) {
+	return p.String(), nil
+}
+
+// UnmarshalYAML implements yaml.Unmarshaler for RulePriority.
+func (p *RulePriority) UnmarshalYAML(value *yaml.Node) error {
+	var s string
+	if err := value.Decode(&s); err != nil {
+		return err
+	}
+	parsed, err := ParseRulePriority(s)
+	if err != nil {
+		return err
+	}
+	*p = parsed
+	return nil
+}
+
+// MarshalYAML implements yaml.Marshaler for RulePriority.
+func (p RulePriority) MarshalYAML() (any, error) {
+	if p == PriorityAuto {
+		return nil, nil // omit default
+	}
 	return p.String(), nil
 }

@@ -295,7 +295,7 @@ func (r *TUNRouter) handleTCP(pkt []byte, m pktMeta) {
 }
 
 func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
-	tunnelID, proxyPort, action := r.resolveFlow(m.srcP, false, m.dstIP)
+	tunnelID, proxyPort, action, rulePrio := r.resolveFlow(m.srcP, false, m.dstIP)
 
 	switch action {
 	case flowDrop:
@@ -315,12 +315,16 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 	// Raw forwarding path: non-direct tunnels with a raw forwarder.
 	if tunnelID != DirectTunnelID {
 		if rf, vpnIP, ok := r.getRawForwarder(tunnelID); ok {
+			basePrio, isAuto := mapRulePriority(rulePrio)
+			prio := resolvePriority(basePrio, isAuto, pkt, protoTCP, m.tpOff, m.srcP, m.dstP)
 			r.flows.InsertRawFlow(protoTCP, m.dstIP, m.srcP, &RawFlowEntry{
 				LastActivity: r.flows.NowSec(),
 				TunnelID:     tunnelID,
 				VpnIP:        vpnIP,
+				Priority:     prio,
+				IsAuto:       isAuto,
 			})
-			r.handleRawOutbound(pkt, m, tunnelID, vpnIP, rf, protoTCP)
+			r.handleRawOutbound(pkt, m, tunnelID, vpnIP, rf, protoTCP, prio)
 			return
 		}
 	}
@@ -388,7 +392,9 @@ func (r *TUNRouter) handleTCPExisting(pkt []byte, m pktMeta) {
 		}
 
 		if rf, vpnIP, ok := r.getRawForwarder(rawEntry.TunnelID); ok {
-			r.handleRawOutbound(pkt, m, rawEntry.TunnelID, vpnIP, rf, protoTCP)
+			// Per-packet TCP control boost (SYN/FIN/RST bypass bulk queue).
+			prio := boostTCPControl(pkt, m.tpOff, rawEntry.Priority)
+			r.handleRawOutbound(pkt, m, rawEntry.TunnelID, vpnIP, rf, protoTCP, prio)
 			return
 		}
 		// Forwarder gone — delete stale raw flow and fall through.
@@ -441,7 +447,7 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	if rawEntry, ok := r.flows.GetRawFlow(protoUDP, m.dstIP, m.srcP); ok {
 		atomic.StoreInt64(&rawEntry.LastActivity, r.flows.NowSec())
 		if rf, vpnIP, ok := r.getRawForwarder(rawEntry.TunnelID); ok {
-			r.handleRawOutbound(pkt, m, rawEntry.TunnelID, vpnIP, rf, protoUDP)
+			r.handleRawOutbound(pkt, m, rawEntry.TunnelID, vpnIP, rf, protoUDP, rawEntry.Priority)
 			return
 		}
 		// Forwarder gone — delete stale raw flow and fall through.
@@ -461,7 +467,7 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	}
 
 	// Slow path: new UDP flow.
-	tunnelID, udpProxyPort, action := r.resolveFlow(m.srcP, true, m.dstIP)
+	tunnelID, udpProxyPort, action, rulePrio := r.resolveFlow(m.srcP, true, m.dstIP)
 
 	// DNS routing: for matched processes, route DNS through the same tunnel.
 	// For unmatched processes (flowPass), DNS goes to DirectTunnelID — the local
@@ -493,12 +499,16 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	// Raw forwarding for new UDP flows on non-direct tunnels.
 	if tunnelID != DirectTunnelID {
 		if rf, vpnIP, ok := r.getRawForwarder(tunnelID); ok {
+			basePrio, isAuto := mapRulePriority(rulePrio)
+			prio := resolvePriority(basePrio, isAuto, pkt, protoUDP, m.tpOff, m.srcP, m.dstP)
 			r.flows.InsertRawFlow(protoUDP, m.dstIP, m.srcP, &RawFlowEntry{
 				LastActivity: r.flows.NowSec(),
 				TunnelID:     tunnelID,
 				VpnIP:        vpnIP,
+				Priority:     prio,
+				IsAuto:       isAuto,
 			})
-			r.handleRawOutbound(pkt, m, tunnelID, vpnIP, rf, protoUDP)
+			r.handleRawOutbound(pkt, m, tunnelID, vpnIP, rf, protoUDP, prio)
 			return
 		}
 	}
@@ -558,7 +568,7 @@ const (
 	flowDrop                    // drop the packet
 )
 
-func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunnelID string, proxyPort uint16, action flowAction) {
+func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunnelID string, proxyPort uint16, action flowAction, rulePrio core.RulePriority) {
 	resolveStart := time.Now()
 	defer func() {
 		if elapsed := time.Since(resolveStart); elapsed > time.Millisecond {
@@ -574,7 +584,7 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// The __direct__ proxy (bound to the physical NIC via IP_UNICAST_IF) cannot
 	// deliver these packets either — drop them to avoid futile proxy timeouts.
 	if f != nil && f.IsLocalBypassIP(dstIP) {
-		return "", 0, flowDrop
+		return "", 0, flowDrop, 0
 	}
 
 	// Look up PID by source port.
@@ -584,19 +594,19 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 		core.Log.Warnf("Perf", "FindPIDByPort took %s (port=%d udp=%v)", pidElapsed, srcPort, isUDP)
 	}
 	if err != nil {
-		return "", 0, flowPass
+		return "", 0, flowPass, 0
 	}
 
 	// Self-process loop prevention: our own outbound traffic (e.g. direct proxy)
 	// must not re-enter the proxy path, or it creates an infinite loop.
 	if pid == r.selfPID {
-		return "", 0, flowDrop
+		return "", 0, flowDrop, 0
 	}
 
 	// Get exe path.
 	exePath, ok := r.matcher.GetExePath(pid)
 	if !ok {
-		return "", 0, flowPass
+		return "", 0, flowPass, 0
 	}
 
 	// Pre-lowercase once for DisallowedApps + rule matching.
@@ -605,47 +615,47 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 
 	// Check global DisallowedApps — always bypass VPN.
 	if f != nil && f.IsDisallowedApp(exeLower, baseLower) {
-		return "", 0, flowPass
+		return "", 0, flowPass, 0
 	}
 
 	// Match rules using pre-lowered strings.
 	result := r.rules.MatchPreLowered(exeLower, baseLower)
 	if !result.Matched {
-		return "", 0, flowPass
+		return "", 0, flowPass, 0
 	}
 
 	// Drop policy always drops.
 	if result.Fallback == core.PolicyDrop {
-		return "", 0, flowDrop
+		return "", 0, flowDrop, 0
 	}
 
 	// Check per-tunnel DisallowedApps.
 	if f != nil && f.IsTunnelDisallowedApp(result.TunnelID, exeLower, baseLower) {
-		return "", 0, flowPass
+		return "", 0, flowPass, 0
 	}
 
 	// Get tunnel entry.
 	entry, ok := r.registry.Get(result.TunnelID)
 	if !ok {
 		if result.Fallback == core.PolicyBlock {
-			return "", 0, flowDrop
+			return "", 0, flowDrop, 0
 		}
-		return "", 0, flowPass
+		return "", 0, flowPass, 0
 	}
 
 	if entry.State != core.TunnelStateUp {
 		switch result.Fallback {
 		case core.PolicyBlock:
-			return "", 0, flowDrop
+			return "", 0, flowDrop, 0
 		case core.PolicyAllowDirect:
-			return "", 0, flowPass
+			return "", 0, flowPass, 0
 		}
-		return "", 0, flowPass
+		return "", 0, flowPass, 0
 	}
 
 	// Check IP-based filtering (DisallowedIPs / AllowedIPs).
 	if f != nil && f.ShouldBypassIP(result.TunnelID, dstIP) {
-		return "", 0, flowPass
+		return "", 0, flowPass, 0
 	}
 
 	// Lazy WFP rule: block this process on real NIC.
@@ -660,12 +670,12 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	if isUDP {
 		udpPort, ok := r.registry.GetUDPProxyPort(result.TunnelID)
 		if !ok {
-			return "", 0, flowPass
+			return "", 0, flowPass, 0
 		}
-		return result.TunnelID, udpPort, flowRoute
+		return result.TunnelID, udpPort, flowRoute, result.Priority
 	}
 
-	return result.TunnelID, entry.ProxyPort, flowRoute
+	return result.TunnelID, entry.ProxyPort, flowRoute, result.Priority
 }
 
 // ---------------------------------------------------------------------------
@@ -699,9 +709,10 @@ func (r *TUNRouter) getRawForwarder(tunnelID string) (provider.RawForwarder, [4]
 	return rf, vpnIP, ok
 }
 
-// handleRawOutbound rewrites the source IP and injects the packet into the tunnel.
+// handleRawOutbound rewrites the source IP, applies DSCP marking for high-priority
+// traffic, and injects the packet into the tunnel at the given priority level.
 // Returns true if the packet was handled via raw forwarding.
-func (r *TUNRouter) handleRawOutbound(pkt []byte, m pktMeta, tunnelID string, vpnIP [4]byte, rf provider.RawForwarder, proto byte) bool {
+func (r *TUNRouter) handleRawOutbound(pkt []byte, m pktMeta, tunnelID string, vpnIP [4]byte, rf provider.RawForwarder, proto byte, prio byte) bool {
 	// Determine transport checksum offset.
 	var transportCkOff int
 	switch proto {
@@ -719,7 +730,12 @@ func (r *TUNRouter) handleRawOutbound(pkt []byte, m pktMeta, tunnelID string, vp
 	// Rewrite src IP from TUN IP (10.255.0.1) to tunnel's VPN IP.
 	tunOverwriteSrcIP(pkt, vpnIP, transportCkOff)
 
-	if !rf.InjectOutbound(pkt) {
+	// DSCP marking for high-priority packets (voice/video/control).
+	if prio == PrioHigh {
+		markDSCP(pkt, proto, m.tpOff)
+	}
+
+	if !rf.InjectOutboundPriority(pkt, prio) {
 		return false
 	}
 	if r.bytesReporter != nil {

@@ -15,6 +15,7 @@ type MatchResult struct {
 	Matched  bool
 	TunnelID string
 	Fallback FallbackPolicy
+	Priority RulePriority
 }
 
 // RuleEngine evaluates process paths against configured rules.
@@ -56,6 +57,7 @@ func (re *RuleEngine) Match(exePath string) MatchResult {
 				Matched:  true,
 				TunnelID: rule.TunnelID,
 				Fallback: rule.Fallback,
+				Priority: rule.Priority,
 			}
 		}
 	}
@@ -76,6 +78,7 @@ func (re *RuleEngine) MatchPreLowered(exeLower, baseLower string) MatchResult {
 				Matched:  true,
 				TunnelID: rule.TunnelID,
 				Fallback: rule.Fallback,
+				Priority: rule.Priority,
 			}
 		}
 	}

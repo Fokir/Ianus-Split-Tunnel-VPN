@@ -211,7 +211,7 @@ func (p *Provider) GetPeerEndpoints() []netip.AddrPort {
 // RawForwarder implementation — raw IP forwarding bypassing gVisor
 // ---------------------------------------------------------------------------
 
-// InjectOutbound sends a raw IP packet into the WireGuard tunnel.
+// InjectOutbound sends a raw IP packet into the WireGuard tunnel at Normal priority.
 func (p *Provider) InjectOutbound(pkt []byte) bool {
 	p.mu.RLock()
 	tnet := p.tnet
@@ -221,6 +221,18 @@ func (p *Provider) InjectOutbound(pkt []byte) bool {
 		return false
 	}
 	return tnet.InjectOutbound(pkt)
+}
+
+// InjectOutboundPriority sends a raw IP packet at the specified priority level.
+func (p *Provider) InjectOutboundPriority(pkt []byte, prio byte) bool {
+	p.mu.RLock()
+	tnet := p.tnet
+	p.mu.RUnlock()
+
+	if tnet == nil {
+		return false
+	}
+	return tnet.InjectOutboundPriority(pkt, prio)
 }
 
 // SetInboundHandler installs a callback for packets arriving from the tunnel.
