@@ -45,6 +45,8 @@ const (
 	PolicyBlock
 	// PolicyDrop always drops traffic regardless of tunnel state.
 	PolicyDrop
+	// PolicyFailover tries the next matching rule; drops if none match.
+	PolicyFailover
 )
 
 func (p FallbackPolicy) String() string {
@@ -55,6 +57,8 @@ func (p FallbackPolicy) String() string {
 		return "block"
 	case PolicyDrop:
 		return "drop"
+	case PolicyFailover:
+		return "failover"
 	default:
 		return "unknown"
 	}
@@ -68,6 +72,8 @@ func ParseFallbackPolicy(s string) (FallbackPolicy, error) {
 		return PolicyBlock, nil
 	case "drop":
 		return PolicyDrop, nil
+	case "failover":
+		return PolicyFailover, nil
 	default:
 		return PolicyAllowDirect, fmt.Errorf("unknown fallback policy: %q", s)
 	}

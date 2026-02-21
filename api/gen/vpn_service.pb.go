@@ -81,6 +81,7 @@ const (
 	FallbackPolicy_FALLBACK_ALLOW_DIRECT FallbackPolicy = 0
 	FallbackPolicy_FALLBACK_BLOCK        FallbackPolicy = 1
 	FallbackPolicy_FALLBACK_DROP         FallbackPolicy = 2
+	FallbackPolicy_FALLBACK_FAILOVER     FallbackPolicy = 3
 )
 
 // Enum value maps for FallbackPolicy.
@@ -89,11 +90,13 @@ var (
 		0: "FALLBACK_ALLOW_DIRECT",
 		1: "FALLBACK_BLOCK",
 		2: "FALLBACK_DROP",
+		3: "FALLBACK_FAILOVER",
 	}
 	FallbackPolicy_value = map[string]int32{
 		"FALLBACK_ALLOW_DIRECT": 0,
 		"FALLBACK_BLOCK":        1,
 		"FALLBACK_DROP":         2,
+		"FALLBACK_FAILOVER":     3,
 	}
 )
 
@@ -2449,11 +2452,12 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\x11TUNNEL_STATE_DOWN\x10\x00\x12\x1b\n" +
 	"\x17TUNNEL_STATE_CONNECTING\x10\x01\x12\x13\n" +
 	"\x0fTUNNEL_STATE_UP\x10\x02\x12\x16\n" +
-	"\x12TUNNEL_STATE_ERROR\x10\x03*R\n" +
+	"\x12TUNNEL_STATE_ERROR\x10\x03*i\n" +
 	"\x0eFallbackPolicy\x12\x19\n" +
 	"\x15FALLBACK_ALLOW_DIRECT\x10\x00\x12\x12\n" +
 	"\x0eFALLBACK_BLOCK\x10\x01\x12\x11\n" +
-	"\rFALLBACK_DROP\x10\x02*o\n" +
+	"\rFALLBACK_DROP\x10\x02\x12\x15\n" +
+	"\x11FALLBACK_FAILOVER\x10\x03*o\n" +
 	"\bLogLevel\x12\x13\n" +
 	"\x0fLOG_LEVEL_DEBUG\x10\x00\x12\x12\n" +
 	"\x0eLOG_LEVEL_INFO\x10\x01\x12\x12\n" +

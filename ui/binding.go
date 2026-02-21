@@ -201,7 +201,7 @@ func (b *BindingService) RemoveTunnel(tunnelID string) error {
 type RuleInfo struct {
 	Pattern  string `json:"pattern"`
 	TunnelID string `json:"tunnelId"`
-	Fallback string `json:"fallback"` // "allow_direct", "block", "drop"
+	Fallback string `json:"fallback"` // "allow_direct", "block", "drop", "failover"
 	Priority string `json:"priority"` // "auto", "realtime", "normal", "low"
 }
 
@@ -213,6 +213,8 @@ func fallbackStr(f vpnapi.FallbackPolicy) string {
 		return "block"
 	case vpnapi.FallbackPolicy_FALLBACK_DROP:
 		return "drop"
+	case vpnapi.FallbackPolicy_FALLBACK_FAILOVER:
+		return "failover"
 	default:
 		return "allow_direct"
 	}
@@ -224,6 +226,8 @@ func fallbackFromStr(s string) vpnapi.FallbackPolicy {
 		return vpnapi.FallbackPolicy_FALLBACK_BLOCK
 	case "drop":
 		return vpnapi.FallbackPolicy_FALLBACK_DROP
+	case "failover":
+		return vpnapi.FallbackPolicy_FALLBACK_FAILOVER
 	default:
 		return vpnapi.FallbackPolicy_FALLBACK_ALLOW_DIRECT
 	}

@@ -124,6 +124,7 @@
     switch (fb) {
       case 'block': return 'Блокировать';
       case 'drop': return 'Отбросить';
+      case 'failover': return 'Следующее правило';
       default: return 'Прямой доступ';
     }
   }
@@ -338,6 +339,7 @@
             <option value="allow_direct">Прямой доступ</option>
             <option value="block">Блокировать</option>
             <option value="drop">Отбросить</option>
+            <option value="failover">Следующее правило</option>
           </select>
         </div>
 

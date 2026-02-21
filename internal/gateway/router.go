@@ -618,64 +618,94 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 		return "", 0, flowPass, 0
 	}
 
-	// Match rules using pre-lowered strings.
+	// Match rules using pre-lowered strings with failover support.
+	// First attempt uses the fast MatchPreLowered; failover (cold path)
+	// switches to MatchPreLoweredFrom to resume from the next rule index.
 	result := r.rules.MatchPreLowered(exeLower, baseLower)
 	if !result.Matched {
 		return "", 0, flowPass, 0
 	}
 
-	// Drop policy always drops.
-	if result.Fallback == core.PolicyDrop {
-		return "", 0, flowDrop, 0
-	}
+	inFailover := false
+	matchIdx := 0 // only used after first failover
 
-	// Check per-tunnel DisallowedApps.
-	if f != nil && f.IsTunnelDisallowedApp(result.TunnelID, exeLower, baseLower) {
-		return "", 0, flowPass, 0
-	}
+	// Safety bound: at most len(rules) iterations to prevent infinite loops.
+	maxIter := len(r.rules.GetRules())
 
-	// Get tunnel entry.
-	entry, ok := r.registry.Get(result.TunnelID)
-	if !ok {
-		if result.Fallback == core.PolicyBlock {
+	for iter := 0; iter < maxIter; iter++ {
+		// On failover iterations, search from the next index.
+		if inFailover {
+			var idx int
+			result, idx = r.rules.MatchPreLoweredFrom(exeLower, baseLower, matchIdx)
+			if !result.Matched {
+				// Failover exhausted — VPN-or-nothing: drop.
+				return "", 0, flowDrop, 0
+			}
+			matchIdx = idx + 1
+		}
+
+		// Drop policy always drops immediately.
+		if result.Fallback == core.PolicyDrop {
 			return "", 0, flowDrop, 0
 		}
-		return "", 0, flowPass, 0
-	}
 
-	if entry.State != core.TunnelStateUp {
-		switch result.Fallback {
-		case core.PolicyBlock:
-			return "", 0, flowDrop, 0
-		case core.PolicyAllowDirect:
+		// Check per-tunnel DisallowedApps.
+		if f != nil && f.IsTunnelDisallowedApp(result.TunnelID, exeLower, baseLower) {
 			return "", 0, flowPass, 0
 		}
-		return "", 0, flowPass, 0
-	}
 
-	// Check IP-based filtering (DisallowedIPs / AllowedIPs).
-	if f != nil && f.ShouldBypassIP(result.TunnelID, dstIP) {
-		return "", 0, flowPass, 0
-	}
+		// Check tunnel availability.
+		entry, ok := r.registry.Get(result.TunnelID)
+		tunnelDown := !ok || entry.State != core.TunnelStateUp
 
-	// Lazy WFP rule: block this process on real NIC.
-	if r.wfp != nil {
-		wfpStart := time.Now()
-		r.wfp.EnsureBlocked(exePath)
-		if wfpElapsed := time.Since(wfpStart); wfpElapsed > time.Millisecond {
-			core.Log.Warnf("Perf", "EnsureBlocked took %s (%s)", wfpElapsed, exePath)
+		if tunnelDown {
+			switch result.Fallback {
+			case core.PolicyFailover:
+				// Set up index for next iteration: if this is the first
+				// failover, we need the index of the current match.
+				if !inFailover {
+					// Find the current match index so we can resume after it.
+					_, idx := r.rules.MatchPreLoweredFrom(exeLower, baseLower, 0)
+					matchIdx = idx + 1
+					inFailover = true
+				}
+				continue
+			case core.PolicyBlock:
+				return "", 0, flowDrop, 0
+			case core.PolicyAllowDirect:
+				return "", 0, flowPass, 0
+			default:
+				return "", 0, flowPass, 0
+			}
 		}
-	}
 
-	if isUDP {
-		udpPort, ok := r.registry.GetUDPProxyPort(result.TunnelID)
-		if !ok {
+		// Tunnel is up — check IP-based filtering (DisallowedIPs / AllowedIPs).
+		if f != nil && f.ShouldBypassIP(result.TunnelID, dstIP) {
 			return "", 0, flowPass, 0
 		}
-		return result.TunnelID, udpPort, flowRoute, result.Priority
+
+		// Lazy WFP rule: block this process on real NIC.
+		if r.wfp != nil {
+			wfpStart := time.Now()
+			r.wfp.EnsureBlocked(exePath)
+			if wfpElapsed := time.Since(wfpStart); wfpElapsed > time.Millisecond {
+				core.Log.Warnf("Perf", "EnsureBlocked took %s (%s)", wfpElapsed, exePath)
+			}
+		}
+
+		if isUDP {
+			udpPort, ok := r.registry.GetUDPProxyPort(result.TunnelID)
+			if !ok {
+				return "", 0, flowPass, 0
+			}
+			return result.TunnelID, udpPort, flowRoute, result.Priority
+		}
+
+		return result.TunnelID, entry.ProxyPort, flowRoute, result.Priority
 	}
 
-	return result.TunnelID, entry.ProxyPort, flowRoute, result.Priority
+	// Safety: loop bound reached — drop to be safe.
+	return "", 0, flowDrop, 0
 }
 
 // ---------------------------------------------------------------------------

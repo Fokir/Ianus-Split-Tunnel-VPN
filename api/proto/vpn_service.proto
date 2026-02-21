@@ -20,6 +20,7 @@ enum FallbackPolicy {
   FALLBACK_ALLOW_DIRECT = 0;
   FALLBACK_BLOCK = 1;
   FALLBACK_DROP = 2;
+  FALLBACK_FAILOVER = 3;
 }
 
 enum LogLevel {

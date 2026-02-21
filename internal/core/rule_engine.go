@@ -86,6 +86,28 @@ func (re *RuleEngine) MatchPreLowered(exeLower, baseLower string) MatchResult {
 	return MatchResult{Matched: false}
 }
 
+// MatchPreLoweredFrom finds the first matching rule starting from startIdx.
+// Returns the match result and the index where the match was found.
+// Used by the failover fallback policy to continue searching from the next rule.
+// Caller must hold no lock — the method acquires RLock internally.
+func (re *RuleEngine) MatchPreLoweredFrom(exeLower, baseLower string, startIdx int) (MatchResult, int) {
+	re.mu.RLock()
+	defer re.mu.RUnlock()
+
+	for i := startIdx; i < len(re.rules); i++ {
+		if process.MatchPreprocessed(exeLower, baseLower, re.rules[i].Pattern, re.rulesLower[i]) {
+			return MatchResult{
+				Matched:  true,
+				TunnelID: re.rules[i].TunnelID,
+				Fallback: re.rules[i].Fallback,
+				Priority: re.rules[i].Priority,
+			}, i
+		}
+	}
+
+	return MatchResult{Matched: false}, -1
+}
+
 // MatchByPID resolves PID to exe path and then matches.
 func (re *RuleEngine) MatchByPID(pid uint32) MatchResult {
 	exePath, ok := re.matcher.GetExePath(pid)
