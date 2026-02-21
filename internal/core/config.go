@@ -132,6 +132,11 @@ type GlobalFilterConfig struct {
 	DisableLocal   bool     `yaml:"disable_local,omitempty"`
 }
 
+// GUIConfig holds GUI-specific settings.
+type GUIConfig struct {
+	RestoreConnections bool `yaml:"restore_connections,omitempty"`
+}
+
 // Config is the top-level application configuration.
 type Config struct {
 	Global  GlobalFilterConfig `yaml:"global,omitempty"`
@@ -139,6 +144,7 @@ type Config struct {
 	Rules   []Rule             `yaml:"rules"`
 	DNS     DNSRouteConfig     `yaml:"dns,omitempty"`
 	Logging LogConfig          `yaml:"logging,omitempty"`
+	GUI     GUIConfig          `yaml:"gui,omitempty"`
 }
 
 // ConfigManager handles loading, saving, and hot-reloading configuration.
@@ -241,6 +247,18 @@ func (cm *ConfigManager) GetRules() []Rule {
 func (cm *ConfigManager) SetRules(rules []Rule) {
 	cm.mu.Lock()
 	cm.config.Rules = rules
+	cm.mu.Unlock()
+
+	if cm.bus != nil {
+		cm.bus.Publish(Event{Type: EventConfigReloaded})
+	}
+}
+
+// SetFromGUI replaces the entire config with values from the GUI.
+// Publishes EventConfigReloaded.
+func (cm *ConfigManager) SetFromGUI(cfg Config) {
+	cm.mu.Lock()
+	cm.config = cfg
 	cm.mu.Unlock()
 
 	if cm.bus != nil {

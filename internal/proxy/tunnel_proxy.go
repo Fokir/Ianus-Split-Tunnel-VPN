@@ -51,6 +51,11 @@ type TunnelProxy struct {
 	conns   map[net.Conn]struct{}
 }
 
+// Port returns the proxy listen port.
+func (tp *TunnelProxy) Port() uint16 {
+	return tp.port
+}
+
 // NewTunnelProxy creates a proxy that listens on the given port.
 func NewTunnelProxy(port uint16, natLookup NATLookup, providerLookup ProviderLookup) *TunnelProxy {
 	return &TunnelProxy{
@@ -96,11 +101,6 @@ func (tp *TunnelProxy) Stop() {
 
 	tp.wg.Wait()
 	core.Log.Infof("Proxy", "Stopped (port %d)", tp.port)
-}
-
-// Port returns the port this proxy listens on.
-func (tp *TunnelProxy) Port() uint16 {
-	return tp.port
 }
 
 func (tp *TunnelProxy) trackConn(c net.Conn) {

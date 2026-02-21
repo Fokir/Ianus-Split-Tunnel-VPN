@@ -67,6 +67,11 @@ type UDPProxy struct {
 	cancel context.CancelFunc
 }
 
+// Port returns the proxy listen port.
+func (up *UDPProxy) Port() uint16 {
+	return up.port
+}
+
 // NewUDPProxy creates a UDP proxy that listens on the given port.
 func NewUDPProxy(port uint16, natLookup UDPNATLookup, providerLookup ProviderLookup) *UDPProxy {
 	return &UDPProxy{
@@ -119,11 +124,6 @@ func (up *UDPProxy) Stop() {
 
 	up.wg.Wait()
 	core.Log.Infof("Proxy", "UDP stopped (port %d)", up.port)
-}
-
-// Port returns the port this proxy listens on.
-func (up *UDPProxy) Port() uint16 {
-	return up.port
 }
 
 // readLoop reads datagrams from the listener and dispatches them.

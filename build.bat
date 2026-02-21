@@ -28,11 +28,60 @@ set LDFLAGS=-s -w -X "main.version=%VERSION%" -X "main.commit=%COMMIT%" -X "main
 
 if not exist "%OUT_DIR%" mkdir "%OUT_DIR%"
 
-echo Building %APP_NAME% %VERSION% ...
+:: ── Frontend build ──────────────────────────────────────────────────
+echo.
+echo [1/4] Installing frontend dependencies...
+pushd ui\frontend
+call npm install --silent
+if %ERRORLEVEL% NEQ 0 (
+    popd
+    echo Frontend npm install FAILED
+    exit /b 1
+)
+
+echo [2/4] Building frontend...
+call npm run build
+if %ERRORLEVEL% NEQ 0 (
+    popd
+    echo Frontend build FAILED
+    exit /b 1
+)
+popd
+
+:: ── Wails bindings ──────────────────────────────────────────────────
+echo [3/4] Generating Wails bindings...
+pushd ui
+wails3 generate bindings
+if %ERRORLEVEL% NEQ 0 (
+    popd
+    echo Wails binding generation FAILED
+    exit /b 1
+)
+popd
+
+:: Move bindings to frontend directory (wails3 generates at project root).
+if exist frontend\bindings (
+    if exist ui\frontend\bindings rmdir /s /q ui\frontend\bindings
+    move /Y frontend\bindings ui\frontend\bindings >nul
+    rmdir frontend 2>nul
+)
+
+:: ── Go builds ───────────────────────────────────────────────────────
+echo [4/4] Building Go binaries (%VERSION%)...
+
+echo   - %APP_NAME%.exe (VPN service)
 go build -ldflags "%LDFLAGS%" -o "%BINARY%" %CMD_DIR%
 
 if %ERRORLEVEL% NEQ 0 (
-    echo Build FAILED
+    echo VPN service build FAILED
+    exit /b 1
+)
+
+echo   - %APP_NAME%-ui.exe (GUI)
+go build -ldflags "%LDFLAGS% -H windowsgui" -o "%OUT_DIR%\%APP_NAME%-ui.exe" .\ui\
+
+if %ERRORLEVEL% NEQ 0 (
+    echo GUI build FAILED
     exit /b 1
 )
 
@@ -46,4 +95,7 @@ if exist "%OUT_DIR%\wintun.dll" (
     echo WARNING: dll\wintun.dll not found — adapter will fail at runtime
 )
 
-echo Built %BINARY% (%VERSION%)
+echo.
+echo Built successfully (%VERSION%):
+echo   %OUT_DIR%\%APP_NAME%.exe       (VPN service)
+echo   %OUT_DIR%\%APP_NAME%-ui.exe    (GUI)

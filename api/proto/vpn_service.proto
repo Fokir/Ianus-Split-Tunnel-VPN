@@ -1,0 +1,310 @@
+syntax = "proto3";
+
+package awg.vpn.v1;
+
+option go_package = "awg-split-tunnel/api/gen;vpnapi";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+// ─── Enums ──────────────────────────────────────────────────────────
+
+enum TunnelState {
+  TUNNEL_STATE_DOWN = 0;
+  TUNNEL_STATE_CONNECTING = 1;
+  TUNNEL_STATE_UP = 2;
+  TUNNEL_STATE_ERROR = 3;
+}
+
+enum FallbackPolicy {
+  FALLBACK_ALLOW_DIRECT = 0;
+  FALLBACK_BLOCK = 1;
+  FALLBACK_DROP = 2;
+}
+
+enum LogLevel {
+  LOG_LEVEL_DEBUG = 0;
+  LOG_LEVEL_INFO = 1;
+  LOG_LEVEL_WARN = 2;
+  LOG_LEVEL_ERROR = 3;
+  LOG_LEVEL_OFF = 4;
+}
+
+// ─── Tunnel messages ────────────────────────────────────────────────
+
+message TunnelConfig {
+  string id = 1;
+  string protocol = 2;
+  string name = 3;
+  map<string, string> settings = 4;
+  repeated string allowed_ips = 5;
+  repeated string disallowed_ips = 6;
+  repeated string disallowed_apps = 7;
+}
+
+message TunnelStatus {
+  string id = 1;
+  TunnelConfig config = 2;
+  TunnelState state = 3;
+  string error = 4;          // error message if state == ERROR
+  string adapter_ip = 5;     // VPN adapter IP (e.g. "10.8.1.2")
+}
+
+// ─── Rule messages ──────────────────────────────────────────────────
+
+message Rule {
+  string pattern = 1;
+  string tunnel_id = 2;       // empty for drop-only rules
+  FallbackPolicy fallback = 3;
+}
+
+// ─── DNS config ─────────────────────────────────────────────────────
+
+message DNSCacheConfig {
+  bool enabled = 1;
+  int32 max_size = 2;
+  string min_ttl = 3;         // duration string, e.g. "30s"
+  string max_ttl = 4;         // duration string, e.g. "5m"
+  string neg_ttl = 5;         // duration string, e.g. "60s"
+}
+
+message DNSConfig {
+  string tunnel_id = 1;       // tunnel for DNS routing
+  repeated string servers = 2;
+  DNSCacheConfig cache = 3;
+}
+
+// ─── Global filter config ───────────────────────────────────────────
+
+message GlobalFilterConfig {
+  repeated string allowed_ips = 1;
+  repeated string disallowed_ips = 2;
+  repeated string disallowed_apps = 3;
+  bool disable_local = 4;
+}
+
+// ─── Logging config ─────────────────────────────────────────────────
+
+message LogConfig {
+  string level = 1;           // "debug", "info", "warn", "error", "off"
+  map<string, string> components = 2;  // per-component overrides
+}
+
+// ─── Full config ────────────────────────────────────────────────────
+
+message AppConfig {
+  GlobalFilterConfig global = 1;
+  repeated TunnelConfig tunnels = 2;
+  repeated Rule rules = 3;
+  DNSConfig dns = 4;
+  LogConfig logging = 5;
+}
+
+// ─── Stats messages ─────────────────────────────────────────────────
+
+message TunnelStats {
+  string tunnel_id = 1;
+  TunnelState state = 2;
+  int64 bytes_tx = 3;         // total bytes sent
+  int64 bytes_rx = 4;         // total bytes received
+  int64 speed_tx = 5;         // bytes/sec upload
+  int64 speed_rx = 6;         // bytes/sec download
+  double packet_loss = 7;     // 0.0-1.0, fraction of lost packets
+  int64 latency_ms = 8;       // RTT in milliseconds
+  google.protobuf.Timestamp last_handshake = 9;
+}
+
+message StatsSnapshot {
+  repeated TunnelStats tunnels = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// ─── Log messages ───────────────────────────────────────────────────
+
+message LogEntry {
+  google.protobuf.Timestamp timestamp = 1;
+  LogLevel level = 2;
+  string tag = 3;             // "[Core]", "[Gateway]", etc.
+  string message = 4;
+}
+
+// ─── Process messages ───────────────────────────────────────────────
+
+message ProcessInfo {
+  uint32 pid = 1;
+  string name = 2;            // exe file name
+  string path = 3;            // full exe path
+}
+
+// ─── Request / Response messages ────────────────────────────────────
+
+// -- Tunnel management --
+
+message ConnectRequest {
+  string tunnel_id = 1;       // specific tunnel, or empty for all
+}
+
+message ConnectResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message DisconnectRequest {
+  string tunnel_id = 1;       // specific tunnel, or empty for all
+}
+
+message DisconnectResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message AddTunnelRequest {
+  TunnelConfig config = 1;
+  bytes config_file_data = 2; // raw .conf file content (for AWG)
+}
+
+message AddTunnelResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message RemoveTunnelRequest {
+  string tunnel_id = 1;
+}
+
+message RemoveTunnelResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message UpdateTunnelRequest {
+  TunnelConfig config = 1;
+}
+
+message UpdateTunnelResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetTunnelRequest {
+  string tunnel_id = 1;
+}
+
+message TunnelListResponse {
+  repeated TunnelStatus tunnels = 1;
+}
+
+// -- Rules --
+
+message RuleListResponse {
+  repeated Rule rules = 1;
+}
+
+message SaveRulesRequest {
+  repeated Rule rules = 1;
+}
+
+message SaveRulesResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// -- Config --
+
+message SaveConfigRequest {
+  AppConfig config = 1;
+  bool restart_if_connected = 2;
+}
+
+message SaveConfigResponse {
+  bool success = 1;
+  string error = 2;
+  bool restarted = 3;         // true if VPN was restarted
+}
+
+// -- Logs --
+
+message LogStreamRequest {
+  LogLevel min_level = 1;     // minimum level to stream
+  string tag_filter = 2;      // optional: filter by tag
+  int32 tail_lines = 3;       // send last N lines first (0 = no history)
+}
+
+// -- Stats --
+
+message StatsStreamRequest {
+  int32 interval_ms = 1;      // update interval (default: 1000)
+}
+
+// -- Process listing --
+
+message ProcessListRequest {
+  string name_filter = 1;     // optional: filter by name substring
+}
+
+message ProcessListResponse {
+  repeated ProcessInfo processes = 1;
+}
+
+// -- Service status --
+
+message ServiceStatus {
+  bool running = 1;
+  int32 active_tunnels = 2;
+  int32 total_tunnels = 3;
+  string version = 4;
+  int64 uptime_seconds = 5;
+}
+
+// -- Autostart --
+
+message AutostartConfig {
+  bool enabled = 1;
+  bool restore_connections = 2;  // auto-connect on startup
+}
+
+message SetAutostartRequest {
+  AutostartConfig config = 1;
+}
+
+message SetAutostartResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ─── Service definition ─────────────────────────────────────────────
+
+service VPNService {
+  // -- Service lifecycle --
+  rpc GetStatus(google.protobuf.Empty) returns (ServiceStatus);
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  // -- Tunnel management --
+  rpc ListTunnels(google.protobuf.Empty) returns (TunnelListResponse);
+  rpc GetTunnel(GetTunnelRequest) returns (TunnelStatus);
+  rpc AddTunnel(AddTunnelRequest) returns (AddTunnelResponse);
+  rpc RemoveTunnel(RemoveTunnelRequest) returns (RemoveTunnelResponse);
+  rpc UpdateTunnel(UpdateTunnelRequest) returns (UpdateTunnelResponse);
+  rpc Connect(ConnectRequest) returns (ConnectResponse);
+  rpc Disconnect(DisconnectRequest) returns (DisconnectResponse);
+  rpc RestartTunnel(ConnectRequest) returns (ConnectResponse);
+
+  // -- Rules --
+  rpc ListRules(google.protobuf.Empty) returns (RuleListResponse);
+  rpc SaveRules(SaveRulesRequest) returns (SaveRulesResponse);
+
+  // -- Config --
+  rpc GetConfig(google.protobuf.Empty) returns (AppConfig);
+  rpc SaveConfig(SaveConfigRequest) returns (SaveConfigResponse);
+
+  // -- Streaming --
+  rpc StreamLogs(LogStreamRequest) returns (stream LogEntry);
+  rpc StreamStats(StatsStreamRequest) returns (stream StatsSnapshot);
+
+  // -- Processes --
+  rpc ListProcesses(ProcessListRequest) returns (ProcessListResponse);
+
+  // -- Autostart --
+  rpc GetAutostart(google.protobuf.Empty) returns (AutostartConfig);
+  rpc SetAutostart(SetAutostartRequest) returns (SetAutostartResponse);
+}

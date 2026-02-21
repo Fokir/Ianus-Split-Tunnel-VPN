@@ -16,11 +16,13 @@ import (
 
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/gateway"
+	"awg-split-tunnel/internal/ipc"
 	"awg-split-tunnel/internal/process"
 	"awg-split-tunnel/internal/provider"
 	"awg-split-tunnel/internal/provider/amneziawg"
 	"awg-split-tunnel/internal/provider/direct"
 	"awg-split-tunnel/internal/proxy"
+	"awg-split-tunnel/internal/service"
 )
 
 // Build info — injected via ldflags at compile time.
@@ -251,6 +253,53 @@ func main() {
 		}
 	}
 
+	// === 10a. Create TunnelController and register existing tunnels ===
+	tunnelCtrl := service.NewTunnelController(ctx, service.ControllerDeps{
+		Registry:       registry,
+		Bus:            bus,
+		Flows:          flows,
+		TUNRouter:      tunRouter,
+		RouteMgr:       routeMgr,
+		WFPMgr:         wfpMgr,
+		Adapter:        adapter,
+		DNSRouter:      dnsRouter,
+		RealNICIndex:   realNIC.Index,
+		RealNICLocalIP: realNIC.LocalIP,
+		RealNICLUID:    realNIC.LUID,
+		Providers:      providers,
+	}, nextProxyPort)
+
+	// Register all VPN tunnels created above with the controller.
+	for _, tcfg := range cfg.Tunnels {
+		if prov, ok := providers[tcfg.ID]; ok {
+			entry, entryOk := registry.Get(tcfg.ID)
+			if !entryOk {
+				continue
+			}
+			// Find corresponding proxies by port.
+			var tunnelTP *proxy.TunnelProxy
+			var tunnelUP *proxy.UDPProxy
+			for _, p := range proxies {
+				if p.Port() == entry.ProxyPort {
+					tunnelTP = p
+					break
+				}
+			}
+			for _, p := range udpProxies {
+				if p.Port() == entry.UDPProxyPort {
+					tunnelUP = p
+					break
+				}
+			}
+			if tunnelTP != nil && tunnelUP != nil {
+				tunnelCtrl.RegisterExistingTunnel(
+					tcfg.ID, prov, tunnelTP, tunnelUP,
+					entry.ProxyPort, entry.UDPProxyPort, tcfg,
+				)
+			}
+		}
+	}
+
 	// === 11. Set default route via TUN (LAST — after all bypass routes) ===
 	if err := routeMgr.SetDefaultRoute(); err != nil {
 		core.Log.Fatalf("Core", "Failed to set default route: %v", err)
@@ -297,6 +346,25 @@ func main() {
 		core.Log.Infof("Rule", "  %s → tunnel=%q fallback=%s", r.Pattern, r.TunnelID, r.Fallback)
 	}
 
+	// === 13. Start gRPC IPC server for GUI communication ===
+	svc := service.New(service.Config{
+		ConfigManager:  cfgManager,
+		TunnelRegistry: registry,
+		RuleEngine:     ruleEngine,
+		EventBus:       bus,
+		TunnelCtrl:     tunnelCtrl,
+		Version:        version,
+	})
+	svc.Start(ctx)
+
+	ipcServer := ipc.NewServer(svc)
+	go func() {
+		core.Log.Infof("Core", "IPC server starting on %s", ipc.PipeName)
+		if err := ipcServer.Start(); err != nil {
+			core.Log.Errorf("Core", "IPC server error: %v", err)
+		}
+	}()
+
 	// --- Wait for shutdown signal ---
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -309,6 +377,10 @@ func main() {
 
 	done := make(chan struct{})
 	go func() {
+		// 0. Stop IPC server and service.
+		ipcServer.Stop()
+		svc.Stop()
+
 		// 1. Stop DNS Resolver
 		if dnsResolver != nil {
 			dnsResolver.Stop()
