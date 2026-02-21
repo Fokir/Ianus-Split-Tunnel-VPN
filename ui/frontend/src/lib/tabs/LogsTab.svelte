@@ -1,33 +1,15 @@
 <script>
-  import { onMount, onDestroy, afterUpdate, tick } from 'svelte';
-  import { Events } from '@wailsio/runtime';
+  import { afterUpdate } from 'svelte';
+  import { Clipboard, Dialogs, Call } from '@wailsio/runtime';
+  import { logStore } from '../stores/logs.js';
 
-  let logs = [];
   let autoScroll = true;
   let logsContainer;
   let levelFilter = 'DEBUG';
   let tagFilter = '';
+  let copiedIndex = -1;
 
   const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
-
-  // Subscribe to log stream events from backend
-  let unsubscribe;
-
-  onMount(() => {
-    unsubscribe = Events.On('log-entry', (event) => {
-      const entry = event.data;
-      if (!entry) return;
-      logs = [...logs, entry];
-      // Cap at 5000 entries
-      if (logs.length > 5000) {
-        logs = logs.slice(logs.length - 5000);
-      }
-    });
-  });
-
-  onDestroy(() => {
-    if (unsubscribe) unsubscribe();
-  });
 
   afterUpdate(() => {
     if (autoScroll && logsContainer) {
@@ -38,12 +20,11 @@
   function handleScroll() {
     if (!logsContainer) return;
     const { scrollTop, scrollHeight, clientHeight } = logsContainer;
-    // Auto-scroll if within 50px of bottom
     autoScroll = scrollHeight - scrollTop - clientHeight < 50;
   }
 
   function clearLogs() {
-    logs = [];
+    logStore.clear();
   }
 
   function scrollToBottom() {
@@ -51,6 +32,30 @@
     if (logsContainer) {
       logsContainer.scrollTop = logsContainer.scrollHeight;
     }
+  }
+
+  function formatEntry(entry) {
+    const ts = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString('ru-RU') : '';
+    const tag = entry.tag ? ` [${entry.tag}]` : '';
+    return `${ts} [${entry.level || ''}]${tag} ${entry.message || ''}`;
+  }
+
+  async function copyEntry(entry, index) {
+    await Clipboard.SetText(formatEntry(entry));
+    copiedIndex = index;
+    setTimeout(() => { copiedIndex = -1; }, 1500);
+  }
+
+  async function saveLogs() {
+    const path = await Dialogs.SaveFile({
+      Title: 'Сохранить логи',
+      Filename: `awg-logs-${new Date().toISOString().slice(0, 10)}.log`,
+      Filters: [{ DisplayName: 'Log files', Pattern: '*.log;*.txt' }],
+    });
+    if (!path) return;
+
+    const content = filteredLogs.map(formatEntry).join('\n');
+    await Call.ByName("main.BindingService.SaveLogsToFile", path, content);
   }
 
   function levelColor(level) {
@@ -64,7 +69,6 @@
   }
 
   function tagColor(tag) {
-    // Stable color based on tag string hash
     const colors = [
       'text-cyan-400', 'text-violet-400', 'text-emerald-400',
       'text-orange-400', 'text-pink-400', 'text-teal-400',
@@ -76,7 +80,7 @@
     return colors[Math.abs(hash) % colors.length];
   }
 
-  $: filteredLogs = logs.filter(entry => {
+  $: filteredLogs = $logStore.filter(entry => {
     const levelIdx = levels.indexOf(entry.level);
     const filterIdx = levels.indexOf(levelFilter);
     if (levelIdx < filterIdx) return false;
@@ -119,6 +123,14 @@
 
     <button
       class="px-2 py-1 text-xs bg-zinc-700/50 text-zinc-400 rounded hover:bg-zinc-700 transition-colors"
+      on:click={saveLogs}
+      title="Сохранить логи в файл"
+    >
+      Сохранить
+    </button>
+
+    <button
+      class="px-2 py-1 text-xs bg-zinc-700/50 text-zinc-400 rounded hover:bg-zinc-700 transition-colors"
       on:click={clearLogs}
     >
       Очистить
@@ -136,8 +148,17 @@
         Нет записей логов
       </div>
     {:else}
-      {#each filteredLogs as entry}
-        <div class="flex gap-2 py-0.5 hover:bg-zinc-800/30">
+      {#each filteredLogs as entry, i}
+        <div
+          class="flex gap-2 py-0.5 hover:bg-zinc-800/30 cursor-pointer rounded transition-colors"
+          class:bg-green-900={copiedIndex === i}
+          style="background-color: {copiedIndex === i ? 'rgba(20, 83, 45, 0.2)' : 'transparent'}"
+          role="button"
+          tabindex="0"
+          on:click={() => copyEntry(entry, i)}
+          on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') copyEntry(entry, i); }}
+          title="Нажмите чтобы скопировать"
+        >
           <span class="text-zinc-600 shrink-0 w-18 tabular-nums">
             {entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString('ru-RU') : ''}
           </span>
@@ -150,6 +171,9 @@
             </span>
           {/if}
           <span class="text-zinc-300 break-all">{entry.message || ''}</span>
+          {#if copiedIndex === i}
+            <span class="shrink-0 text-green-400 ml-auto pr-1">Скопировано</span>
+          {/if}
         </div>
       {/each}
     {/if}

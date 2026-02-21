@@ -56,6 +56,11 @@ func main() {
 
 	// Initialize logger from config.
 	core.Log = core.NewLogger(cfg.Logging)
+
+	// Start log streamer early so it captures ALL log messages from the start.
+	logStreamer := service.NewLogStreamer(bus)
+	logStreamer.Start()
+
 	core.Log.Infof("Core", "AWG Split Tunnel %s starting...", version)
 
 	registry := core.NewTunnelRegistry(bus)
@@ -353,6 +358,7 @@ func main() {
 		RuleEngine:     ruleEngine,
 		EventBus:       bus,
 		TunnelCtrl:     tunnelCtrl,
+		LogStreamer:    logStreamer,
 		Version:        version,
 	})
 	svc.Start(ctx)

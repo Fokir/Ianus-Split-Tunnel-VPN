@@ -5,6 +5,12 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
 
 	vpnapi "awg-split-tunnel/api/gen"
 	"awg-split-tunnel/internal/ipc"
@@ -15,7 +21,8 @@ import (
 // BindingService is exposed to the Svelte frontend via Wails bindings.
 // Each public method becomes callable from JavaScript.
 type BindingService struct {
-	client *ipc.Client
+	client        *ipc.Client
+	logStreamOnce sync.Once
 }
 
 // NewBindingService creates a BindingService wrapping the IPC client.
@@ -328,4 +335,69 @@ func (b *BindingService) SetAutostart(enabled bool) error {
 		return errors.New(resp.Error)
 	}
 	return nil
+}
+
+// ─── Log streaming ──────────────────────────────────────────────────
+
+// StartLogStream begins streaming logs from the VPN service and emitting
+// them as Wails "log-entry" events. Safe to call multiple times; only the
+// first call starts the stream. Called by the frontend when the log store
+// is initialized, guaranteeing no events are lost.
+func (b *BindingService) StartLogStream() {
+	b.logStreamOnce.Do(func() {
+		go b.runLogStream()
+	})
+}
+
+func (b *BindingService) runLogStream() {
+	app := application.Get()
+	ctx := context.Background()
+
+	stream, err := b.client.Service.StreamLogs(ctx, &vpnapi.LogStreamRequest{
+		MinLevel:  vpnapi.LogLevel_LOG_LEVEL_DEBUG,
+		TailLines: 1000,
+	})
+	if err != nil {
+		log.Printf("[UI] Failed to start log stream: %v", err)
+		return
+	}
+
+	for {
+		entry, err := stream.Recv()
+		if err != nil {
+			return
+		}
+
+		var ts string
+		if entry.Timestamp != nil {
+			ts = entry.Timestamp.AsTime().Format(time.RFC3339Nano)
+		}
+
+		app.Event.Emit("log-entry", map[string]interface{}{
+			"timestamp": ts,
+			"level":     logLevelStr(entry.Level),
+			"tag":       entry.Tag,
+			"message":   entry.Message,
+		})
+	}
+}
+
+func logLevelStr(l vpnapi.LogLevel) string {
+	switch l {
+	case vpnapi.LogLevel_LOG_LEVEL_DEBUG:
+		return "DEBUG"
+	case vpnapi.LogLevel_LOG_LEVEL_INFO:
+		return "INFO"
+	case vpnapi.LogLevel_LOG_LEVEL_WARN:
+		return "WARN"
+	case vpnapi.LogLevel_LOG_LEVEL_ERROR:
+		return "ERROR"
+	default:
+		return "INFO"
+	}
+}
+
+// SaveLogsToFile writes log content to the specified file path.
+func (b *BindingService) SaveLogsToFile(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0644)
 }

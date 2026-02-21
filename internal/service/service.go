@@ -55,12 +55,13 @@ type Service struct {
 
 // Config holds parameters for creating a new Service.
 type Config struct {
-	ConfigManager   *core.ConfigManager
-	TunnelRegistry  *core.TunnelRegistry
-	RuleEngine      *core.RuleEngine
-	EventBus        *core.EventBus
-	TunnelCtrl      TunnelController
-	Version         string
+	ConfigManager  *core.ConfigManager
+	TunnelRegistry *core.TunnelRegistry
+	RuleEngine     *core.RuleEngine
+	EventBus       *core.EventBus
+	TunnelCtrl     TunnelController
+	LogStreamer    *LogStreamer
+	Version        string
 }
 
 // New creates a new Service instance.
@@ -74,7 +75,11 @@ func New(c Config) *Service {
 		version:   c.Version,
 		startTime: time.Now(),
 	}
-	s.logs = NewLogStreamer(c.EventBus)
+	if c.LogStreamer != nil {
+		s.logs = c.LogStreamer
+	} else {
+		s.logs = NewLogStreamer(c.EventBus)
+	}
 	s.stats = NewStatsCollector(c.TunnelRegistry, c.EventBus)
 	return s
 }
