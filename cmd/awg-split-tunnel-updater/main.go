@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 
 	"awg-split-tunnel/internal/winsvc"
 )
@@ -138,15 +141,31 @@ func waitForProcessExit(installDir string, timeout time.Duration) error {
 		}
 	}
 
-	// Wait for the GUI process to exit.
-	deadline := time.Now().Add(timeout)
+	// Give the GUI a few seconds to notice the service is gone and exit on its own.
+	gracePeriod := 5 * time.Second
+	if gracePeriod > timeout {
+		gracePeriod = timeout
+	}
+	deadline := time.Now().Add(gracePeriod)
 	for time.Now().Before(deadline) {
 		if !isProcessRunning("awg-split-tunnel-ui.exe") {
 			return nil
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("timeout waiting for processes to exit")
+
+	// GUI didn't exit gracefully — force kill it.
+	_ = exec.Command("taskkill", "/F", "/IM", "awg-split-tunnel-ui.exe").Run()
+
+	// Wait for the process to actually terminate.
+	deadline = time.Now().Add(timeout - gracePeriod)
+	for time.Now().Before(deadline) {
+		if !isProcessRunning("awg-split-tunnel-ui.exe") {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout waiting for GUI to exit after taskkill")
 }
 
 // isProcessRunning checks if a process with the given name is running.
@@ -255,41 +274,69 @@ func verifyService(timeout time.Duration) error {
 	return fmt.Errorf("service not responsive within %s", timeout)
 }
 
-// launchGUIProcess starts the GUI executable.
-// When running as LocalSystem, this creates a scheduled task to run in the user's session.
+var (
+	modkernel32                      = windows.NewLazySystemDLL("kernel32.dll")
+	procWTSGetActiveConsoleSessionId = modkernel32.NewProc("WTSGetActiveConsoleSessionId")
+)
+
+func wtsGetActiveConsoleSessionId() uint32 {
+	r, _, _ := procWTSGetActiveConsoleSessionId.Call()
+	return uint32(r)
+}
+
+// launchGUIProcess starts the GUI executable in the active user's desktop session.
+// The updater runs as LocalSystem, so we use CreateProcessAsUser to launch in the user's session.
 func launchGUIProcess(guiPath string) error {
-	// Use a run-once scheduled task to launch GUI in the active user session.
-	taskName := "AWGSplitTunnelGUILaunch"
-
-	// Delete any existing task first.
-	_ = exec.Command("schtasks", "/Delete", "/TN", taskName, "/F").Run()
-
-	// Create a run-once task that runs immediately in the interactive session.
-	cmd := exec.Command("schtasks", "/Create",
-		"/TN", taskName,
-		"/TR", fmt.Sprintf(`"%s" --minimized`, guiPath),
-		"/SC", "ONCE",
-		"/ST", "00:00",
-		"/RL", "LIMITED",
-		"/IT",
-		"/F",
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("create task: %s: %w", strings.TrimSpace(string(out)), err)
+	// Find the active console session.
+	sessionId := wtsGetActiveConsoleSessionId()
+	if sessionId == 0xFFFFFFFF {
+		return fmt.Errorf("no active console session")
 	}
 
-	// Run the task immediately.
-	cmd = exec.Command("schtasks", "/Run", "/TN", taskName)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("run task: %s: %w", strings.TrimSpace(string(out)), err)
+	// Get the user token for that session.
+	var userToken windows.Token
+	if err := windows.WTSQueryUserToken(sessionId, &userToken); err != nil {
+		return fmt.Errorf("WTSQueryUserToken(session=%d): %w", sessionId, err)
+	}
+	defer userToken.Close()
+
+	// Create environment block for the user.
+	var envBlock *uint16
+	if err := windows.CreateEnvironmentBlock(&envBlock, userToken, false); err != nil {
+		return fmt.Errorf("CreateEnvironmentBlock: %w", err)
+	}
+	defer windows.DestroyEnvironmentBlock(envBlock)
+
+	// Prepare command line and startup info.
+	exe, _ := windows.UTF16PtrFromString(guiPath)
+	cmdLine, _ := windows.UTF16PtrFromString(fmt.Sprintf(`"%s" --minimized`, guiPath))
+	workDir, _ := windows.UTF16PtrFromString(filepath.Dir(guiPath))
+	desktop, _ := windows.UTF16PtrFromString(`winsta0\default`)
+
+	si := &windows.StartupInfo{
+		Cb:      uint32(unsafe.Sizeof(windows.StartupInfo{})),
+		Desktop: desktop,
+	}
+	pi := &windows.ProcessInformation{}
+
+	// Launch the process in the user's session.
+	if err := windows.CreateProcessAsUser(
+		userToken,
+		exe,
+		cmdLine,
+		nil, nil,
+		false,
+		windows.CREATE_DEFAULT_ERROR_MODE|windows.CREATE_UNICODE_ENVIRONMENT,
+		envBlock,
+		workDir,
+		si,
+		pi,
+	); err != nil {
+		return fmt.Errorf("CreateProcessAsUser: %w", err)
 	}
 
-	// Clean up the task after a delay.
-	go func() {
-		time.Sleep(5 * time.Second)
-		_ = exec.Command("schtasks", "/Delete", "/TN", taskName, "/F").Run()
-	}()
-
+	windows.CloseHandle(pi.Thread)
+	windows.CloseHandle(pi.Process)
 	return nil
 }
 
