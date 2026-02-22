@@ -86,6 +86,25 @@
     config.dns.servers = [...config.dns.servers];
     markDirty();
   }
+
+  function handleIpv4Input(e, index) {
+    const filtered = e.target.value.replace(/[^0-9.]/g, '');
+    e.target.value = filtered;
+    updateDnsServer(index, filtered);
+  }
+
+  function isValidIpv4(value) {
+    if (!value) return true;
+    const octets = value.split('.');
+    if (octets.length !== 4) return false;
+    for (const o of octets) {
+      if (!o || o.length > 3) return false;
+      const n = parseInt(o, 10);
+      if (isNaN(n) || n < 0 || n > 255) return false;
+      if (o.length > 1 && o[0] === '0') return false;
+    }
+    return true;
+  }
 </script>
 
 <div class="p-4 space-y-6">
@@ -192,9 +211,9 @@
                 <input
                   type="text"
                   value={server}
-                  on:input={e => updateDnsServer(i, e.target.value)}
-                  placeholder="IP адрес"
-                  class="flex-1 px-3 py-1.5 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50 font-mono"
+                  on:input={e => handleIpv4Input(e, i)}
+                  placeholder="0.0.0.0"
+                  class="flex-1 px-3 py-1.5 text-sm bg-zinc-900 border rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none font-mono {server && !isValidIpv4(server) ? 'border-red-500/60 focus:border-red-500/80' : 'border-zinc-700 focus:border-blue-500/50'}"
                 />
                 <button
                   class="px-2 text-zinc-500 hover:text-red-400 transition-colors"
