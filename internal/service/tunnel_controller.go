@@ -544,6 +544,24 @@ func applyVLESSSettings(cfg *core.TunnelConfig, vc vless.Config) {
 			"service_name": vc.GRPC.ServiceName,
 		}
 	}
+	if vc.Network == "xhttp" || vc.Network == "splithttp" {
+		xhttp := map[string]any{}
+		if vc.XHTTP.Path != "" {
+			xhttp["path"] = vc.XHTTP.Path
+		}
+		if vc.XHTTP.Host != "" {
+			xhttp["host"] = vc.XHTTP.Host
+		}
+		if vc.XHTTP.Mode != "" {
+			xhttp["mode"] = vc.XHTTP.Mode
+		}
+		if len(vc.XHTTP.Extra) > 0 {
+			xhttp["extra"] = vc.XHTTP.Extra
+		}
+		if len(xhttp) > 0 {
+			cfg.Settings["xhttp"] = xhttp
+		}
+	}
 }
 
 // ─── ID generation & config persistence ─────────────────────────────
