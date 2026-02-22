@@ -4,6 +4,9 @@ setlocal EnableDelayedExpansion
 :: AWG Split Tunnel — Release build script
 :: Builds all binaries, runs NSIS installer, creates release zip
 
+:: Change to project root (parent of scripts/).
+cd /d "%~dp0.."
+
 set APP_NAME=awg-split-tunnel
 set OUT_DIR=.\build
 set NSIS_DIR=.\ui\build\windows\nsis
@@ -20,7 +23,7 @@ echo.
 
 :: ── Step 1: Build all binaries ──────────────────────────────────────
 echo [1/3] Building all binaries...
-call build.bat
+call "%~dp0..\build.bat"
 if %ERRORLEVEL% NEQ 0 (
     echo Build FAILED
     exit /b 1
@@ -73,7 +76,11 @@ if not exist "%ABS_CONFIG%" (
 set NSIS_ARGS=-DARG_WAILS_AMD64_BINARY="%ABS_GUI%"
 set NSIS_ARGS=%NSIS_ARGS% -DARG_SERVICE_BINARY="%ABS_SERVICE%"
 set NSIS_ARGS=%NSIS_ARGS% -DARG_UPDATER_BINARY="%ABS_UPDATER%"
-set NSIS_ARGS=%NSIS_ARGS% -DINFO_PRODUCTVERSION="%VERSION%"
+:: Strip 'v' prefix and any suffix after dash for NSIS (needs X.X.X format).
+set NSIS_VERSION=%VERSION%
+if "%NSIS_VERSION:~0,1%"=="v" set NSIS_VERSION=%NSIS_VERSION:~1%
+for /f "tokens=1 delims=-" %%a in ("%NSIS_VERSION%") do set NSIS_VERSION=%%a
+set NSIS_ARGS=%NSIS_ARGS% -DINFO_PRODUCTVERSION="%NSIS_VERSION%"
 
 if exist "%ABS_WINTUN%" (
     set NSIS_ARGS=%NSIS_ARGS% -DARG_WINTUN_DLL="%ABS_WINTUN%"
