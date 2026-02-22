@@ -139,6 +139,11 @@ func runVPN(configPath string) error {
 		return fmt.Errorf("failed to create WFP manager: %w", err)
 	}
 
+	// === 4a. Block all IPv6 traffic ===
+	if err := wfpMgr.BlockAllIPv6(); err != nil {
+		core.Log.Warnf("WFP", "Failed to block IPv6: %v", err)
+	}
+
 	// === 5. Flow Table + Process Identifier ===
 	flows := gateway.NewFlowTable()
 	procID := gateway.NewProcessIdentifier()

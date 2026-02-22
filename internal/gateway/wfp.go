@@ -392,6 +392,70 @@ func (w *WFPManager) PermitDNSForSelf(ifLUID uint64) error {
 	return nil
 }
 
+// BlockAllIPv6 adds WFP rules that block all IPv6 traffic (except loopback)
+// while the VPN session is active. This prevents IPv6 leaks since the project
+// is IPv4-only. Rules are stored under "__ipv6_block__" key and auto-removed
+// when the Dynamic=true session closes.
+func (w *WFPManager) BlockAllIPv6() error {
+	const key = "__ipv6_block__"
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if _, exists := w.rules[key]; exists {
+		return nil
+	}
+
+	var ruleIDs []wf.RuleID
+
+	// Rule 1: Block all outbound IPv6 connections (except loopback).
+	connectRuleID := w.nextRuleID()
+	if err := w.session.AddRule(&wf.Rule{
+		ID:       connectRuleID,
+		Name:     "AWG block IPv6 connect",
+		Layer:    wf.LayerALEAuthConnectV6,
+		Sublayer: awgSublayerID,
+		Weight:   500,
+		Conditions: []*wf.Match{
+			{
+				Field: wf.FieldFlags,
+				Op:    wf.MatchTypeFlagsNoneSet,
+				Value: wf.ConditionFlagIsLoopback,
+			},
+		},
+		Action: wf.ActionBlock,
+	}); err != nil {
+		return fmt.Errorf("[WFP] add IPv6 connect block: %w", err)
+	}
+	ruleIDs = append(ruleIDs, connectRuleID)
+
+	// Rule 2: Block all inbound IPv6 traffic (except loopback).
+	recvRuleID := w.nextRuleID()
+	if err := w.session.AddRule(&wf.Rule{
+		ID:       recvRuleID,
+		Name:     "AWG block IPv6 recv",
+		Layer:    wf.LayerALEAuthRecvAcceptV6,
+		Sublayer: awgSublayerID,
+		Weight:   500,
+		Conditions: []*wf.Match{
+			{
+				Field: wf.FieldFlags,
+				Op:    wf.MatchTypeFlagsNoneSet,
+				Value: wf.ConditionFlagIsLoopback,
+			},
+		},
+		Action: wf.ActionBlock,
+	}); err != nil {
+		w.session.DeleteRule(connectRuleID)
+		return fmt.Errorf("[WFP] add IPv6 recv block: %w", err)
+	}
+	ruleIDs = append(ruleIDs, recvRuleID)
+
+	w.rules[key] = ruleIDs
+	core.Log.Infof("WFP", "IPv6 traffic blocked (%d rules)", len(ruleIDs))
+	return nil
+}
+
 // Close closes the WFP session. Dynamic=true means all rules are auto-removed.
 func (w *WFPManager) Close() error {
 	if w.session != nil {
