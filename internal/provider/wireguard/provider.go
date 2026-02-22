@@ -1,6 +1,6 @@
 //go:build windows
 
-package amneziawg
+package wireguard
 
 import (
 	"context"
@@ -16,17 +16,17 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/tun/netstack"
 )
 
-// Config holds AmneziaWG-specific tunnel configuration.
+// Config holds WireGuard-specific tunnel configuration.
 type Config struct {
-	// ConfigFile is the path to the AmneziaWG .conf file.
+	// ConfigFile is the path to the WireGuard .conf file.
 	ConfigFile string `yaml:"config_file"`
 	// AdapterIP is the local IP override (optional; taken from .conf Address if empty).
 	AdapterIP string `yaml:"adapter_ip"`
 }
 
-// Provider implements TunnelProvider for the AmneziaWG protocol using
+// Provider implements TunnelProvider for the standard WireGuard protocol using
 // amneziawg-go with a netstack (gvisor) userspace TCP/IP stack.
-// No real Wintun adapter is created; all tunnel traffic goes through netstack.
+// AmneziaWG is a superset of WireGuard — without obfuscation params it acts as standard WG.
 type Provider struct {
 	mu     sync.RWMutex
 	config Config
@@ -35,12 +35,11 @@ type Provider struct {
 
 	adapterIP     netip.Addr
 	peerEndpoints []netip.AddrPort
-	dev           *device.Device // amneziawg-go device
-	tnet          *netstack.Net  // userspace network stack
+	dev           *device.Device
+	tnet          *netstack.Net
 }
 
-// New creates an AmneziaWG provider with the given configuration.
-// AdapterIP is optional — if empty, it will be resolved from the .conf Address on Connect.
+// New creates a WireGuard provider with the given configuration.
 func New(name string, cfg Config) (*Provider, error) {
 	p := &Provider{
 		config: cfg,
@@ -51,7 +50,7 @@ func New(name string, cfg Config) (*Provider, error) {
 	if cfg.AdapterIP != "" {
 		ip, err := netip.ParseAddr(cfg.AdapterIP)
 		if err != nil {
-			return nil, fmt.Errorf("[AWG] invalid adapter IP %q: %w", cfg.AdapterIP, err)
+			return nil, fmt.Errorf("[WG] invalid adapter IP %q: %w", cfg.AdapterIP, err)
 		}
 		p.adapterIP = ip
 	}
@@ -59,27 +58,25 @@ func New(name string, cfg Config) (*Provider, error) {
 	return p, nil
 }
 
-// Connect establishes the AmneziaWG tunnel via amneziawg-go + netstack.
+// Connect establishes the WireGuard tunnel via amneziawg-go + netstack.
 func (p *Provider) Connect(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	p.state = core.TunnelStateConnecting
-	core.Log.Infof("AWG", "Connecting tunnel %q...", p.name)
+	core.Log.Infof("WG", "Connecting tunnel %q...", p.name)
 
-	// 1. Parse .conf file.
 	parsed, err := ParseConfigFile(p.config.ConfigFile)
 	if err != nil {
 		p.state = core.TunnelStateError
-		return fmt.Errorf("[AWG] parse config: %w", err)
+		return fmt.Errorf("[WG] parse config: %w", err)
 	}
 
-	// 2. Determine local addresses for netstack.
 	localAddresses := parsed.LocalAddresses
 	if len(localAddresses) == 0 {
 		if !p.adapterIP.IsValid() {
 			p.state = core.TunnelStateError
-			return fmt.Errorf("[AWG] no local address: set adapter_ip or add Address to .conf")
+			return fmt.Errorf("[WG] no local address: set adapter_ip or add Address to .conf")
 		}
 		localAddresses = []netip.Addr{p.adapterIP}
 	}
@@ -87,40 +84,36 @@ func (p *Provider) Connect(ctx context.Context) error {
 		p.adapterIP = localAddresses[0]
 	}
 
-	// 3. Create userspace TUN via netstack (no real Wintun adapter).
 	tunDev, tnet, err := netstack.CreateNetTUN(localAddresses, parsed.DNSServers, parsed.MTU)
 	if err != nil {
 		p.state = core.TunnelStateError
-		return fmt.Errorf("[AWG] create netstack TUN: %w", err)
+		return fmt.Errorf("[WG] create netstack TUN: %w", err)
 	}
 
-	// 4. Create WG device with default UDP bind.
-	logger := device.NewLogger(device.LogLevelError, fmt.Sprintf("[AWG:%s] ", p.name))
+	logger := device.NewLogger(device.LogLevelError, fmt.Sprintf("[WG:%s] ", p.name))
 	dev := device.NewDevice(tunDev, conn.NewDefaultBind(), logger)
 
-	// 5. Apply UAPI configuration (keys, endpoints, obfuscation params).
 	if err := dev.IpcSet(parsed.UAPIConfig); err != nil {
 		dev.Close()
 		p.state = core.TunnelStateError
-		return fmt.Errorf("[AWG] apply config: %w", err)
+		return fmt.Errorf("[WG] apply config: %w", err)
 	}
 
-	// 6. Bring device up.
 	if err := dev.Up(); err != nil {
 		dev.Close()
 		p.state = core.TunnelStateError
-		return fmt.Errorf("[AWG] device up: %w", err)
+		return fmt.Errorf("[WG] device up: %w", err)
 	}
 
 	p.dev = dev
 	p.tnet = tnet
 	p.peerEndpoints = parsed.PeerEndpoints
 	p.state = core.TunnelStateUp
-	core.Log.Infof("AWG", "Tunnel %q is UP (ip=%s, mtu=%d)", p.name, p.adapterIP, parsed.MTU)
+	core.Log.Infof("WG", "Tunnel %q is UP (ip=%s, mtu=%d)", p.name, p.adapterIP, parsed.MTU)
 	return nil
 }
 
-// Disconnect tears down the AmneziaWG tunnel.
+// Disconnect tears down the WireGuard tunnel.
 func (p *Provider) Disconnect() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -136,7 +129,7 @@ func (p *Provider) Disconnect() error {
 	}
 
 	p.state = core.TunnelStateDown
-	core.Log.Infof("AWG", "Tunnel %q disconnected", p.name)
+	core.Log.Infof("WG", "Tunnel %q disconnected", p.name)
 	return nil
 }
 
@@ -147,14 +140,12 @@ func (p *Provider) State() core.TunnelState {
 	return p.state
 }
 
-// GetAdapterIP returns the local IP of the tunnel (from config or .conf Address).
+// GetAdapterIP returns the local IP of the tunnel.
 func (p *Provider) GetAdapterIP() netip.Addr {
 	return p.adapterIP
 }
 
-// DialTCP creates a TCP connection through the AWG tunnel via netstack.
-// Calls DialContextTCPAddrPort directly, bypassing DialContext's regex parsing
-// and DNS lookup overhead (~1μs + allocations saved per connection).
+// DialTCP creates a TCP connection through the WireGuard tunnel via netstack.
 func (p *Provider) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
 	p.mu.RLock()
 	state := p.state
@@ -162,18 +153,17 @@ func (p *Provider) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
 	p.mu.RUnlock()
 
 	if state != core.TunnelStateUp {
-		return nil, fmt.Errorf("[AWG] tunnel %q is not up (state=%d)", p.name, state)
+		return nil, fmt.Errorf("[WG] tunnel %q is not up (state=%d)", p.name, state)
 	}
 
 	ap, err := netip.ParseAddrPort(addr)
 	if err != nil {
-		return nil, fmt.Errorf("[AWG] invalid address %q: %w", addr, err)
+		return nil, fmt.Errorf("[WG] invalid address %q: %w", addr, err)
 	}
 	return tnet.DialContextTCPAddrPort(ctx, ap)
 }
 
-// DialUDP creates a connected UDP socket through the AWG tunnel via netstack.
-// Calls DialUDPAddrPort directly, bypassing DialContext's regex and DNS overhead.
+// DialUDP creates a connected UDP socket through the WireGuard tunnel via netstack.
 func (p *Provider) DialUDP(ctx context.Context, addr string) (net.Conn, error) {
 	p.mu.RLock()
 	state := p.state
@@ -181,12 +171,12 @@ func (p *Provider) DialUDP(ctx context.Context, addr string) (net.Conn, error) {
 	p.mu.RUnlock()
 
 	if state != core.TunnelStateUp {
-		return nil, fmt.Errorf("[AWG] tunnel %q is not up (state=%d)", p.name, state)
+		return nil, fmt.Errorf("[WG] tunnel %q is not up (state=%d)", p.name, state)
 	}
 
 	ap, err := netip.ParseAddrPort(addr)
 	if err != nil {
-		return nil, fmt.Errorf("[AWG] invalid address %q: %w", addr, err)
+		return nil, fmt.Errorf("[WG] invalid address %q: %w", addr, err)
 	}
 	return tnet.DialUDPAddrPort(netip.AddrPort{}, ap)
 }
@@ -196,9 +186,9 @@ func (p *Provider) Name() string {
 	return p.name
 }
 
-// Protocol returns "amneziawg".
+// Protocol returns "wireguard".
 func (p *Provider) Protocol() string {
-	return "amneziawg"
+	return "wireguard"
 }
 
 // GetServerEndpoints returns the WireGuard server endpoints parsed from the config.

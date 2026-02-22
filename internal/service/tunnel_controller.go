@@ -8,6 +8,8 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +17,10 @@ import (
 	"awg-split-tunnel/internal/gateway"
 	"awg-split-tunnel/internal/provider"
 	"awg-split-tunnel/internal/provider/amneziawg"
+	"awg-split-tunnel/internal/provider/httpproxy"
+	"awg-split-tunnel/internal/provider/socks5"
+	"awg-split-tunnel/internal/provider/vless"
+	"awg-split-tunnel/internal/provider/wireguard"
 	"awg-split-tunnel/internal/proxy"
 )
 
@@ -198,6 +204,12 @@ func (tc *TunnelControllerImpl) DisconnectAll() error {
 
 func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelConfig, confFileData []byte) error {
 	tc.mu.Lock()
+
+	// Generate unique ID if not provided.
+	if cfg.ID == "" {
+		cfg.ID = tc.generateTunnelID(cfg.Name, cfg.Protocol)
+	}
+
 	if _, exists := tc.instances[cfg.ID]; exists {
 		tc.mu.Unlock()
 		return fmt.Errorf("tunnel %q already exists", cfg.ID)
@@ -208,17 +220,42 @@ func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelCo
 	tc.nextProxyPort += 2
 	tc.mu.Unlock()
 
-	// If conf file data provided, write it next to the executable.
+	// If conf file data provided, handle per protocol.
 	if len(confFileData) > 0 {
-		confFileName := getStringSetting(cfg.Settings, "config_file", cfg.ID+".conf")
-		confPath := resolveRelativeToExe(confFileName)
-		if err := os.WriteFile(confPath, confFileData, 0600); err != nil {
-			return fmt.Errorf("write config file %q: %w", confPath, err)
+		if cfg.Protocol == core.ProtocolVLESS {
+			// Detect format: vless:// URI or JSON.
+			raw := strings.TrimSpace(string(confFileData))
+			var vlessCfg vless.Config
+			if strings.HasPrefix(raw, "vless://") {
+				var uriName string
+				var err error
+				vlessCfg, uriName, err = vless.ParseVLESSURI(raw)
+				if err != nil {
+					return fmt.Errorf("parse VLESS URI: %w", err)
+				}
+				if cfg.Name == "" && uriName != "" {
+					cfg.Name = uriName
+				}
+			} else {
+				var err error
+				vlessCfg, err = vless.ParseXrayJSON(confFileData)
+				if err != nil {
+					return fmt.Errorf("parse VLESS JSON config: %w", err)
+				}
+			}
+			applyVLESSSettings(&cfg, vlessCfg)
+		} else {
+			// AWG / WireGuard: write .conf file next to executable.
+			confFileName := getStringSetting(cfg.Settings, "config_file", cfg.ID+".conf")
+			confPath := resolveRelativeToExe(confFileName)
+			if err := os.WriteFile(confPath, confFileData, 0600); err != nil {
+				return fmt.Errorf("write config file %q: %w", confPath, err)
+			}
+			if cfg.Settings == nil {
+				cfg.Settings = make(map[string]any)
+			}
+			cfg.Settings["config_file"] = confFileName
 		}
-		if cfg.Settings == nil {
-			cfg.Settings = make(map[string]any)
-		}
-		cfg.Settings["config_file"] = confFileName
 	}
 
 	// Create provider.
@@ -259,6 +296,9 @@ func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelCo
 	}
 	tc.mu.Unlock()
 
+	// Persist new tunnel to config file.
+	tc.persistTunnelConfig(cfg)
+
 	return nil
 }
 
@@ -286,6 +326,9 @@ func (tc *TunnelControllerImpl) RemoveTunnel(tunnelID string) error {
 	delete(tc.deps.Providers, tunnelID)
 	tc.deps.Registry.Unregister(tunnelID)
 
+	// Remove tunnel from persisted config.
+	tc.removeTunnelConfig(tunnelID)
+
 	return nil
 }
 
@@ -306,8 +349,14 @@ func (tc *TunnelControllerImpl) GetAdapterIP(tunnelID string) string {
 // ─── Helpers ────────────────────────────────────────────────────────
 
 func (tc *TunnelControllerImpl) createProvider(cfg core.TunnelConfig) (provider.TunnelProvider, error) {
+	return CreateProvider(cfg)
+}
+
+// CreateProvider creates a TunnelProvider from a TunnelConfig.
+// Supports all protocols: amneziawg, wireguard, socks5, httpproxy, vless.
+func CreateProvider(cfg core.TunnelConfig) (provider.TunnelProvider, error) {
 	switch cfg.Protocol {
-	case "amneziawg":
+	case core.ProtocolAmneziaWG:
 		configFile := getStringSetting(cfg.Settings, "config_file", "")
 		if configFile != "" {
 			configFile = resolveRelativeToExe(configFile)
@@ -317,6 +366,84 @@ func (tc *TunnelControllerImpl) createProvider(cfg core.TunnelConfig) (provider.
 			AdapterIP:  getStringSetting(cfg.Settings, "adapter_ip", ""),
 		}
 		return amneziawg.New(cfg.Name, awgCfg)
+	case core.ProtocolWireGuard:
+		configFile := getStringSetting(cfg.Settings, "config_file", "")
+		if configFile != "" {
+			configFile = resolveRelativeToExe(configFile)
+		}
+		wgCfg := wireguard.Config{
+			ConfigFile: configFile,
+			AdapterIP:  getStringSetting(cfg.Settings, "adapter_ip", ""),
+		}
+		return wireguard.New(cfg.Name, wgCfg)
+	case core.ProtocolSOCKS5:
+		socksCfg := socks5.Config{
+			Server:     getStringSetting(cfg.Settings, "server", ""),
+			Port:       getIntSetting(cfg.Settings, "port", 1080),
+			Username:   getStringSetting(cfg.Settings, "username", ""),
+			Password:   getStringSetting(cfg.Settings, "password", ""),
+			UDPEnabled: getBoolSetting(cfg.Settings, "udp_enabled", true),
+		}
+		return socks5.New(cfg.Name, socksCfg)
+	case core.ProtocolHTTPProxy:
+		httpCfg := httpproxy.Config{
+			Server:        getStringSetting(cfg.Settings, "server", ""),
+			Port:          getIntSetting(cfg.Settings, "port", 8080),
+			Username:      getStringSetting(cfg.Settings, "username", ""),
+			Password:      getStringSetting(cfg.Settings, "password", ""),
+			TLS:           getBoolSetting(cfg.Settings, "tls", false),
+			TLSSkipVerify: getBoolSetting(cfg.Settings, "tls_skip_verify", false),
+		}
+		return httpproxy.New(cfg.Name, httpCfg)
+	case core.ProtocolVLESS:
+		vlessCfg := vless.Config{
+			Address:    getStringSetting(cfg.Settings, "address", ""),
+			Port:       getIntSetting(cfg.Settings, "port", 443),
+			UUID:       getStringSetting(cfg.Settings, "uuid", ""),
+			Flow:       getStringSetting(cfg.Settings, "flow", ""),
+			Encryption: getStringSetting(cfg.Settings, "encryption", "none"),
+			Network:    getStringSetting(cfg.Settings, "network", "tcp"),
+			Security:   getStringSetting(cfg.Settings, "security", "reality"),
+		}
+		// Parse nested reality settings.
+		if reality := getMapSetting(cfg.Settings, "reality"); reality != nil {
+			vlessCfg.Reality = vless.RealityConfig{
+				PublicKey:   getStringSetting(reality, "public_key", ""),
+				ShortID:     getStringSetting(reality, "short_id", ""),
+				ServerName:  getStringSetting(reality, "server_name", ""),
+				Fingerprint: getStringSetting(reality, "fingerprint", "chrome"),
+				SpiderX:     getStringSetting(reality, "spider_x", ""),
+			}
+		}
+		// Parse nested TLS settings.
+		if tlsCfg := getMapSetting(cfg.Settings, "tls"); tlsCfg != nil {
+			vlessCfg.TLS = vless.TLSConfig{
+				ServerName:    getStringSetting(tlsCfg, "server_name", ""),
+				Fingerprint:   getStringSetting(tlsCfg, "fingerprint", ""),
+				AllowInsecure: getBoolSetting(tlsCfg, "allow_insecure", false),
+			}
+		}
+		// Parse nested WebSocket settings.
+		if wsCfg := getMapSetting(cfg.Settings, "ws"); wsCfg != nil {
+			vlessCfg.WebSocket = vless.WSConfig{
+				Path: getStringSetting(wsCfg, "path", ""),
+			}
+			if hdrs := getMapSetting(wsCfg, "headers"); hdrs != nil {
+				vlessCfg.WebSocket.Headers = make(map[string]string)
+				for k, v := range hdrs {
+					if s, ok := v.(string); ok {
+						vlessCfg.WebSocket.Headers[k] = s
+					}
+				}
+			}
+		}
+		// Parse nested gRPC settings.
+		if grpcCfg := getMapSetting(cfg.Settings, "grpc"); grpcCfg != nil {
+			vlessCfg.GRPC = vless.GRPCConfig{
+				ServiceName: getStringSetting(grpcCfg, "service_name", ""),
+			}
+		}
+		return vless.New(cfg.Name, vlessCfg)
 	default:
 		return nil, fmt.Errorf("unknown protocol %q for tunnel %q", cfg.Protocol, cfg.ID)
 	}
@@ -332,10 +459,10 @@ func (tc *TunnelControllerImpl) registerRawForwarder(tunnelID string, prov provi
 }
 
 func (tc *TunnelControllerImpl) addBypassRoutes(prov provider.TunnelProvider) {
-	if awgProv, ok := prov.(*amneziawg.Provider); ok {
-		for _, ep := range awgProv.GetPeerEndpoints() {
-			if err := tc.deps.RouteMgr.AddBypassRoute(ep.Addr()); err != nil {
-				core.Log.Warnf("Core", "Failed to add bypass route for %s: %v", ep, err)
+	if ep, ok := prov.(provider.EndpointProvider); ok {
+		for _, addr := range ep.GetServerEndpoints() {
+			if err := tc.deps.RouteMgr.AddBypassRoute(addr.Addr()); err != nil {
+				core.Log.Warnf("Core", "Failed to add bypass route for %s: %v", addr, err)
 			}
 		}
 	}
@@ -363,6 +490,112 @@ func (tc *TunnelControllerImpl) RegisterExistingTunnel(
 	}
 }
 
+// ─── VLESS settings helper ───────────────────────────────────────────
+
+// applyVLESSSettings populates cfg.Settings from a parsed vless.Config.
+func applyVLESSSettings(cfg *core.TunnelConfig, vc vless.Config) {
+	if cfg.Settings == nil {
+		cfg.Settings = make(map[string]any)
+	}
+	cfg.Settings["address"] = vc.Address
+	cfg.Settings["port"] = fmt.Sprintf("%d", vc.Port)
+	cfg.Settings["uuid"] = vc.UUID
+	cfg.Settings["flow"] = vc.Flow
+	cfg.Settings["encryption"] = vc.Encryption
+	cfg.Settings["network"] = vc.Network
+	cfg.Settings["security"] = vc.Security
+
+	if vc.Security == "reality" {
+		cfg.Settings["reality"] = map[string]any{
+			"public_key":  vc.Reality.PublicKey,
+			"short_id":    vc.Reality.ShortID,
+			"server_name": vc.Reality.ServerName,
+			"fingerprint": vc.Reality.Fingerprint,
+			"spider_x":    vc.Reality.SpiderX,
+		}
+	}
+	if vc.Security == "tls" {
+		cfg.Settings["tls"] = map[string]any{
+			"server_name":    vc.TLS.ServerName,
+			"fingerprint":    vc.TLS.Fingerprint,
+			"allow_insecure": vc.TLS.AllowInsecure,
+		}
+	}
+	if vc.Network == "ws" {
+		ws := map[string]any{"path": vc.WebSocket.Path}
+		if len(vc.WebSocket.Headers) > 0 {
+			ws["headers"] = vc.WebSocket.Headers
+		}
+		cfg.Settings["ws"] = ws
+	}
+	if vc.Network == "grpc" {
+		cfg.Settings["grpc"] = map[string]any{
+			"service_name": vc.GRPC.ServiceName,
+		}
+	}
+}
+
+// ─── ID generation & config persistence ─────────────────────────────
+
+var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// generateTunnelID creates a unique tunnel ID from name and protocol.
+// Must be called with tc.mu held.
+func (tc *TunnelControllerImpl) generateTunnelID(name, protocol string) string {
+	base := name
+	if base == "" {
+		base = protocol
+	}
+	// Slugify: lowercase, replace non-alnum with dash, trim dashes.
+	slug := strings.ToLower(base)
+	slug = slugRe.ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+	if slug == "" {
+		slug = "tunnel"
+	}
+
+	// Ensure uniqueness.
+	candidate := slug
+	for i := 2; ; i++ {
+		if _, exists := tc.instances[candidate]; !exists {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d", slug, i)
+	}
+}
+
+// persistTunnelConfig adds the tunnel config to ConfigManager and saves.
+func (tc *TunnelControllerImpl) persistTunnelConfig(tunnelCfg core.TunnelConfig) {
+	if tc.deps.Cfg == nil {
+		return
+	}
+	cfg := tc.deps.Cfg.Get()
+	cfg.Tunnels = append(cfg.Tunnels, tunnelCfg)
+	tc.deps.Cfg.SetFromGUI(cfg)
+	if err := tc.deps.Cfg.Save(); err != nil {
+		core.Log.Warnf("Core", "Failed to persist tunnel %q config: %v", tunnelCfg.ID, err)
+	}
+}
+
+// removeTunnelConfig removes the tunnel from ConfigManager and saves.
+func (tc *TunnelControllerImpl) removeTunnelConfig(tunnelID string) {
+	if tc.deps.Cfg == nil {
+		return
+	}
+	cfg := tc.deps.Cfg.Get()
+	filtered := cfg.Tunnels[:0]
+	for _, t := range cfg.Tunnels {
+		if t.ID != tunnelID {
+			filtered = append(filtered, t)
+		}
+	}
+	cfg.Tunnels = filtered
+	tc.deps.Cfg.SetFromGUI(cfg)
+	if err := tc.deps.Cfg.Save(); err != nil {
+		core.Log.Warnf("Core", "Failed to remove tunnel %q from config: %v", tunnelID, err)
+	}
+}
+
 // ─── Utility functions (shared with main.go) ────────────────────────
 
 func getStringSetting(settings map[string]any, key, defaultVal string) string {
@@ -372,6 +605,44 @@ func getStringSetting(settings map[string]any, key, defaultVal string) string {
 		}
 	}
 	return defaultVal
+}
+
+func getIntSetting(settings map[string]any, key string, defaultVal int) int {
+	if v, ok := settings[key]; ok {
+		switch n := v.(type) {
+		case int:
+			return n
+		case float64:
+			return int(n)
+		case string:
+			var i int
+			if _, err := fmt.Sscanf(n, "%d", &i); err == nil {
+				return i
+			}
+		}
+	}
+	return defaultVal
+}
+
+func getBoolSetting(settings map[string]any, key string, defaultVal bool) bool {
+	if v, ok := settings[key]; ok {
+		switch b := v.(type) {
+		case bool:
+			return b
+		case string:
+			return b == "true" || b == "1" || b == "yes"
+		}
+	}
+	return defaultVal
+}
+
+func getMapSetting(settings map[string]any, key string) map[string]any {
+	if v, ok := settings[key]; ok {
+		if m, ok := v.(map[string]any); ok {
+			return m
+		}
+	}
+	return nil
 }
 
 func resolveRelativeToExe(path string) string {

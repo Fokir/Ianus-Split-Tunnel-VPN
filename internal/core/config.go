@@ -35,6 +35,15 @@ func (s TunnelState) String() string {
 	}
 }
 
+// Protocol identifiers for tunnel providers.
+const (
+	ProtocolAmneziaWG = "amneziawg"
+	ProtocolWireGuard = "wireguard"
+	ProtocolSOCKS5    = "socks5"
+	ProtocolHTTPProxy = "httpproxy"
+	ProtocolVLESS     = "vless"
+)
+
 // FallbackPolicy defines what happens when a tunnel is unavailable.
 type FallbackPolicy int
 

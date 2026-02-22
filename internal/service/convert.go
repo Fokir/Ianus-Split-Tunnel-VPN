@@ -4,6 +4,7 @@ package service
 
 import (
 	"fmt"
+	"strings"
 
 	vpnapi "awg-split-tunnel/api/gen"
 	"awg-split-tunnel/internal/core"
@@ -43,10 +44,7 @@ func tunnelConfigToProto(c core.TunnelConfig) *vpnapi.TunnelConfig {
 }
 
 func tunnelConfigFromProto(pc *vpnapi.TunnelConfig) core.TunnelConfig {
-	settings := make(map[string]any, len(pc.Settings))
-	for k, v := range pc.Settings {
-		settings[k] = v
-	}
+	settings := unflattenSettings(pc.Settings)
 	return core.TunnelConfig{
 		ID:             pc.Id,
 		Protocol:       pc.Protocol,
@@ -56,6 +54,36 @@ func tunnelConfigFromProto(pc *vpnapi.TunnelConfig) core.TunnelConfig {
 		DisallowedIPs:  pc.DisallowedIps,
 		DisallowedApps: pc.DisallowedApps,
 	}
+}
+
+// unflattenSettings converts flat dot-notation keys into nested maps.
+// For example: {"reality.public_key": "abc", "port": "443"}
+// becomes:     {"reality": {"public_key": "abc"}, "port": "443"}
+func unflattenSettings(flat map[string]string) map[string]any {
+	result := make(map[string]any, len(flat))
+	for k, v := range flat {
+		parts := strings.SplitN(k, ".", 2)
+		if len(parts) == 1 {
+			// Simple key — store directly.
+			result[k] = v
+			continue
+		}
+		// Nested key — create or get sub-map.
+		prefix, rest := parts[0], parts[1]
+		sub, ok := result[prefix]
+		if !ok {
+			sub = make(map[string]any)
+			result[prefix] = sub
+		}
+		if m, ok := sub.(map[string]any); ok {
+			// Recursively handle deeper nesting.
+			nested := unflattenSettings(map[string]string{rest: v})
+			for nk, nv := range nested {
+				m[nk] = nv
+			}
+		}
+	}
+	return result
 }
 
 // ─── Rule conversions ───────────────────────────────────────────────

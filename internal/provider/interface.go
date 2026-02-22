@@ -4,11 +4,15 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 
 	"awg-split-tunnel/internal/core"
 )
+
+// ErrUDPNotSupported is returned by providers that do not support UDP (e.g. HTTP CONNECT proxy).
+var ErrUDPNotSupported = errors.New("UDP not supported by this provider")
 
 // RawForwarder allows injecting raw IP packets directly into a VPN tunnel,
 // bypassing the userspace TCP proxy and gVisor stack. Providers that support
@@ -56,4 +60,10 @@ type TunnelProvider interface {
 
 	// Protocol returns the protocol identifier (e.g. "amneziawg", "wireguard").
 	Protocol() string
+}
+
+// EndpointProvider is optionally implemented by providers that have remote server
+// endpoints requiring bypass routes (so VPN traffic reaches the server via real NIC).
+type EndpointProvider interface {
+	GetServerEndpoints() []netip.AddrPort
 }

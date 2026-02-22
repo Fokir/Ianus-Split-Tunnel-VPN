@@ -20,7 +20,6 @@ import (
 	"awg-split-tunnel/internal/ipc"
 	"awg-split-tunnel/internal/process"
 	"awg-split-tunnel/internal/provider"
-	"awg-split-tunnel/internal/provider/amneziawg"
 	"awg-split-tunnel/internal/provider/direct"
 	"awg-split-tunnel/internal/proxy"
 	"awg-split-tunnel/internal/service"
@@ -184,27 +183,9 @@ func main() {
 		udpProxyPort := nextProxyPort + 1
 		nextProxyPort += 2
 
-		var prov provider.TunnelProvider
-
-		switch tcfg.Protocol {
-		case "amneziawg":
-			configFile := getStringSetting(tcfg.Settings, "config_file", "")
-			if configFile != "" {
-				configFile = resolveRelativeToExe(configFile)
-			}
-			awgCfg := amneziawg.Config{
-				ConfigFile: configFile,
-				AdapterIP:  getStringSetting(tcfg.Settings, "adapter_ip", ""),
-			}
-			p, err := amneziawg.New(tcfg.Name, awgCfg)
-			if err != nil {
-				core.Log.Errorf("Core", "Failed to create AWG provider %q: %v", tcfg.ID, err)
-				continue
-			}
-			prov = p
-
-		default:
-			core.Log.Warnf("Core", "Unknown protocol %q for tunnel %q, skipping", tcfg.Protocol, tcfg.ID)
+		prov, err := service.CreateProvider(tcfg)
+		if err != nil {
+			core.Log.Errorf("Core", "Failed to create provider for tunnel %q: %v", tcfg.ID, err)
 			continue
 		}
 
@@ -257,10 +238,10 @@ func main() {
 		go probe.Run(ctx)
 
 		// === 10. Add bypass route for VPN server endpoints ===
-		if awgProv, ok := prov.(*amneziawg.Provider); ok {
-			for _, ep := range awgProv.GetPeerEndpoints() {
-				if err := routeMgr.AddBypassRoute(ep.Addr()); err != nil {
-					core.Log.Warnf("Core", "Failed to add bypass route for %s: %v", ep, err)
+		if ep, ok := prov.(provider.EndpointProvider); ok {
+			for _, addr := range ep.GetServerEndpoints() {
+				if err := routeMgr.AddBypassRoute(addr.Addr()); err != nil {
+					core.Log.Warnf("Core", "Failed to add bypass route for %s: %v", addr, err)
 				}
 			}
 		}
