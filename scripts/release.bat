@@ -104,7 +104,7 @@ echo Installer built successfully.
 echo.
 echo [3/3] Creating release zip...
 
-set ZIP_NAME=%APP_NAME%-v%VERSION%-windows-amd64.zip
+set ZIP_NAME=%APP_NAME%-%VERSION%-windows-amd64.zip
 set ZIP_PATH=%OUT_DIR%\%ZIP_NAME%
 
 :: Remove old zip if exists.
