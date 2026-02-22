@@ -247,7 +247,10 @@ func main() {
 		}
 
 		// Start jitter probe for VPN tunnels.
-		probe := gateway.NewJitterProbe(prov, tcfg.ID, "8.8.8.8:53")
+		// Proxy-based providers (VLESS, SOCKS5, etc.) use TCP DNS probes
+		// because their UDP path may not work reliably.
+		_, isRaw := prov.(provider.RawForwarder)
+		probe := gateway.NewJitterProbe(prov, tcfg.ID, "8.8.8.8:53", !isRaw)
 		jitterProbes = append(jitterProbes, probe)
 		go probe.Run(ctx)
 

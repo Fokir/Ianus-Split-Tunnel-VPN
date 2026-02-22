@@ -15,36 +15,61 @@ import (
 )
 
 const (
-	probeInterval  = 500 * time.Millisecond
-	probeTimeout   = 3 * time.Second
-	probeWindow    = 120 // 120 * 500ms = 60s window
-	reportInterval = 10 * time.Second
+	probeInterval     = 500 * time.Millisecond
+	probeIntervalTCP  = 2 * time.Second // slower for proxy providers to avoid overload
+	probeTimeout      = 3 * time.Second
+	probeWindow       = 120 // samples
+	probeWindowTCP    = 30  // 30 * 2s = 60s window
+	reportInterval    = 10 * time.Second
+	reconnectCooldown = 5 * time.Second
 )
 
-// JitterProbe periodically sends UDP DNS queries through a VPN tunnel
-// and measures RTT / jitter to diagnose network-level microstutter.
+// JitterProbe periodically sends DNS queries through a VPN tunnel
+// and measures RTT / jitter to diagnose network quality.
+//
+// For raw IP tunnels (RawForwarder) it uses UDP DNS queries with a persistent connection.
+// For proxy-based tunnels (VLESS, SOCKS5, etc.) it measures TCP dial latency through
+// the proxy, which is the reliable and actually-tested code path.
 type JitterProbe struct {
 	provider provider.TunnelProvider
 	tunnelID string
 	target   string // "host:port", e.g. "8.8.8.8:53"
+	tcpMode  bool   // true for proxy providers without RawForwarder
+	window   int    // effective window size
 
 	mu     sync.Mutex
-	rtts   [probeWindow]time.Duration
+	rtts   [probeWindow]time.Duration // sized to max(probeWindow, probeWindowTCP)
 	valid  [probeWindow]bool
 	cursor int
 	count  int
+
+	// persistent UDP connection (reused across probes, UDP mode only)
+	connMu        sync.Mutex
+	conn          net.Conn
+	lastReconnect time.Time
+
+	// error tracking for debug logging
+	consecutiveErrs int
 }
 
 // Compile-time check: JitterProbe implements DiagnosticsProvider.
 var _ DiagnosticsProvider = (*JitterProbe)(nil)
 
 // NewJitterProbe creates a probe that sends DNS queries to target via the
-// given tunnel provider.
-func NewJitterProbe(prov provider.TunnelProvider, tunnelID, target string) *JitterProbe {
+// given tunnel provider. If tcpMode is true, measures TCP dial latency
+// instead of UDP DNS round-trip — required for proxy-based providers where
+// UDP may not work reliably.
+func NewJitterProbe(prov provider.TunnelProvider, tunnelID, target string, tcpMode bool) *JitterProbe {
+	w := probeWindow
+	if tcpMode {
+		w = probeWindowTCP
+	}
 	return &JitterProbe{
 		provider: prov,
 		tunnelID: tunnelID,
 		target:   target,
+		tcpMode:  tcpMode,
+		window:   w,
 	}
 }
 
@@ -101,13 +126,22 @@ func (p *JitterProbe) Snapshot() DiagnosticsSnapshot {
 
 // Run starts the probe loop. It blocks until ctx is cancelled.
 func (p *JitterProbe) Run(ctx context.Context) {
-	core.Log.Infof("Perf", "Jitter probe started for tunnel %s → %s", p.tunnelID, p.target)
+	mode := "UDP"
+	interval := probeInterval
+	if p.tcpMode {
+		mode = "TCP-dial"
+		interval = probeIntervalTCP
+	}
+	core.Log.Infof("Perf", "Jitter probe started for tunnel %s → %s (%s, every %s)",
+		p.tunnelID, p.target, mode, interval)
 
-	probeTicker := time.NewTicker(probeInterval)
+	probeTicker := time.NewTicker(interval)
 	defer probeTicker.Stop()
 
 	reportTicker := time.NewTicker(reportInterval)
 	defer reportTicker.Stop()
+
+	defer p.closeConn()
 
 	for {
 		select {
@@ -123,16 +157,94 @@ func (p *JitterProbe) Run(ctx context.Context) {
 	}
 }
 
-// probe sends a single DNS query and returns the RTT.
-func (p *JitterProbe) probe(ctx context.Context) (time.Duration, bool) {
+// getOrDialUDP returns the persistent UDP connection, reconnecting if needed.
+func (p *JitterProbe) getOrDialUDP(ctx context.Context) (net.Conn, error) {
+	p.connMu.Lock()
+	defer p.connMu.Unlock()
+
+	if p.conn != nil {
+		return p.conn, nil
+	}
+
+	if !p.lastReconnect.IsZero() && time.Since(p.lastReconnect) < reconnectCooldown {
+		return nil, net.ErrClosed
+	}
+
 	dialCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
 	conn, err := p.provider.DialUDP(dialCtx, p.target)
 	if err != nil {
+		p.lastReconnect = time.Now()
+		return nil, err
+	}
+
+	p.conn = conn
+	p.lastReconnect = time.Now()
+	return conn, nil
+}
+
+// invalidateConn closes and clears the persistent UDP connection.
+func (p *JitterProbe) invalidateConn() {
+	p.connMu.Lock()
+	defer p.connMu.Unlock()
+
+	if p.conn != nil {
+		p.conn.Close()
+		p.conn = nil
+	}
+}
+
+// closeConn closes the persistent connection on shutdown.
+func (p *JitterProbe) closeConn() {
+	p.connMu.Lock()
+	defer p.connMu.Unlock()
+
+	if p.conn != nil {
+		p.conn.Close()
+		p.conn = nil
+	}
+}
+
+// probe sends a single probe and returns the RTT.
+func (p *JitterProbe) probe(ctx context.Context) (time.Duration, bool) {
+	if p.tcpMode {
+		return p.probeTCPDial(ctx)
+	}
+	return p.probeUDPDNS(ctx)
+}
+
+// probeTCPDial measures RTT by timing a TCP connection through the proxy.
+// The dial time includes the full proxy chain latency (client → proxy → target).
+// No DNS protocol needed — just TCP handshake.
+func (p *JitterProbe) probeTCPDial(ctx context.Context) (time.Duration, bool) {
+	dialCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	start := time.Now()
+	conn, err := p.provider.DialTCP(dialCtx, p.target)
+	rtt := time.Since(start)
+
+	if err != nil {
+		p.consecutiveErrs++
+		if p.consecutiveErrs == 1 || p.consecutiveErrs%10 == 0 {
+			core.Log.Warnf("Perf", "Jitter %s: TCP dial failed (err #%d): %v",
+				p.tunnelID, p.consecutiveErrs, err)
+		}
 		return 0, false
 	}
-	defer conn.Close()
+	conn.Close()
+
+	p.consecutiveErrs = 0
+	return rtt, true
+}
+
+// probeUDPDNS sends a DNS query via persistent UDP connection and measures RTT.
+func (p *JitterProbe) probeUDPDNS(ctx context.Context) (time.Duration, bool) {
+	conn, err := p.getOrDialUDP(ctx)
+	if err != nil {
+		return 0, false
+	}
 
 	query := buildDNSQuery()
 
@@ -140,11 +252,13 @@ func (p *JitterProbe) probe(ctx context.Context) (time.Duration, bool) {
 
 	start := time.Now()
 	if _, err := conn.Write(query); err != nil {
+		p.invalidateConn()
 		return 0, false
 	}
 
 	buf := make([]byte, 512)
 	if _, err := conn.Read(buf); err != nil {
+		p.invalidateConn()
 		return 0, false
 	}
 	return time.Since(start), true
@@ -157,8 +271,8 @@ func (p *JitterProbe) record(rtt time.Duration, ok bool) {
 
 	p.rtts[p.cursor] = rtt
 	p.valid[p.cursor] = ok
-	p.cursor = (p.cursor + 1) % probeWindow
-	if p.count < probeWindow {
+	p.cursor = (p.cursor + 1) % p.window
+	if p.count < p.window {
 		p.count++
 	}
 }
@@ -205,6 +319,3 @@ func buildDNSQuery() []byte {
 	binary.BigEndian.PutUint16(buf[15:17], 1)
 	return buf
 }
-
-// SetDeadline helper — net.Conn returned by DialUDP should support it.
-var _ net.Conn = (*net.UDPConn)(nil)
