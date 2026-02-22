@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"awg-split-tunnel/internal/core"
@@ -58,6 +59,10 @@ type DNSResolver struct {
 
 	cache *DNSCache // nil if caching disabled
 
+	// Domain-based routing.
+	domainMatcher atomic.Pointer[DomainMatcher]
+	domainTable   *DomainTable
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -84,6 +89,16 @@ func NewDNSResolver(
 	}
 
 	return r
+}
+
+// SetDomainMatcher atomically sets the domain matcher for DNS interception.
+func (r *DNSResolver) SetDomainMatcher(m *DomainMatcher) {
+	r.domainMatcher.Store(m)
+}
+
+// SetDomainTable sets the domain table for recording resolved IPs.
+func (r *DNSResolver) SetDomainTable(dt *DomainTable) {
+	r.domainTable = dt
 }
 
 // Start begins listening for DNS queries on UDP and TCP.
@@ -169,6 +184,30 @@ func (r *DNSResolver) udpLoop(ctx context.Context) {
 func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAddr *net.UDPAddr) {
 	name := extractDNSName(query)
 
+	// Domain-based routing: intercept before cache/forwarding.
+	// DNS forwarding always goes through the default VPN tunnel (tunnelID unchanged).
+	// Only the routeTunnelID (for DomainTable) reflects the domain rule's target.
+	tunnelID := r.config.TunnelID
+	routeTunnelID := tunnelID
+	var domainResult DomainMatchResult
+	if dm := r.domainMatcher.Load(); dm != nil && name != "" {
+		domainResult = dm.Match(name)
+		if domainResult.Matched {
+			switch domainResult.Action {
+			case core.DomainBlock:
+				core.Log.Debugf("DNS", "%s blocked by domain rule (UDP)", name)
+				if nxd := makeNXDomain(query); nxd != nil {
+					r.udpConn.WriteToUDP(nxd, clientAddr)
+				}
+				return
+			case core.DomainDirect:
+				routeTunnelID = DirectTunnelID
+			case core.DomainRoute:
+				routeTunnelID = domainResult.TunnelID
+			}
+		}
+	}
+
 	// Cache lookup.
 	if r.cache != nil {
 		qName, qtype, qclass, err := parseDNSQuestion(query)
@@ -177,18 +216,25 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 			if cached, ok := r.cache.Get(queryID, qName, qtype, qclass); ok {
 				r.udpConn.WriteToUDP(cached, clientAddr)
 				core.Log.Debugf("DNS", "%s cache hit (UDP)", name)
+				// Record IPs from cached response too.
+				if domainResult.Matched && r.domainTable != nil {
+					r.recordDomainIPs(cached, name, routeTunnelID, domainResult.Action)
+				}
 				return
 			}
 		}
 	}
 
-	// Try VPN tunnel first.
-	resp, server, err := r.forwardUDP(ctx, r.config.TunnelID, query)
+	// Forward DNS query through the default VPN tunnel.
+	resp, server, err := r.forwardUDP(ctx, tunnelID, query)
 	if err == nil {
 		r.cacheStore(query, resp)
 		r.udpConn.WriteToUDP(resp, clientAddr)
 		if name != "" {
-			core.Log.Debugf("DNS", "%s → %s via %s (UDP)", name, server, r.config.TunnelID)
+			core.Log.Debugf("DNS", "%s → %s via %s (UDP, route=%s)", name, server, tunnelID, routeTunnelID)
+		}
+		if domainResult.Matched && r.domainTable != nil {
+			r.recordDomainIPs(resp, name, routeTunnelID, domainResult.Action)
 		}
 		return
 	}
@@ -343,6 +389,33 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 
 	name := extractDNSName(query)
 
+	// Domain-based routing: intercept before cache/forwarding.
+	// DNS forwarding always goes through the default VPN tunnel (tunnelID unchanged).
+	// Only the routeTunnelID (for DomainTable) reflects the domain rule's target.
+	tunnelID := r.config.TunnelID
+	routeTunnelID := tunnelID
+	var domainResult DomainMatchResult
+	if dm := r.domainMatcher.Load(); dm != nil && name != "" {
+		domainResult = dm.Match(name)
+		if domainResult.Matched {
+			switch domainResult.Action {
+			case core.DomainBlock:
+				core.Log.Debugf("DNS", "%s blocked by domain rule (TCP)", name)
+				if nxd := makeNXDomain(query); nxd != nil {
+					var respLen [2]byte
+					binary.BigEndian.PutUint16(respLen[:], uint16(len(nxd)))
+					clientConn.Write(respLen[:])
+					clientConn.Write(nxd)
+				}
+				return
+			case core.DomainDirect:
+				routeTunnelID = DirectTunnelID
+			case core.DomainRoute:
+				routeTunnelID = domainResult.TunnelID
+			}
+		}
+	}
+
 	// Cache lookup.
 	if r.cache != nil {
 		qName, qtype, qclass, parseErr := parseDNSQuestion(query)
@@ -354,13 +427,16 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 				binary.BigEndian.PutUint16(respLen[:], uint16(len(cached)))
 				clientConn.Write(respLen[:])
 				clientConn.Write(cached)
+				if domainResult.Matched && r.domainTable != nil {
+					r.recordDomainIPs(cached, name, routeTunnelID, domainResult.Action)
+				}
 				return
 			}
 		}
 	}
 
-	// Try VPN tunnel.
-	resp, server, err := r.forwardTCP(ctx, r.config.TunnelID, query)
+	// Forward DNS query through the default VPN tunnel.
+	resp, server, err := r.forwardTCP(ctx, tunnelID, query)
 	if err != nil && r.config.FallbackDirect {
 		resp, server, err = r.forwardTCP(ctx, DirectTunnelID, query)
 	}
@@ -374,7 +450,10 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 	} else {
 		r.cacheStore(query, resp)
 		if name != "" {
-			core.Log.Debugf("DNS", "%s → %s via %s (TCP)", name, server, r.config.TunnelID)
+			core.Log.Debugf("DNS", "%s → %s via %s (TCP, route=%s)", name, server, tunnelID, routeTunnelID)
+		}
+		if domainResult.Matched && r.domainTable != nil {
+			r.recordDomainIPs(resp, name, routeTunnelID, domainResult.Action)
 		}
 	}
 
@@ -547,5 +626,124 @@ func (r *DNSResolver) cacheStore(query, resp []byte) {
 	name, qtype, qclass, err := parseDNSQuestion(query)
 	if err == nil {
 		r.cache.Put(name, qtype, qclass, resp)
+	}
+}
+
+// makeNXDomain creates an NXDOMAIN response for the given query.
+func makeNXDomain(query []byte) []byte {
+	if len(query) < 12 {
+		return nil
+	}
+
+	resp := make([]byte, len(query))
+	copy(resp, query)
+
+	// Set QR=1 (response), RCODE=3 (NXDOMAIN).
+	resp[2] = query[2] | 0x80       // QR=1
+	resp[3] = (query[3] & 0xF0) | 0x03 // RCODE=NXDOMAIN
+	// Zero answer/authority/additional counts.
+	resp[6], resp[7] = 0, 0
+	resp[8], resp[9] = 0, 0
+	resp[10], resp[11] = 0, 0
+
+	return resp
+}
+
+// recordDomainIPs extracts A records from a DNS response and inserts them into the domain table.
+func (r *DNSResolver) recordDomainIPs(resp []byte, domain string, tunnelID string, action core.DomainAction) {
+	if len(resp) < 12 {
+		return
+	}
+
+	// ANCOUNT = bytes 6-7.
+	ancount := int(binary.BigEndian.Uint16(resp[6:8]))
+	if ancount == 0 {
+		return
+	}
+
+	// Skip header (12 bytes) + question section.
+	pos := 12
+	// Skip QNAME.
+	for pos < len(resp) {
+		labelLen := int(resp[pos])
+		if labelLen == 0 {
+			pos++ // skip root label
+			break
+		}
+		if labelLen >= 0xC0 { // pointer
+			pos += 2
+			break
+		}
+		pos += 1 + labelLen
+	}
+	// Skip QTYPE (2) + QCLASS (2).
+	pos += 4
+
+	// Parse answer RRs.
+	recorded := 0
+	for i := 0; i < ancount && pos < len(resp); i++ {
+		// Skip NAME (may be pointer or labels).
+		if pos >= len(resp) {
+			break
+		}
+		if resp[pos]&0xC0 == 0xC0 { // pointer
+			pos += 2
+		} else {
+			for pos < len(resp) {
+				labelLen := int(resp[pos])
+				if labelLen == 0 {
+					pos++
+					break
+				}
+				if labelLen >= 0xC0 {
+					pos += 2
+					break
+				}
+				pos += 1 + labelLen
+			}
+		}
+
+		// Need at least 10 bytes: TYPE(2) + CLASS(2) + TTL(4) + RDLENGTH(2).
+		if pos+10 > len(resp) {
+			break
+		}
+
+		rrType := binary.BigEndian.Uint16(resp[pos : pos+2])
+		ttl := binary.BigEndian.Uint32(resp[pos+4 : pos+8])
+		rdLength := int(binary.BigEndian.Uint16(resp[pos+8 : pos+10]))
+		pos += 10
+
+		if pos+rdLength > len(resp) {
+			break
+		}
+
+		// A record: type=1, rdLength=4.
+		if rrType == 1 && rdLength == 4 {
+			var ip [4]byte
+			copy(ip[:], resp[pos:pos+4])
+
+			// Clamp TTL: min 60s, max 3600s.
+			clampedTTL := ttl
+			if clampedTTL < 60 {
+				clampedTTL = 60
+			}
+			if clampedTTL > 3600 {
+				clampedTTL = 3600
+			}
+
+			r.domainTable.Insert(ip, &DomainEntry{
+				TunnelID:  tunnelID,
+				Action:    action,
+				Domain:    domain,
+				ExpiresAt: time.Now().Unix() + int64(clampedTTL),
+			})
+			recorded++
+		}
+
+		pos += rdLength
+	}
+
+	if recorded > 0 {
+		core.Log.Debugf("DNS", "Recorded %d IPs for %s → %s (%s)", recorded, domain, tunnelID, action)
 	}
 }

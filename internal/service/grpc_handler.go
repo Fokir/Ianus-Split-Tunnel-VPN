@@ -11,6 +11,7 @@ import (
 
 	vpnapi "awg-split-tunnel/api/gen"
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/gateway"
 )
 
 // Ensure Service implements VPNServiceServer.
@@ -150,6 +151,71 @@ func (s *Service) SaveRules(_ context.Context, req *vpnapi.SaveRulesRequest) (*v
 		return &vpnapi.SaveRulesResponse{Success: false, Error: err.Error()}, nil
 	}
 	return &vpnapi.SaveRulesResponse{Success: true}, nil
+}
+
+// ─── Domain rules ───────────────────────────────────────────────────
+
+func (s *Service) ListDomainRules(_ context.Context, _ *emptypb.Empty) (*vpnapi.DomainRuleListResponse, error) {
+	rules := s.cfg.GetDomainRules()
+	protoRules := make([]*vpnapi.DomainRule, 0, len(rules))
+	for _, r := range rules {
+		pr := domainRuleToProto(r)
+		// Mark rule as active if its tunnel is connected (or non-route action).
+		if r.Action != core.DomainRoute || r.TunnelID == "" {
+			pr.Active = true
+		} else {
+			pr.Active = s.rules.IsTunnelActive(r.TunnelID)
+		}
+		protoRules = append(protoRules, pr)
+	}
+	return &vpnapi.DomainRuleListResponse{Rules: protoRules}, nil
+}
+
+func (s *Service) SaveDomainRules(_ context.Context, req *vpnapi.SaveDomainRulesRequest) (*vpnapi.SaveDomainRulesResponse, error) {
+	rules := make([]core.DomainRule, 0, len(req.Rules))
+	for _, pr := range req.Rules {
+		rules = append(rules, domainRuleFromProto(pr))
+	}
+	s.cfg.SetDomainRules(rules)
+	if err := s.cfg.Save(); err != nil {
+		return &vpnapi.SaveDomainRulesResponse{Success: false, Error: err.Error()}, nil
+	}
+	// Rebuild domain matcher with new rules.
+	if s.domainReloader != nil {
+		if err := s.domainReloader(rules); err != nil {
+			core.Log.Warnf("Core", "Domain reloader failed: %v", err)
+			return &vpnapi.SaveDomainRulesResponse{Success: false, Error: err.Error()}, nil
+		}
+	}
+	return &vpnapi.SaveDomainRulesResponse{Success: true}, nil
+}
+
+func (s *Service) ListGeositeCategories(_ context.Context, _ *emptypb.Empty) (*vpnapi.GeositeCategoriesResponse, error) {
+	if s.geositeFilePath == "" {
+		return &vpnapi.GeositeCategoriesResponse{}, nil
+	}
+	categories, err := gateway.ListGeositeCategories(s.geositeFilePath)
+	if err != nil {
+		return &vpnapi.GeositeCategoriesResponse{}, nil // return empty on error
+	}
+	return &vpnapi.GeositeCategoriesResponse{Categories: categories}, nil
+}
+
+func (s *Service) UpdateGeosite(_ context.Context, _ *emptypb.Empty) (*vpnapi.UpdateGeositeResponse, error) {
+	if s.geositeFilePath == "" {
+		return &vpnapi.UpdateGeositeResponse{Success: false, Error: "geosite file path not configured"}, nil
+	}
+	if err := gateway.DownloadGeositeFile(s.geositeFilePath, s.httpClient); err != nil {
+		return &vpnapi.UpdateGeositeResponse{Success: false, Error: err.Error()}, nil
+	}
+	// Rebuild domain matcher with updated geosite data.
+	if s.domainReloader != nil {
+		rules := s.cfg.GetDomainRules()
+		if err := s.domainReloader(rules); err != nil {
+			return &vpnapi.UpdateGeositeResponse{Success: false, Error: err.Error()}, nil
+		}
+	}
+	return &vpnapi.UpdateGeositeResponse{Success: true}, nil
 }
 
 // ─── Config ─────────────────────────────────────────────────────────

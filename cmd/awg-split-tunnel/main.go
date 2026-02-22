@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -348,6 +349,32 @@ func main() {
 		}
 	}
 
+	// === 11c. Domain-based routing ===
+	geositeFilePath := resolveRelativeToExe("geosite.dat")
+	nicHTTPClient := gateway.NewNICBoundHTTPClient(realNIC.Index, realNIC.LocalIP)
+	domainTable := gateway.NewDomainTable()
+	domainTable.StartCleanup(ctx)
+	domainMatcher := buildDomainMatcher(cfg.DomainRules, geositeFilePath, nicHTTPClient)
+	if dnsResolver != nil {
+		dnsResolver.SetDomainMatcher(domainMatcher)
+		dnsResolver.SetDomainTable(domainTable)
+	}
+	tunRouter.SetDomainTable(domainTable)
+	if domainMatcher != nil && !domainMatcher.IsEmpty() {
+		core.Log.Infof("DNS", "Domain matcher active: %d rules", len(cfg.DomainRules))
+	}
+
+	// Domain reload callback (for hot-reload from GUI).
+	domainReloader := func(rules []core.DomainRule) error {
+		m := buildDomainMatcher(rules, geositeFilePath, nicHTTPClient)
+		if dnsResolver != nil {
+			dnsResolver.SetDomainMatcher(m)
+		}
+		domainTable.Flush()
+		core.Log.Infof("DNS", "Domain rules reloaded: %d rules", len(rules))
+		return nil
+	}
+
 	// === 11b. Stats Collector (created before TUN router start to wire bytesReporter) ===
 	statsCollector := service.NewStatsCollector(registry, bus)
 	tunRouter.SetBytesReporter(statsCollector.AddBytes)
@@ -369,14 +396,17 @@ func main() {
 
 	// === 13. Start gRPC IPC server for GUI communication ===
 	svc := service.New(service.Config{
-		ConfigManager:  cfgManager,
-		TunnelRegistry: registry,
-		RuleEngine:     ruleEngine,
-		EventBus:       bus,
-		TunnelCtrl:     tunnelCtrl,
-		LogStreamer:    logStreamer,
-		StatsCollector: statsCollector,
-		Version:        version,
+		ConfigManager:   cfgManager,
+		TunnelRegistry:  registry,
+		RuleEngine:      ruleEngine,
+		EventBus:        bus,
+		TunnelCtrl:      tunnelCtrl,
+		LogStreamer:     logStreamer,
+		StatsCollector:  statsCollector,
+		Version:         version,
+		DomainReloader:  domainReloader,
+		GeositeFilePath: geositeFilePath,
+		HTTPClient:      nicHTTPClient,
 	})
 	svc.Start(ctx)
 
@@ -491,6 +521,59 @@ func buildDNSCacheConfig(yamlCfg core.DNSCacheYAMLConfig) *gateway.DNSCacheConfi
 		}
 	}
 	return cfg
+}
+
+// buildDomainMatcher constructs a DomainMatcher from config rules, loading
+// geosite data for any geosite: patterns.
+func buildDomainMatcher(rules []core.DomainRule, geositeFilePath string, httpClient *http.Client) *gateway.DomainMatcher {
+	if len(rules) == 0 {
+		return nil
+	}
+
+	// Separate geosite rules from regular rules.
+	var regularRules []core.DomainRule
+	geositeCategories := make(map[string]core.DomainRule)
+
+	for _, r := range rules {
+		prefix, value := splitDomainPattern(r.Pattern)
+		if prefix == "geosite" && value != "" {
+			geositeCategories[value] = r
+		} else {
+			regularRules = append(regularRules, r)
+		}
+	}
+
+	// Load geosite entries if any geosite rules are present.
+	var geositeEntries []gateway.GeositeExpanded
+	if len(geositeCategories) > 0 {
+		if err := gateway.EnsureGeositeFile(geositeFilePath, httpClient); err != nil {
+			core.Log.Warnf("DNS", "Failed to ensure geosite.dat: %v", err)
+		} else {
+			entries, err := gateway.LoadGeosite(geositeFilePath, geositeCategories)
+			if err != nil {
+				core.Log.Warnf("DNS", "Failed to load geosite data: %v", err)
+			} else {
+				geositeEntries = entries
+			}
+		}
+	}
+
+	return gateway.NewDomainMatcher(regularRules, geositeEntries)
+}
+
+// splitDomainPattern splits "prefix:value" into (prefix, value).
+func splitDomainPattern(pattern string) (string, string) {
+	for i := 0; i < len(pattern); i++ {
+		if pattern[i] == ':' {
+			prefix := pattern[:i]
+			switch prefix {
+			case "domain", "full", "keyword", "geosite":
+				return prefix, pattern[i+1:]
+			}
+			break
+		}
+	}
+	return "domain", pattern
 }
 
 // resolveRelativeToExe resolves a relative path against the directory containing

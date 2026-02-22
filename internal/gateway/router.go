@@ -56,6 +56,9 @@ type TUNRouter struct {
 	// External byte reporting callback (for StatsCollector).
 	bytesReporter func(tunnelID string, tx, rx int64)
 
+	// Domain-based routing: resolved IP→tunnel.
+	domainTable *DomainTable
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -97,6 +100,11 @@ func (r *TUNRouter) SetIPFilter(filter *IPFilter) {
 // per-tunnel TX/RX byte counts. Must be called before Start.
 func (r *TUNRouter) SetBytesReporter(fn func(tunnelID string, tx, rx int64)) {
 	r.bytesReporter = fn
+}
+
+// SetDomainTable sets the domain table for IP→tunnel routing based on DNS matches.
+func (r *TUNRouter) SetDomainTable(dt *DomainTable) {
+	r.domainTable = dt
 }
 
 // Start begins the packet processing loop.
@@ -585,6 +593,29 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// deliver these packets either — drop them to avoid futile proxy timeouts.
 	if f != nil && f.IsLocalBypassIP(dstIP) {
 		return "", 0, flowDrop, 0
+	}
+
+	// Domain-based routing: IP→tunnel from DNS resolution.
+	// Domain rules have HIGHER priority than process rules.
+	if r.domainTable != nil {
+		if dEntry, ok := r.domainTable.Lookup(dstIP); ok {
+			switch dEntry.Action {
+			case core.DomainBlock:
+				return "", 0, flowDrop, 0
+			case core.DomainDirect:
+				return "", 0, flowPass, 0
+			case core.DomainRoute:
+				if entry, ok := r.registry.Get(dEntry.TunnelID); ok && entry.State == core.TunnelStateUp {
+					if isUDP {
+						if port, ok := r.registry.GetUDPProxyPort(dEntry.TunnelID); ok {
+							return dEntry.TunnelID, port, flowRoute, core.PriorityAuto
+						}
+					}
+					return dEntry.TunnelID, entry.ProxyPort, flowRoute, core.PriorityAuto
+				}
+				// Tunnel down — fall through to process rules.
+			}
+		}
 	}
 
 	// Look up PID by source port.

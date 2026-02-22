@@ -87,6 +87,24 @@ func parsePriorityProto(s string) core.RulePriority {
 	return p
 }
 
+// ─── Domain rule conversions ────────────────────────────────────────
+
+func domainRuleToProto(r core.DomainRule) *vpnapi.DomainRule {
+	return &vpnapi.DomainRule{
+		Pattern:  r.Pattern,
+		TunnelId: r.TunnelID,
+		Action:   vpnapi.DomainAction(r.Action),
+	}
+}
+
+func domainRuleFromProto(pr *vpnapi.DomainRule) core.DomainRule {
+	return core.DomainRule{
+		Pattern:  pr.Pattern,
+		TunnelID: pr.TunnelId,
+		Action:   core.DomainAction(pr.Action),
+	}
+}
+
 // ─── Config conversions ─────────────────────────────────────────────
 
 func configToProto(c core.Config) *vpnapi.AppConfig {
@@ -100,6 +118,11 @@ func configToProto(c core.Config) *vpnapi.AppConfig {
 		rules = append(rules, ruleToProto(r))
 	}
 
+	domainRules := make([]*vpnapi.DomainRule, 0, len(c.DomainRules))
+	for _, r := range c.DomainRules {
+		domainRules = append(domainRules, domainRuleToProto(r))
+	}
+
 	return &vpnapi.AppConfig{
 		Global: &vpnapi.GlobalFilterConfig{
 			AllowedIps:     c.Global.AllowedIPs,
@@ -109,6 +132,7 @@ func configToProto(c core.Config) *vpnapi.AppConfig {
 		},
 		Tunnels: tunnels,
 		Rules:   rules,
+		DomainRules: domainRules,
 		Dns: &vpnapi.DNSConfig{
 			TunnelId: c.DNS.FallbackTunnelID,
 			Servers:  c.DNS.Servers,
@@ -145,6 +169,10 @@ func configFromProto(pc *vpnapi.AppConfig) core.Config {
 
 	for _, pr := range pc.Rules {
 		cfg.Rules = append(cfg.Rules, ruleFromProto(pr))
+	}
+
+	for _, pr := range pc.DomainRules {
+		cfg.DomainRules = append(cfg.DomainRules, domainRuleFromProto(pr))
 	}
 
 	if pc.Dns != nil {

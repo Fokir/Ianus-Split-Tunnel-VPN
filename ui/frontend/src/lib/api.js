@@ -54,6 +54,24 @@ export function saveRules(rules) {
   return BindingService.SaveRules(rules);
 }
 
+// ─── Domain rules ───────────────────────────────────────────────────
+
+export function listDomainRules() {
+  return BindingService.ListDomainRules();
+}
+
+export function saveDomainRules(rules) {
+  return BindingService.SaveDomainRules(rules);
+}
+
+export function listGeositeCategories() {
+  return BindingService.ListGeositeCategories();
+}
+
+export function updateGeosite() {
+  return BindingService.UpdateGeosite();
+}
+
 // ─── Processes ──────────────────────────────────────────────────────
 
 export function listProcesses(nameFilter = '') {

@@ -280,6 +280,94 @@ func (b *BindingService) SaveRules(rules []RuleInfo) error {
 	return nil
 }
 
+// ─── Domain rules ───────────────────────────────────────────────────
+
+type DomainRuleInfo struct {
+	Pattern  string `json:"pattern"`
+	TunnelID string `json:"tunnelId"`
+	Action   string `json:"action"` // "route", "direct", "block"
+	Active   bool   `json:"active"`
+}
+
+func domainActionStr(a vpnapi.DomainAction) string {
+	switch a {
+	case vpnapi.DomainAction_DOMAIN_ACTION_ROUTE:
+		return "route"
+	case vpnapi.DomainAction_DOMAIN_ACTION_DIRECT:
+		return "direct"
+	case vpnapi.DomainAction_DOMAIN_ACTION_BLOCK:
+		return "block"
+	default:
+		return "route"
+	}
+}
+
+func domainActionFromStr(s string) vpnapi.DomainAction {
+	switch s {
+	case "direct":
+		return vpnapi.DomainAction_DOMAIN_ACTION_DIRECT
+	case "block":
+		return vpnapi.DomainAction_DOMAIN_ACTION_BLOCK
+	default:
+		return vpnapi.DomainAction_DOMAIN_ACTION_ROUTE
+	}
+}
+
+func (b *BindingService) ListDomainRules() ([]DomainRuleInfo, error) {
+	resp, err := b.client.Service.ListDomainRules(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	rules := make([]DomainRuleInfo, 0, len(resp.Rules))
+	for _, r := range resp.Rules {
+		rules = append(rules, DomainRuleInfo{
+			Pattern:  r.Pattern,
+			TunnelID: r.TunnelId,
+			Action:   domainActionStr(r.Action),
+			Active:   r.Active,
+		})
+	}
+	return rules, nil
+}
+
+func (b *BindingService) SaveDomainRules(rules []DomainRuleInfo) error {
+	protoRules := make([]*vpnapi.DomainRule, 0, len(rules))
+	for _, r := range rules {
+		protoRules = append(protoRules, &vpnapi.DomainRule{
+			Pattern:  r.Pattern,
+			TunnelId: r.TunnelID,
+			Action:   domainActionFromStr(r.Action),
+		})
+	}
+	resp, err := b.client.Service.SaveDomainRules(context.Background(), &vpnapi.SaveDomainRulesRequest{Rules: protoRules})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
+func (b *BindingService) ListGeositeCategories() ([]string, error) {
+	resp, err := b.client.Service.ListGeositeCategories(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Categories, nil
+}
+
+func (b *BindingService) UpdateGeosite() error {
+	resp, err := b.client.Service.UpdateGeosite(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
 // ─── Processes ──────────────────────────────────────────────────────
 
 type ProcessInfo struct {

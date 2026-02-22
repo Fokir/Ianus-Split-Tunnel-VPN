@@ -51,6 +51,21 @@ message TunnelStatus {
   string adapter_ip = 5;     // VPN adapter IP (e.g. "10.8.1.2")
 }
 
+// ─── Domain rule messages ───────────────────────────────────────────
+
+enum DomainAction {
+  DOMAIN_ACTION_ROUTE = 0;
+  DOMAIN_ACTION_DIRECT = 1;
+  DOMAIN_ACTION_BLOCK = 2;
+}
+
+message DomainRule {
+  string pattern = 1;           // "domain:vk.com", "full:example.com", "keyword:google", "geosite:ru"
+  string tunnel_id = 2;         // only for DOMAIN_ACTION_ROUTE
+  DomainAction action = 3;
+  bool active = 4;              // tunnel is connected (for UI display)
+}
+
 // ─── Rule messages ──────────────────────────────────────────────────
 
 message Rule {
@@ -101,6 +116,7 @@ message AppConfig {
   repeated Rule rules = 3;
   DNSConfig dns = 4;
   LogConfig logging = 5;
+  repeated DomainRule domain_rules = 6;
 }
 
 // ─── Stats messages ─────────────────────────────────────────────────
@@ -213,6 +229,30 @@ message SaveRulesResponse {
   string error = 2;
 }
 
+// -- Domain rules --
+
+message DomainRuleListResponse {
+  repeated DomainRule rules = 1;
+}
+
+message SaveDomainRulesRequest {
+  repeated DomainRule rules = 1;
+}
+
+message SaveDomainRulesResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GeositeCategoriesResponse {
+  repeated string categories = 1;
+}
+
+message UpdateGeositeResponse {
+  bool success = 1;
+  string error = 2;
+}
+
 // -- Config --
 
 message SaveConfigRequest {
@@ -296,6 +336,12 @@ service VPNService {
   // -- Rules --
   rpc ListRules(google.protobuf.Empty) returns (RuleListResponse);
   rpc SaveRules(SaveRulesRequest) returns (SaveRulesResponse);
+
+  // -- Domain rules --
+  rpc ListDomainRules(google.protobuf.Empty) returns (DomainRuleListResponse);
+  rpc SaveDomainRules(SaveDomainRulesRequest) returns (SaveDomainRulesResponse);
+  rpc ListGeositeCategories(google.protobuf.Empty) returns (GeositeCategoriesResponse);
+  rpc UpdateGeosite(google.protobuf.Empty) returns (UpdateGeositeResponse);
 
   // -- Config --
   rpc GetConfig(google.protobuf.Empty) returns (AppConfig);

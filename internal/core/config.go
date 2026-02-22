@@ -124,6 +124,55 @@ func ParseRulePriority(s string) (RulePriority, error) {
 	}
 }
 
+// DomainAction defines what happens when a domain rule matches.
+type DomainAction int
+
+const (
+	// DomainRoute routes traffic through a specific tunnel.
+	DomainRoute DomainAction = iota
+	// DomainDirect bypasses VPN for matching domains.
+	DomainDirect
+	// DomainBlock drops DNS queries for matching domains.
+	DomainBlock
+)
+
+func (a DomainAction) String() string {
+	switch a {
+	case DomainRoute:
+		return "route"
+	case DomainDirect:
+		return "direct"
+	case DomainBlock:
+		return "block"
+	default:
+		return "unknown"
+	}
+}
+
+// ParseDomainAction parses a string into a DomainAction.
+func ParseDomainAction(s string) (DomainAction, error) {
+	switch s {
+	case "route", "":
+		return DomainRoute, nil
+	case "direct":
+		return DomainDirect, nil
+	case "block":
+		return DomainBlock, nil
+	default:
+		return DomainRoute, fmt.Errorf("unknown domain action: %q", s)
+	}
+}
+
+// DomainRule maps a domain pattern to a routing action.
+type DomainRule struct {
+	// Pattern is the matching expression: "domain:vk.com", "full:example.com", "keyword:google", "geosite:ru"
+	Pattern string `yaml:"pattern"`
+	// TunnelID identifies which tunnel to route through (only for DomainRoute).
+	TunnelID string `yaml:"tunnel_id,omitempty"`
+	// Action defines the routing behavior.
+	Action DomainAction `yaml:"action"`
+}
+
 // Rule maps a process pattern to a tunnel with a fallback policy.
 type Rule struct {
 	// Pattern is the matching expression: "firefox.exe", "chrome", "C:\Games\*"
@@ -193,12 +242,13 @@ type GUIConfig struct {
 
 // Config is the top-level application configuration.
 type Config struct {
-	Global  GlobalFilterConfig `yaml:"global,omitempty"`
-	Tunnels []TunnelConfig     `yaml:"tunnels"`
-	Rules   []Rule             `yaml:"rules"`
-	DNS     DNSRouteConfig     `yaml:"dns,omitempty"`
-	Logging LogConfig          `yaml:"logging,omitempty"`
-	GUI     GUIConfig          `yaml:"gui,omitempty"`
+	Global      GlobalFilterConfig `yaml:"global,omitempty"`
+	Tunnels     []TunnelConfig     `yaml:"tunnels"`
+	Rules       []Rule             `yaml:"rules"`
+	DomainRules []DomainRule       `yaml:"domain_rules,omitempty"`
+	DNS         DNSRouteConfig     `yaml:"dns,omitempty"`
+	Logging     LogConfig          `yaml:"logging,omitempty"`
+	GUI         GUIConfig          `yaml:"gui,omitempty"`
 }
 
 // ConfigManager handles loading, saving, and hot-reloading configuration.
@@ -308,6 +358,26 @@ func (cm *ConfigManager) SetRules(rules []Rule) {
 	}
 }
 
+// GetDomainRules returns domain routing rules.
+func (cm *ConfigManager) GetDomainRules() []DomainRule {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	result := make([]DomainRule, len(cm.config.DomainRules))
+	copy(result, cm.config.DomainRules)
+	return result
+}
+
+// SetDomainRules replaces the domain routing rules.
+func (cm *ConfigManager) SetDomainRules(rules []DomainRule) {
+	cm.mu.Lock()
+	cm.config.DomainRules = rules
+	cm.mu.Unlock()
+
+	if cm.bus != nil {
+		cm.bus.Publish(Event{Type: EventConfigReloaded})
+	}
+}
+
 // SetFromGUI replaces the entire config with values from the GUI.
 // Publishes EventConfigReloaded.
 func (cm *ConfigManager) SetFromGUI(cfg Config) {
@@ -359,4 +429,23 @@ func (p RulePriority) MarshalYAML() (any, error) {
 		return nil, nil // omit default
 	}
 	return p.String(), nil
+}
+
+// UnmarshalYAML implements yaml.Unmarshaler for DomainAction.
+func (a *DomainAction) UnmarshalYAML(value *yaml.Node) error {
+	var s string
+	if err := value.Decode(&s); err != nil {
+		return err
+	}
+	parsed, err := ParseDomainAction(s)
+	if err != nil {
+		return err
+	}
+	*a = parsed
+	return nil
+}
+
+// MarshalYAML implements yaml.Marshaler for DomainAction.
+func (a DomainAction) MarshalYAML() (any, error) {
+	return a.String(), nil
 }

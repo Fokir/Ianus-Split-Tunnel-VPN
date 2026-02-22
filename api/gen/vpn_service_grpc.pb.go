@@ -20,26 +20,30 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	VPNService_GetStatus_FullMethodName          = "/awg.vpn.v1.VPNService/GetStatus"
-	VPNService_Shutdown_FullMethodName           = "/awg.vpn.v1.VPNService/Shutdown"
-	VPNService_ListTunnels_FullMethodName        = "/awg.vpn.v1.VPNService/ListTunnels"
-	VPNService_GetTunnel_FullMethodName          = "/awg.vpn.v1.VPNService/GetTunnel"
-	VPNService_AddTunnel_FullMethodName          = "/awg.vpn.v1.VPNService/AddTunnel"
-	VPNService_RemoveTunnel_FullMethodName       = "/awg.vpn.v1.VPNService/RemoveTunnel"
-	VPNService_UpdateTunnel_FullMethodName       = "/awg.vpn.v1.VPNService/UpdateTunnel"
-	VPNService_Connect_FullMethodName            = "/awg.vpn.v1.VPNService/Connect"
-	VPNService_Disconnect_FullMethodName         = "/awg.vpn.v1.VPNService/Disconnect"
-	VPNService_RestartTunnel_FullMethodName      = "/awg.vpn.v1.VPNService/RestartTunnel"
-	VPNService_ListRules_FullMethodName          = "/awg.vpn.v1.VPNService/ListRules"
-	VPNService_SaveRules_FullMethodName          = "/awg.vpn.v1.VPNService/SaveRules"
-	VPNService_GetConfig_FullMethodName          = "/awg.vpn.v1.VPNService/GetConfig"
-	VPNService_SaveConfig_FullMethodName         = "/awg.vpn.v1.VPNService/SaveConfig"
-	VPNService_StreamLogs_FullMethodName         = "/awg.vpn.v1.VPNService/StreamLogs"
-	VPNService_StreamStats_FullMethodName        = "/awg.vpn.v1.VPNService/StreamStats"
-	VPNService_ListProcesses_FullMethodName      = "/awg.vpn.v1.VPNService/ListProcesses"
-	VPNService_GetAutostart_FullMethodName       = "/awg.vpn.v1.VPNService/GetAutostart"
-	VPNService_SetAutostart_FullMethodName       = "/awg.vpn.v1.VPNService/SetAutostart"
-	VPNService_RestoreConnections_FullMethodName = "/awg.vpn.v1.VPNService/RestoreConnections"
+	VPNService_GetStatus_FullMethodName             = "/awg.vpn.v1.VPNService/GetStatus"
+	VPNService_Shutdown_FullMethodName              = "/awg.vpn.v1.VPNService/Shutdown"
+	VPNService_ListTunnels_FullMethodName           = "/awg.vpn.v1.VPNService/ListTunnels"
+	VPNService_GetTunnel_FullMethodName             = "/awg.vpn.v1.VPNService/GetTunnel"
+	VPNService_AddTunnel_FullMethodName             = "/awg.vpn.v1.VPNService/AddTunnel"
+	VPNService_RemoveTunnel_FullMethodName          = "/awg.vpn.v1.VPNService/RemoveTunnel"
+	VPNService_UpdateTunnel_FullMethodName          = "/awg.vpn.v1.VPNService/UpdateTunnel"
+	VPNService_Connect_FullMethodName               = "/awg.vpn.v1.VPNService/Connect"
+	VPNService_Disconnect_FullMethodName            = "/awg.vpn.v1.VPNService/Disconnect"
+	VPNService_RestartTunnel_FullMethodName         = "/awg.vpn.v1.VPNService/RestartTunnel"
+	VPNService_ListRules_FullMethodName             = "/awg.vpn.v1.VPNService/ListRules"
+	VPNService_SaveRules_FullMethodName             = "/awg.vpn.v1.VPNService/SaveRules"
+	VPNService_ListDomainRules_FullMethodName       = "/awg.vpn.v1.VPNService/ListDomainRules"
+	VPNService_SaveDomainRules_FullMethodName       = "/awg.vpn.v1.VPNService/SaveDomainRules"
+	VPNService_ListGeositeCategories_FullMethodName = "/awg.vpn.v1.VPNService/ListGeositeCategories"
+	VPNService_UpdateGeosite_FullMethodName         = "/awg.vpn.v1.VPNService/UpdateGeosite"
+	VPNService_GetConfig_FullMethodName             = "/awg.vpn.v1.VPNService/GetConfig"
+	VPNService_SaveConfig_FullMethodName            = "/awg.vpn.v1.VPNService/SaveConfig"
+	VPNService_StreamLogs_FullMethodName            = "/awg.vpn.v1.VPNService/StreamLogs"
+	VPNService_StreamStats_FullMethodName           = "/awg.vpn.v1.VPNService/StreamStats"
+	VPNService_ListProcesses_FullMethodName         = "/awg.vpn.v1.VPNService/ListProcesses"
+	VPNService_GetAutostart_FullMethodName          = "/awg.vpn.v1.VPNService/GetAutostart"
+	VPNService_SetAutostart_FullMethodName          = "/awg.vpn.v1.VPNService/SetAutostart"
+	VPNService_RestoreConnections_FullMethodName    = "/awg.vpn.v1.VPNService/RestoreConnections"
 )
 
 // VPNServiceClient is the client API for VPNService service.
@@ -61,6 +65,11 @@ type VPNServiceClient interface {
 	// -- Rules --
 	ListRules(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*RuleListResponse, error)
 	SaveRules(ctx context.Context, in *SaveRulesRequest, opts ...grpc.CallOption) (*SaveRulesResponse, error)
+	// -- Domain rules --
+	ListDomainRules(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*DomainRuleListResponse, error)
+	SaveDomainRules(ctx context.Context, in *SaveDomainRulesRequest, opts ...grpc.CallOption) (*SaveDomainRulesResponse, error)
+	ListGeositeCategories(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GeositeCategoriesResponse, error)
+	UpdateGeosite(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*UpdateGeositeResponse, error)
 	// -- Config --
 	GetConfig(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*AppConfig, error)
 	SaveConfig(ctx context.Context, in *SaveConfigRequest, opts ...grpc.CallOption) (*SaveConfigResponse, error)
@@ -204,6 +213,46 @@ func (c *vPNServiceClient) SaveRules(ctx context.Context, in *SaveRulesRequest, 
 	return out, nil
 }
 
+func (c *vPNServiceClient) ListDomainRules(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*DomainRuleListResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DomainRuleListResponse)
+	err := c.cc.Invoke(ctx, VPNService_ListDomainRules_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) SaveDomainRules(ctx context.Context, in *SaveDomainRulesRequest, opts ...grpc.CallOption) (*SaveDomainRulesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SaveDomainRulesResponse)
+	err := c.cc.Invoke(ctx, VPNService_SaveDomainRules_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) ListGeositeCategories(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GeositeCategoriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GeositeCategoriesResponse)
+	err := c.cc.Invoke(ctx, VPNService_ListGeositeCategories_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) UpdateGeosite(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*UpdateGeositeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateGeositeResponse)
+	err := c.cc.Invoke(ctx, VPNService_UpdateGeosite_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *vPNServiceClient) GetConfig(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*AppConfig, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AppConfig)
@@ -321,6 +370,11 @@ type VPNServiceServer interface {
 	// -- Rules --
 	ListRules(context.Context, *emptypb.Empty) (*RuleListResponse, error)
 	SaveRules(context.Context, *SaveRulesRequest) (*SaveRulesResponse, error)
+	// -- Domain rules --
+	ListDomainRules(context.Context, *emptypb.Empty) (*DomainRuleListResponse, error)
+	SaveDomainRules(context.Context, *SaveDomainRulesRequest) (*SaveDomainRulesResponse, error)
+	ListGeositeCategories(context.Context, *emptypb.Empty) (*GeositeCategoriesResponse, error)
+	UpdateGeosite(context.Context, *emptypb.Empty) (*UpdateGeositeResponse, error)
 	// -- Config --
 	GetConfig(context.Context, *emptypb.Empty) (*AppConfig, error)
 	SaveConfig(context.Context, *SaveConfigRequest) (*SaveConfigResponse, error)
@@ -379,6 +433,18 @@ func (UnimplementedVPNServiceServer) ListRules(context.Context, *emptypb.Empty) 
 }
 func (UnimplementedVPNServiceServer) SaveRules(context.Context, *SaveRulesRequest) (*SaveRulesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SaveRules not implemented")
+}
+func (UnimplementedVPNServiceServer) ListDomainRules(context.Context, *emptypb.Empty) (*DomainRuleListResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListDomainRules not implemented")
+}
+func (UnimplementedVPNServiceServer) SaveDomainRules(context.Context, *SaveDomainRulesRequest) (*SaveDomainRulesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SaveDomainRules not implemented")
+}
+func (UnimplementedVPNServiceServer) ListGeositeCategories(context.Context, *emptypb.Empty) (*GeositeCategoriesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListGeositeCategories not implemented")
+}
+func (UnimplementedVPNServiceServer) UpdateGeosite(context.Context, *emptypb.Empty) (*UpdateGeositeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateGeosite not implemented")
 }
 func (UnimplementedVPNServiceServer) GetConfig(context.Context, *emptypb.Empty) (*AppConfig, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetConfig not implemented")
@@ -641,6 +707,78 @@ func _VPNService_SaveRules_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VPNService_ListDomainRules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).ListDomainRules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_ListDomainRules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).ListDomainRules(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_SaveDomainRules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SaveDomainRulesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).SaveDomainRules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_SaveDomainRules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).SaveDomainRules(ctx, req.(*SaveDomainRulesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_ListGeositeCategories_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).ListGeositeCategories(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_ListGeositeCategories_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).ListGeositeCategories(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_UpdateGeosite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).UpdateGeosite(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_UpdateGeosite_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).UpdateGeosite(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _VPNService_GetConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -825,6 +963,22 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SaveRules",
 			Handler:    _VPNService_SaveRules_Handler,
+		},
+		{
+			MethodName: "ListDomainRules",
+			Handler:    _VPNService_ListDomainRules_Handler,
+		},
+		{
+			MethodName: "SaveDomainRules",
+			Handler:    _VPNService_SaveDomainRules_Handler,
+		},
+		{
+			MethodName: "ListGeositeCategories",
+			Handler:    _VPNService_ListGeositeCategories_Handler,
+		},
+		{
+			MethodName: "UpdateGeosite",
+			Handler:    _VPNService_UpdateGeosite_Handler,
 		},
 		{
 			MethodName: "GetConfig",

@@ -7,6 +7,7 @@ package service
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"time"
 
@@ -50,6 +51,10 @@ type Service struct {
 	version   string
 	startTime time.Time
 
+	domainReloader  func(rules []core.DomainRule) error
+	geositeFilePath string
+	httpClient      *http.Client
+
 	mu sync.RWMutex
 }
 
@@ -63,18 +68,29 @@ type Config struct {
 	LogStreamer    *LogStreamer
 	StatsCollector *StatsCollector // optional: use externally-created collector
 	Version        string
+
+	// DomainReloader rebuilds the domain matcher from updated rules.
+	// Called by SaveDomainRules and UpdateGeosite handlers.
+	DomainReloader func(rules []core.DomainRule) error
+	// GeositeFilePath is the path to geosite.dat for listing categories and updating.
+	GeositeFilePath string
+	// HTTPClient is bound to the real NIC to bypass TUN for outbound HTTP (geosite downloads).
+	HTTPClient *http.Client
 }
 
 // New creates a new Service instance.
 func New(c Config) *Service {
 	s := &Service{
-		cfg:       c.ConfigManager,
-		registry:  c.TunnelRegistry,
-		rules:     c.RuleEngine,
-		bus:       c.EventBus,
-		ctrl:      c.TunnelCtrl,
-		version:   c.Version,
-		startTime: time.Now(),
+		cfg:             c.ConfigManager,
+		registry:        c.TunnelRegistry,
+		rules:           c.RuleEngine,
+		bus:             c.EventBus,
+		ctrl:            c.TunnelCtrl,
+		version:         c.Version,
+		startTime:       time.Now(),
+		domainReloader:  c.DomainReloader,
+		geositeFilePath: c.GeositeFilePath,
+		httpClient:      c.HTTPClient,
 	}
 	if c.LogStreamer != nil {
 		s.logs = c.LogStreamer
