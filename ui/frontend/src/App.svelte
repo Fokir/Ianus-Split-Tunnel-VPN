@@ -44,12 +44,12 @@
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
-<div class="flex flex-col h-screen bg-zinc-900 text-zinc-100 select-none" on:contextmenu|preventDefault={() => {}}>
+<div class="flex flex-col h-screen bg-zinc-900 text-zinc-100 select-none overflow-hidden" on:contextmenu|preventDefault={() => {}}>
   <!-- Custom titlebar -->
   <TitleBar />
 
   <!-- Tab bar -->
-  <nav class="flex border-b border-zinc-700/60 bg-zinc-900/80 backdrop-blur-sm shrink-0">
+  <nav class="flex border-b border-zinc-700/60 bg-zinc-900/80 backdrop-blur-sm shrink-0 overflow-x-hidden">
     {#each tabs as tab}
       <button
         class="relative flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors
@@ -70,7 +70,7 @@
   </nav>
 
   <!-- Tab content -->
-  <main class="flex-1 overflow-y-auto">
+  <main class="flex-1 overflow-y-auto overflow-x-hidden">
     {#if activeTab === 'connections'}
       <ConnectionsTab />
     {:else if activeTab === 'subscriptions'}
