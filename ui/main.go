@@ -62,7 +62,7 @@ func main() {
 		Title:            "AWG Split Tunnel",
 		Width:            900,
 		Height:           650,
-		MinWidth:         750,
+		MinWidth:         850,
 		MinHeight:        450,
 		URL:              "/",
 		Frameless:        true,
