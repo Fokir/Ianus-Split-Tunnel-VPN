@@ -104,11 +104,7 @@ set ZIP_PATH=%OUT_DIR%\%ZIP_NAME%
 if exist "%ZIP_PATH%" del "%ZIP_PATH%"
 
 :: Use PowerShell to create zip (available on all modern Windows).
-powershell -NoProfile -Command ^
-    "$files = @('%OUT_DIR%\%APP_NAME%.exe', '%OUT_DIR%\%APP_NAME%-ui.exe', '%OUT_DIR%\%APP_NAME%-updater.exe'); ^
-     if (Test-Path '%OUT_DIR%\wintun.dll') { $files += '%OUT_DIR%\wintun.dll' }; ^
-     if (Test-Path 'config.example.yaml') { $files += 'config.example.yaml' }; ^
-     Compress-Archive -Path $files -DestinationPath '%ZIP_PATH%' -Force"
+%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "$files = @('%OUT_DIR%\%APP_NAME%.exe', '%OUT_DIR%\%APP_NAME%-ui.exe', '%OUT_DIR%\%APP_NAME%-updater.exe'); if (Test-Path '%OUT_DIR%\wintun.dll') { $files += '%OUT_DIR%\wintun.dll' }; if (Test-Path 'config.example.yaml') { $files += 'config.example.yaml' }; Compress-Archive -Path $files -DestinationPath '%ZIP_PATH%' -Force"
 
 if %ERRORLEVEL% NEQ 0 (
     echo WARNING: Failed to create release zip
