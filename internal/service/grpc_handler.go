@@ -232,9 +232,10 @@ func (s *Service) GetConfig(_ context.Context, _ *emptypb.Empty) (*vpnapi.AppCon
 func (s *Service) SaveConfig(ctx context.Context, req *vpnapi.SaveConfigRequest) (*vpnapi.SaveConfigResponse, error) {
 	newCfg := configFromProto(req.Config)
 
-	// Preserve fields managed separately.
+	// Preserve fields not exposed via proto.
 	oldCfg := s.cfg.Get()
 	newCfg.GUI = oldCfg.GUI
+	newCfg.Update = oldCfg.Update
 	// Subscriptions are now part of AppConfig proto, but if the client sends
 	// an empty list we preserve the existing subscriptions (backward compat).
 	if len(newCfg.Subscriptions) == 0 && len(oldCfg.Subscriptions) > 0 {

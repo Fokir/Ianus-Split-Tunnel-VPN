@@ -13,7 +13,7 @@ global:
   # Additional IPs that always bypass VPN (go direct). Checked before AllowedIPs.
   # Bare IPs (without /mask) are treated as /32.
   disallowed_ips:
-#    - "212.193.55.91/32"   # Specific server
+#    - "192.168.0.0/24"   # Specific server
 
   # Apps that always go direct (bypass VPN entirely).
   # Same pattern syntax as rules: exe name, substring, path glob, dir\*
@@ -86,7 +86,7 @@ rules:
 dns:
   # Tunnel for system DNS queries (svchost.exe, unmatched processes).
   # Omit or leave empty to route through direct (system DNS via real NIC).
-  tunnel_id: awg-germany
+  tunnel_id: direct
 
   # DNS servers for fallback queries.
   # If empty, uses the tunnel's built-in DNS servers from WG config.
@@ -94,6 +94,7 @@ dns:
   servers:
     - "1.1.1.1"
     - "8.8.8.8"
+    - "9.9.9.9"
 
   # DNS response cache (optional, enabled by default).
   # Caches upstream DNS responses to avoid redundant queries.
@@ -118,6 +119,6 @@ logging:
 
 # Auto-update settings (optional).
 # Checks GitHub Releases for new versions periodically.
-# update:
-#   enabled: true          # Enable periodic update checks (default: true)
-#   check_interval: "24h"  # How often to check (default: "24h")
+update:
+   enabled: true          # Enable periodic update checks (default: true)
+   check_interval: "24h"  # How often to check (default: "24h")

@@ -131,10 +131,11 @@ Section "install"
     DetailPrint "Starting Windows Service..."
     nsExec::ExecToLog '"$INSTDIR\${SERVICE_BINARY}" start'
 
-    # GUI autostart (HKCU — per user, starts at login)
-    WriteRegStr HKCU "${GUI_REG_KEY}" "${GUI_REG_NAME}" '"$INSTDIR\${PRODUCT_EXECUTABLE}" --minimized'
+    # GUI autostart via Task Scheduler (HIGHEST run level for elevated GUI)
+    nsExec::ExecToLog 'schtasks /Create /TN "AWGSplitTunnelGUI" /TR "\"$INSTDIR\${PRODUCT_EXECUTABLE}\" --minimized" /SC ONLOGON /RL HIGHEST /F'
 
-    # Remove legacy schtasks entry if present
+    # Remove legacy entries (old registry + old schtasks)
+    DeleteRegValue HKCU "${GUI_REG_KEY}" "${GUI_REG_NAME}"
     nsExec::ExecToLog 'schtasks /Delete /TN "AWGSplitTunnel" /F'
 
     # Shortcuts
@@ -164,7 +165,8 @@ Section "uninstall"
     nsExec::ExecToLog 'taskkill /F /IM ${PRODUCT_EXECUTABLE}'
     Sleep 1000
 
-    # Remove GUI autostart
+    # Remove GUI autostart (schtasks + legacy registry)
+    nsExec::ExecToLog 'schtasks /Delete /TN "AWGSplitTunnelGUI" /F'
     DeleteRegValue HKCU "${GUI_REG_KEY}" "${GUI_REG_NAME}"
 
     # Remove legacy schtasks
