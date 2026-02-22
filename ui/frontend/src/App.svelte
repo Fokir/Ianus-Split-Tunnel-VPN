@@ -43,7 +43,8 @@
   });
 </script>
 
-<div class="flex flex-col h-screen bg-zinc-900 text-zinc-100 select-none">
+<!-- svelte-ignore a11y-no-static-element-interactions -->
+<div class="flex flex-col h-screen bg-zinc-900 text-zinc-100 select-none" on:contextmenu|preventDefault={() => {}}>
   <!-- Custom titlebar -->
   <TitleBar />
 

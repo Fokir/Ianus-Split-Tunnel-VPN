@@ -23,34 +23,28 @@ func setupTray(app *application.App, mainWindow *application.WebviewWindow, bind
 
 	menu := app.Menu.New()
 
-	// Connect/Disconnect toggle.
-	connectItem := menu.Add("Подключить")
-	connectItem.OnClick(func(_ *application.Context) {
-		ctx := context.Background()
-		status, err := binding.client.Service.GetStatus(ctx, &emptypb.Empty{})
-		if err != nil {
-			return
-		}
-		if status.ActiveTunnels > 0 {
-			// Disconnect all.
-			_, _ = binding.client.Service.Disconnect(ctx, &vpnapi.DisconnectRequest{})
-			connectItem.SetLabel("Подключить")
-		} else {
-			// Connect all.
-			_, _ = binding.client.Service.Connect(ctx, &vpnapi.ConnectRequest{})
-			connectItem.SetLabel("Отключить")
-			connectItem.SetChecked(true)
-		}
-	})
+	// Tab navigation items — mirrors the GUI tab bar.
+	tabItems := []struct {
+		label string
+		path  string
+	}{
+		{"Подключения", "/connections"},
+		{"Подписки", "/subscriptions"},
+		{"Правила", "/rules"},
+		{"Домены", "/domains"},
+		{"Настройки", "/settings"},
+		{"Логи", "/logs"},
+		{"О программе", "/about"},
+	}
 
-	menu.AddSeparator()
-
-	// Settings — open main window on settings tab.
-	menu.Add("Настройки").OnClick(func(_ *application.Context) {
-		mainWindow.Show()
-		mainWindow.Focus()
-		app.Event.Emit("navigate", "/settings")
-	})
+	for _, tab := range tabItems {
+		t := tab
+		menu.Add(t.label).OnClick(func(_ *application.Context) {
+			mainWindow.Show()
+			mainWindow.Focus()
+			app.Event.Emit("navigate", t.path)
+		})
+	}
 
 	menu.AddSeparator()
 
@@ -64,10 +58,10 @@ func setupTray(app *application.App, mainWindow *application.WebviewWindow, bind
 	systray.SetMenu(menu)
 
 	// Update tray state periodically based on VPN status.
-	go updateTrayState(app, systray, connectItem, binding)
+	go updateTrayState(app, systray, binding)
 }
 
-func updateTrayState(app *application.App, systray *application.SystemTray, connectItem *application.MenuItem, binding *BindingService) {
+func updateTrayState(app *application.App, systray *application.SystemTray, binding *BindingService) {
 	ctx := context.Background()
 
 	// Subscribe to stats stream to update tray icon.
@@ -99,12 +93,8 @@ func updateTrayState(app *application.App, systray *application.SystemTray, conn
 			systray.SetLabel("AWG - Error")
 		} else if hasActive {
 			systray.SetLabel("AWG - Connected")
-			connectItem.SetLabel("Отключить")
-			connectItem.SetChecked(true)
 		} else {
 			systray.SetLabel("AWG - Disconnected")
-			connectItem.SetLabel("Подключить")
-			connectItem.SetChecked(false)
 		}
 	}
 }

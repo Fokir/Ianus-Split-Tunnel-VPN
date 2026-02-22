@@ -95,50 +95,55 @@
     return parts.join('\n');
   }
 
+  // Sort: Direct (__direct__) always first, then alphabetical by name.
+  $: sortedTunnels = [...tunnels].sort((a, b) => {
+    const aIsDirect = a.id === '__direct__';
+    const bIsDirect = b.id === '__direct__';
+    if (aIsDirect && !bIsDirect) return -1;
+    if (!aIsDirect && bIsDirect) return 1;
+    const nameA = (a.name || a.id).toLowerCase();
+    const nameB = (b.name || b.id).toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
+
 </script>
 
-<footer class="flex items-center gap-1 px-2 py-1 bg-zinc-800/60 border-t border-zinc-700/40 shrink-0 overflow-x-auto">
-  {#if tunnels.length === 0}
+<footer class="flex flex-wrap items-center gap-x-1 gap-y-0.5 px-2 py-1 bg-zinc-800/60 border-t border-zinc-700/40 shrink-0">
+  {#if sortedTunnels.length === 0}
     <span class="text-xs text-zinc-600 px-2">Нет туннелей</span>
   {:else}
-    {#each tunnels as tunnel}
-      <div class="flex items-center gap-1.5 px-2 py-0.5 rounded text-xs shrink-0">
+    {#each sortedTunnels as tunnel}
+      <div class="flex items-center gap-1.5 px-1.5 py-0.5 rounded text-xs min-w-0"
+           style="flex: {sortedTunnels.length <= 4 ? '1 1 0' : '0 0 calc(25% - 3px)'}">
         <!-- State indicator -->
         {#if tunnel.state === 'up' && hasWarning(tunnel)}
-          <span class="flex items-center {warningColor(tunnel)}" title={qualityTooltip(tunnel)}>
+          <span class="flex items-center shrink-0 {warningColor(tunnel)}" title={qualityTooltip(tunnel)}>
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3">
               <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.168 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" />
             </svg>
           </span>
         {:else}
-          <span class="w-1.5 h-1.5 rounded-full {tunnel.state === 'up' ? 'bg-green-400' : tunnel.state === 'connecting' ? 'bg-yellow-400 animate-pulse' : tunnel.state === 'error' ? 'bg-red-400' : 'bg-zinc-600'}"></span>
+          <span class="w-1.5 h-1.5 rounded-full shrink-0 {tunnel.state === 'up' ? 'bg-green-400' : tunnel.state === 'connecting' ? 'bg-yellow-400 animate-pulse' : tunnel.state === 'error' ? 'bg-red-400' : 'bg-zinc-600'}"></span>
         {/if}
 
-        <!-- Name -->
-        <span class="text-zinc-400 font-medium leading-none">{tunnel.name || tunnel.id}</span>
+        <!-- Name (truncated with ellipsis on overflow) -->
+        <span class="text-zinc-400 font-medium leading-none truncate min-w-[3rem]">{tunnel.name || tunnel.id}</span>
 
         <!-- Speed + quality (only if up) -->
         {#if tunnel.state === 'up'}
           {@const txText = formatSpeed(tunnel.txSpeed)}
           {@const rxText = formatSpeed(tunnel.rxSpeed)}
-          <span class="text-zinc-600 font-mono tabular-nums inline-flex items-center gap-0.5">
+          <span class="text-zinc-600 font-mono tabular-nums inline-flex items-center gap-0.5 shrink-0">
             <span class="text-green-400/60 inline-block w-[4rem] overflow-hidden whitespace-nowrap leading-none {txText.length > 7 ? 'text-[0.625rem]' : ''}" title="Upload">&uarr;{txText}</span>
             <span class="text-blue-400/60 inline-block w-[4rem] overflow-hidden whitespace-nowrap leading-none {rxText.length > 7 ? 'text-[0.625rem]' : ''}" title="Download">&darr;{rxText}</span>
           </span>
 
           <!-- Packet loss -->
-          <span class="font-mono tabular-nums inline-flex items-center w-[3rem] overflow-hidden whitespace-nowrap leading-none {lossColor(tunnel.packetLoss)}" title={qualityTooltip(tunnel)}>
+          <span class="font-mono tabular-nums inline-flex items-center w-[3rem] overflow-hidden whitespace-nowrap leading-none shrink-0 {lossColor(tunnel.packetLoss)}" title={qualityTooltip(tunnel)}>
             {formatLoss(tunnel.packetLoss)}
           </span>
-
         {/if}
-
       </div>
-
-      <!-- Separator between tunnels -->
-      {#if tunnel !== tunnels[tunnels.length - 1]}
-        <span class="text-zinc-700/50">|</span>
-      {/if}
     {/each}
   {/if}
 </footer>

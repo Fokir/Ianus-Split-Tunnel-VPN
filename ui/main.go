@@ -62,6 +62,8 @@ func main() {
 		Title:            "AWG Split Tunnel",
 		Width:            900,
 		Height:           650,
+		MinWidth:         750,
+		MinHeight:        450,
 		URL:              "/",
 		Frameless:        true,
 		BackgroundColour: application.NewRGB(24, 24, 27), // zinc-900
