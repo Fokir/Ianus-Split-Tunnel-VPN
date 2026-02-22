@@ -5,6 +5,7 @@ package gateway
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -317,6 +318,11 @@ func (r *DNSResolver) forwardUDPSingle(ctx context.Context, prov provider.Tunnel
 	addr := net.JoinHostPort(server.String(), "53")
 
 	conn, err := prov.DialUDP(ctx, addr)
+	if errors.Is(err, provider.ErrUDPNotSupported) {
+		// Provider doesn't support UDP — use DNS-over-TCP (RFC 1035 §4.2.2).
+		core.Log.Debugf("DNS", "UDP not supported by provider, falling back to TCP for %s", server)
+		return r.forwardTCPSingle(ctx, prov, server, query)
+	}
 	if err != nil {
 		return nil, server, err
 	}

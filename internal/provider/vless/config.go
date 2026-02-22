@@ -195,16 +195,49 @@ func buildXrayJSON(cfg Config) ([]byte, error) {
 
 	outbound["streamSettings"] = stream
 
+	// Build two outbounds: TCP and UDP separated so that UDP is never muxed.
+	// Mux is disabled on both by default — it requires explicit opt-in via Config
+	// because many transports (XHTTP/SplitHTTP) and server setups don't support it.
+	tcpOutbound := deepCopyMap(outbound)
+	tcpOutbound["tag"] = "vless-tcp"
+	tcpOutbound["mux"] = map[string]any{
+		"enabled":     false,
+		"concurrency": -1,
+	}
+
+	udpOutbound := deepCopyMap(outbound)
+	udpOutbound["tag"] = "vless-udp"
+	udpOutbound["mux"] = map[string]any{
+		"enabled":     false,
+		"concurrency": -1,
+	}
+
 	xrayConfig := map[string]any{
 		"log": map[string]any{
 			"loglevel": "warning",
 		},
 		"outbounds": []map[string]any{
-			outbound,
+			tcpOutbound,
+			udpOutbound,
 			{
 				"tag":      "direct",
 				"protocol": "freedom",
 				"settings": map[string]any{},
+			},
+		},
+		"routing": map[string]any{
+			"domainStrategy": "AsIs",
+			"rules": []map[string]any{
+				{
+					"type":        "field",
+					"network":     "udp",
+					"outboundTag": "vless-udp",
+				},
+				{
+					"type":        "field",
+					"network":     "tcp",
+					"outboundTag": "vless-tcp",
+				},
 			},
 		},
 	}
@@ -214,6 +247,28 @@ func buildXrayJSON(cfg Config) ([]byte, error) {
 		return nil, fmt.Errorf("marshal xray config: %w", err)
 	}
 	return data, nil
+}
+
+// deepCopyMap performs a shallow-ish copy of a map[string]any, recursing into
+// nested map[string]any and []map[string]any values so that the copy can be
+// mutated independently of the original.
+func deepCopyMap(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		switch val := v.(type) {
+		case map[string]any:
+			dst[k] = deepCopyMap(val)
+		case []map[string]any:
+			cp := make([]map[string]any, len(val))
+			for i, m := range val {
+				cp[i] = deepCopyMap(m)
+			}
+			dst[k] = cp
+		default:
+			dst[k] = v
+		}
+	}
+	return dst
 }
 
 // ParseXrayJSON parses a standard xray-core JSON config file and extracts
