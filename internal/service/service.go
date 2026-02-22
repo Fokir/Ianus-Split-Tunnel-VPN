@@ -13,6 +13,7 @@ import (
 
 	vpnapi "awg-split-tunnel/api/gen"
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/update"
 )
 
 // TunnelController abstracts tunnel lifecycle operations
@@ -55,7 +56,8 @@ type Service struct {
 	geositeFilePath string
 	httpClient      *http.Client
 
-	subMgr *core.SubscriptionManager
+	subMgr         *core.SubscriptionManager
+	updateChecker  *update.Checker
 
 	mu sync.RWMutex
 }
@@ -80,6 +82,8 @@ type Config struct {
 	HTTPClient *http.Client
 	// SubscriptionManager manages subscription URL fetching and refresh.
 	SubscriptionManager *core.SubscriptionManager
+	// UpdateChecker is an optional auto-update checker instance.
+	UpdateChecker *update.Checker
 }
 
 // New creates a new Service instance.
@@ -107,6 +111,7 @@ func New(c Config) *Service {
 		s.stats = NewStatsCollector(c.TunnelRegistry, c.EventBus)
 	}
 	s.subMgr = c.SubscriptionManager
+	s.updateChecker = c.UpdateChecker
 	return s
 }
 

@@ -3003,6 +3003,178 @@ func (x *ServiceStatus) GetUptimeSeconds() int64 {
 	return 0
 }
 
+type UpdateInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`                               // new version string (e.g. "1.2.0")
+	ReleaseNotes  string                 `protobuf:"bytes,2,opt,name=release_notes,json=releaseNotes,proto3" json:"release_notes,omitempty"` // markdown release notes
+	AssetUrl      string                 `protobuf:"bytes,3,opt,name=asset_url,json=assetUrl,proto3" json:"asset_url,omitempty"`             // download URL
+	AssetSize     int64                  `protobuf:"varint,4,opt,name=asset_size,json=assetSize,proto3" json:"asset_size,omitempty"`         // asset size in bytes
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateInfo) Reset() {
+	*x = UpdateInfo{}
+	mi := &file_vpn_service_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateInfo) ProtoMessage() {}
+
+func (x *UpdateInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_service_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateInfo.ProtoReflect.Descriptor instead.
+func (*UpdateInfo) Descriptor() ([]byte, []int) {
+	return file_vpn_service_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *UpdateInfo) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *UpdateInfo) GetReleaseNotes() string {
+	if x != nil {
+		return x.ReleaseNotes
+	}
+	return ""
+}
+
+func (x *UpdateInfo) GetAssetUrl() string {
+	if x != nil {
+		return x.AssetUrl
+	}
+	return ""
+}
+
+func (x *UpdateInfo) GetAssetSize() int64 {
+	if x != nil {
+		return x.AssetSize
+	}
+	return 0
+}
+
+type CheckUpdateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Available     bool                   `protobuf:"varint,1,opt,name=available,proto3" json:"available,omitempty"`
+	Info          *UpdateInfo            `protobuf:"bytes,2,opt,name=info,proto3" json:"info,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckUpdateResponse) Reset() {
+	*x = CheckUpdateResponse{}
+	mi := &file_vpn_service_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckUpdateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckUpdateResponse) ProtoMessage() {}
+
+func (x *CheckUpdateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_service_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckUpdateResponse.ProtoReflect.Descriptor instead.
+func (*CheckUpdateResponse) Descriptor() ([]byte, []int) {
+	return file_vpn_service_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *CheckUpdateResponse) GetAvailable() bool {
+	if x != nil {
+		return x.Available
+	}
+	return false
+}
+
+func (x *CheckUpdateResponse) GetInfo() *UpdateInfo {
+	if x != nil {
+		return x.Info
+	}
+	return nil
+}
+
+type ApplyUpdateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyUpdateResponse) Reset() {
+	*x = ApplyUpdateResponse{}
+	mi := &file_vpn_service_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyUpdateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyUpdateResponse) ProtoMessage() {}
+
+func (x *ApplyUpdateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_service_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyUpdateResponse.ProtoReflect.Descriptor instead.
+func (*ApplyUpdateResponse) Descriptor() ([]byte, []int) {
+	return file_vpn_service_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *ApplyUpdateResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ApplyUpdateResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type AutostartConfig struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	Enabled            bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
@@ -3013,7 +3185,7 @@ type AutostartConfig struct {
 
 func (x *AutostartConfig) Reset() {
 	*x = AutostartConfig{}
-	mi := &file_vpn_service_proto_msgTypes[49]
+	mi := &file_vpn_service_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3025,7 +3197,7 @@ func (x *AutostartConfig) String() string {
 func (*AutostartConfig) ProtoMessage() {}
 
 func (x *AutostartConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[49]
+	mi := &file_vpn_service_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3038,7 +3210,7 @@ func (x *AutostartConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AutostartConfig.ProtoReflect.Descriptor instead.
 func (*AutostartConfig) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{49}
+	return file_vpn_service_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *AutostartConfig) GetEnabled() bool {
@@ -3064,7 +3236,7 @@ type SetAutostartRequest struct {
 
 func (x *SetAutostartRequest) Reset() {
 	*x = SetAutostartRequest{}
-	mi := &file_vpn_service_proto_msgTypes[50]
+	mi := &file_vpn_service_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3076,7 +3248,7 @@ func (x *SetAutostartRequest) String() string {
 func (*SetAutostartRequest) ProtoMessage() {}
 
 func (x *SetAutostartRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[50]
+	mi := &file_vpn_service_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3089,7 +3261,7 @@ func (x *SetAutostartRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetAutostartRequest.ProtoReflect.Descriptor instead.
 func (*SetAutostartRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{50}
+	return file_vpn_service_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *SetAutostartRequest) GetConfig() *AutostartConfig {
@@ -3109,7 +3281,7 @@ type SetAutostartResponse struct {
 
 func (x *SetAutostartResponse) Reset() {
 	*x = SetAutostartResponse{}
-	mi := &file_vpn_service_proto_msgTypes[51]
+	mi := &file_vpn_service_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3121,7 +3293,7 @@ func (x *SetAutostartResponse) String() string {
 func (*SetAutostartResponse) ProtoMessage() {}
 
 func (x *SetAutostartResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[51]
+	mi := &file_vpn_service_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3134,7 +3306,7 @@ func (x *SetAutostartResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetAutostartResponse.ProtoReflect.Descriptor instead.
 func (*SetAutostartResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{51}
+	return file_vpn_service_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *SetAutostartResponse) GetSuccess() bool {
@@ -3354,7 +3526,20 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\x0eactive_tunnels\x18\x02 \x01(\x05R\ractiveTunnels\x12#\n" +
 	"\rtotal_tunnels\x18\x03 \x01(\x05R\ftotalTunnels\x12\x18\n" +
 	"\aversion\x18\x04 \x01(\tR\aversion\x12%\n" +
-	"\x0euptime_seconds\x18\x05 \x01(\x03R\ruptimeSeconds\"\\\n" +
+	"\x0euptime_seconds\x18\x05 \x01(\x03R\ruptimeSeconds\"\x87\x01\n" +
+	"\n" +
+	"UpdateInfo\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\x12#\n" +
+	"\rrelease_notes\x18\x02 \x01(\tR\freleaseNotes\x12\x1b\n" +
+	"\tasset_url\x18\x03 \x01(\tR\bassetUrl\x12\x1d\n" +
+	"\n" +
+	"asset_size\x18\x04 \x01(\x03R\tassetSize\"_\n" +
+	"\x13CheckUpdateResponse\x12\x1c\n" +
+	"\tavailable\x18\x01 \x01(\bR\tavailable\x12*\n" +
+	"\x04info\x18\x02 \x01(\v2\x16.awg.vpn.v1.UpdateInfoR\x04info\"E\n" +
+	"\x13ApplyUpdateResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\\\n" +
 	"\x0fAutostartConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12/\n" +
 	"\x13restore_connections\x18\x02 \x01(\bR\x12restoreConnections\"J\n" +
@@ -3382,7 +3567,7 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\fDomainAction\x12\x17\n" +
 	"\x13DOMAIN_ACTION_ROUTE\x10\x00\x12\x18\n" +
 	"\x14DOMAIN_ACTION_DIRECT\x10\x01\x12\x17\n" +
-	"\x13DOMAIN_ACTION_BLOCK\x10\x022\x85\x11\n" +
+	"\x13DOMAIN_ACTION_BLOCK\x10\x022\x95\x12\n" +
 	"\n" +
 	"VPNService\x12>\n" +
 	"\tGetStatus\x12\x16.google.protobuf.Empty\x1a\x19.awg.vpn.v1.ServiceStatus\x12:\n" +
@@ -3415,7 +3600,9 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\x0fAddSubscription\x12\".awg.vpn.v1.AddSubscriptionRequest\x1a#.awg.vpn.v1.AddSubscriptionResponse\x12c\n" +
 	"\x12RemoveSubscription\x12%.awg.vpn.v1.RemoveSubscriptionRequest\x1a&.awg.vpn.v1.RemoveSubscriptionResponse\x12f\n" +
 	"\x13RefreshSubscription\x12&.awg.vpn.v1.RefreshSubscriptionRequest\x1a'.awg.vpn.v1.RefreshSubscriptionResponse\x12I\n" +
-	"\x12RestoreConnections\x12\x16.google.protobuf.Empty\x1a\x1b.awg.vpn.v1.ConnectResponseB!Z\x1fawg-split-tunnel/api/gen;vpnapib\x06proto3"
+	"\x12RestoreConnections\x12\x16.google.protobuf.Empty\x1a\x1b.awg.vpn.v1.ConnectResponse\x12F\n" +
+	"\vCheckUpdate\x12\x16.google.protobuf.Empty\x1a\x1f.awg.vpn.v1.CheckUpdateResponse\x12F\n" +
+	"\vApplyUpdate\x12\x16.google.protobuf.Empty\x1a\x1f.awg.vpn.v1.ApplyUpdateResponseB!Z\x1fawg-split-tunnel/api/gen;vpnapib\x06proto3"
 
 var (
 	file_vpn_service_proto_rawDescOnce sync.Once
@@ -3430,7 +3617,7 @@ func file_vpn_service_proto_rawDescGZIP() []byte {
 }
 
 var file_vpn_service_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_vpn_service_proto_msgTypes = make([]protoimpl.MessageInfo, 54)
+var file_vpn_service_proto_msgTypes = make([]protoimpl.MessageInfo, 57)
 var file_vpn_service_proto_goTypes = []any{
 	(TunnelState)(0),                    // 0: awg.vpn.v1.TunnelState
 	(FallbackPolicy)(0),                 // 1: awg.vpn.v1.FallbackPolicy
@@ -3485,22 +3672,25 @@ var file_vpn_service_proto_goTypes = []any{
 	(*RefreshSubscriptionRequest)(nil),  // 50: awg.vpn.v1.RefreshSubscriptionRequest
 	(*RefreshSubscriptionResponse)(nil), // 51: awg.vpn.v1.RefreshSubscriptionResponse
 	(*ServiceStatus)(nil),               // 52: awg.vpn.v1.ServiceStatus
-	(*AutostartConfig)(nil),             // 53: awg.vpn.v1.AutostartConfig
-	(*SetAutostartRequest)(nil),         // 54: awg.vpn.v1.SetAutostartRequest
-	(*SetAutostartResponse)(nil),        // 55: awg.vpn.v1.SetAutostartResponse
-	nil,                                 // 56: awg.vpn.v1.TunnelConfig.SettingsEntry
-	nil,                                 // 57: awg.vpn.v1.LogConfig.ComponentsEntry
-	(*timestamppb.Timestamp)(nil),       // 58: google.protobuf.Timestamp
-	(*emptypb.Empty)(nil),               // 59: google.protobuf.Empty
+	(*UpdateInfo)(nil),                  // 53: awg.vpn.v1.UpdateInfo
+	(*CheckUpdateResponse)(nil),         // 54: awg.vpn.v1.CheckUpdateResponse
+	(*ApplyUpdateResponse)(nil),         // 55: awg.vpn.v1.ApplyUpdateResponse
+	(*AutostartConfig)(nil),             // 56: awg.vpn.v1.AutostartConfig
+	(*SetAutostartRequest)(nil),         // 57: awg.vpn.v1.SetAutostartRequest
+	(*SetAutostartResponse)(nil),        // 58: awg.vpn.v1.SetAutostartResponse
+	nil,                                 // 59: awg.vpn.v1.TunnelConfig.SettingsEntry
+	nil,                                 // 60: awg.vpn.v1.LogConfig.ComponentsEntry
+	(*timestamppb.Timestamp)(nil),       // 61: google.protobuf.Timestamp
+	(*emptypb.Empty)(nil),               // 62: google.protobuf.Empty
 }
 var file_vpn_service_proto_depIdxs = []int32{
-	56, // 0: awg.vpn.v1.TunnelConfig.settings:type_name -> awg.vpn.v1.TunnelConfig.SettingsEntry
+	59, // 0: awg.vpn.v1.TunnelConfig.settings:type_name -> awg.vpn.v1.TunnelConfig.SettingsEntry
 	4,  // 1: awg.vpn.v1.TunnelStatus.config:type_name -> awg.vpn.v1.TunnelConfig
 	0,  // 2: awg.vpn.v1.TunnelStatus.state:type_name -> awg.vpn.v1.TunnelState
 	3,  // 3: awg.vpn.v1.DomainRule.action:type_name -> awg.vpn.v1.DomainAction
 	1,  // 4: awg.vpn.v1.Rule.fallback:type_name -> awg.vpn.v1.FallbackPolicy
 	8,  // 5: awg.vpn.v1.DNSConfig.cache:type_name -> awg.vpn.v1.DNSCacheConfig
-	57, // 6: awg.vpn.v1.LogConfig.components:type_name -> awg.vpn.v1.LogConfig.ComponentsEntry
+	60, // 6: awg.vpn.v1.LogConfig.components:type_name -> awg.vpn.v1.LogConfig.ComponentsEntry
 	12, // 7: awg.vpn.v1.SubscriptionStatus.config:type_name -> awg.vpn.v1.SubscriptionConfig
 	10, // 8: awg.vpn.v1.AppConfig.global:type_name -> awg.vpn.v1.GlobalFilterConfig
 	4,  // 9: awg.vpn.v1.AppConfig.tunnels:type_name -> awg.vpn.v1.TunnelConfig
@@ -3510,10 +3700,10 @@ var file_vpn_service_proto_depIdxs = []int32{
 	6,  // 13: awg.vpn.v1.AppConfig.domain_rules:type_name -> awg.vpn.v1.DomainRule
 	12, // 14: awg.vpn.v1.AppConfig.subscriptions:type_name -> awg.vpn.v1.SubscriptionConfig
 	0,  // 15: awg.vpn.v1.TunnelStats.state:type_name -> awg.vpn.v1.TunnelState
-	58, // 16: awg.vpn.v1.TunnelStats.last_handshake:type_name -> google.protobuf.Timestamp
+	61, // 16: awg.vpn.v1.TunnelStats.last_handshake:type_name -> google.protobuf.Timestamp
 	15, // 17: awg.vpn.v1.StatsSnapshot.tunnels:type_name -> awg.vpn.v1.TunnelStats
-	58, // 18: awg.vpn.v1.StatsSnapshot.timestamp:type_name -> google.protobuf.Timestamp
-	58, // 19: awg.vpn.v1.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	61, // 18: awg.vpn.v1.StatsSnapshot.timestamp:type_name -> google.protobuf.Timestamp
+	61, // 19: awg.vpn.v1.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
 	2,  // 20: awg.vpn.v1.LogEntry.level:type_name -> awg.vpn.v1.LogLevel
 	4,  // 21: awg.vpn.v1.AddTunnelRequest.config:type_name -> awg.vpn.v1.TunnelConfig
 	4,  // 22: awg.vpn.v1.UpdateTunnelRequest.config:type_name -> awg.vpn.v1.TunnelConfig
@@ -3527,68 +3717,73 @@ var file_vpn_service_proto_depIdxs = []int32{
 	18, // 30: awg.vpn.v1.ProcessListResponse.processes:type_name -> awg.vpn.v1.ProcessInfo
 	13, // 31: awg.vpn.v1.SubscriptionListResponse.subscriptions:type_name -> awg.vpn.v1.SubscriptionStatus
 	12, // 32: awg.vpn.v1.AddSubscriptionRequest.config:type_name -> awg.vpn.v1.SubscriptionConfig
-	53, // 33: awg.vpn.v1.SetAutostartRequest.config:type_name -> awg.vpn.v1.AutostartConfig
-	59, // 34: awg.vpn.v1.VPNService.GetStatus:input_type -> google.protobuf.Empty
-	59, // 35: awg.vpn.v1.VPNService.Shutdown:input_type -> google.protobuf.Empty
-	59, // 36: awg.vpn.v1.VPNService.ListTunnels:input_type -> google.protobuf.Empty
-	29, // 37: awg.vpn.v1.VPNService.GetTunnel:input_type -> awg.vpn.v1.GetTunnelRequest
-	23, // 38: awg.vpn.v1.VPNService.AddTunnel:input_type -> awg.vpn.v1.AddTunnelRequest
-	25, // 39: awg.vpn.v1.VPNService.RemoveTunnel:input_type -> awg.vpn.v1.RemoveTunnelRequest
-	27, // 40: awg.vpn.v1.VPNService.UpdateTunnel:input_type -> awg.vpn.v1.UpdateTunnelRequest
-	19, // 41: awg.vpn.v1.VPNService.Connect:input_type -> awg.vpn.v1.ConnectRequest
-	21, // 42: awg.vpn.v1.VPNService.Disconnect:input_type -> awg.vpn.v1.DisconnectRequest
-	19, // 43: awg.vpn.v1.VPNService.RestartTunnel:input_type -> awg.vpn.v1.ConnectRequest
-	59, // 44: awg.vpn.v1.VPNService.ListRules:input_type -> google.protobuf.Empty
-	32, // 45: awg.vpn.v1.VPNService.SaveRules:input_type -> awg.vpn.v1.SaveRulesRequest
-	59, // 46: awg.vpn.v1.VPNService.ListDomainRules:input_type -> google.protobuf.Empty
-	35, // 47: awg.vpn.v1.VPNService.SaveDomainRules:input_type -> awg.vpn.v1.SaveDomainRulesRequest
-	59, // 48: awg.vpn.v1.VPNService.ListGeositeCategories:input_type -> google.protobuf.Empty
-	59, // 49: awg.vpn.v1.VPNService.UpdateGeosite:input_type -> google.protobuf.Empty
-	59, // 50: awg.vpn.v1.VPNService.GetConfig:input_type -> google.protobuf.Empty
-	39, // 51: awg.vpn.v1.VPNService.SaveConfig:input_type -> awg.vpn.v1.SaveConfigRequest
-	41, // 52: awg.vpn.v1.VPNService.StreamLogs:input_type -> awg.vpn.v1.LogStreamRequest
-	42, // 53: awg.vpn.v1.VPNService.StreamStats:input_type -> awg.vpn.v1.StatsStreamRequest
-	43, // 54: awg.vpn.v1.VPNService.ListProcesses:input_type -> awg.vpn.v1.ProcessListRequest
-	59, // 55: awg.vpn.v1.VPNService.GetAutostart:input_type -> google.protobuf.Empty
-	54, // 56: awg.vpn.v1.VPNService.SetAutostart:input_type -> awg.vpn.v1.SetAutostartRequest
-	59, // 57: awg.vpn.v1.VPNService.ListSubscriptions:input_type -> google.protobuf.Empty
-	46, // 58: awg.vpn.v1.VPNService.AddSubscription:input_type -> awg.vpn.v1.AddSubscriptionRequest
-	48, // 59: awg.vpn.v1.VPNService.RemoveSubscription:input_type -> awg.vpn.v1.RemoveSubscriptionRequest
-	50, // 60: awg.vpn.v1.VPNService.RefreshSubscription:input_type -> awg.vpn.v1.RefreshSubscriptionRequest
-	59, // 61: awg.vpn.v1.VPNService.RestoreConnections:input_type -> google.protobuf.Empty
-	52, // 62: awg.vpn.v1.VPNService.GetStatus:output_type -> awg.vpn.v1.ServiceStatus
-	59, // 63: awg.vpn.v1.VPNService.Shutdown:output_type -> google.protobuf.Empty
-	30, // 64: awg.vpn.v1.VPNService.ListTunnels:output_type -> awg.vpn.v1.TunnelListResponse
-	5,  // 65: awg.vpn.v1.VPNService.GetTunnel:output_type -> awg.vpn.v1.TunnelStatus
-	24, // 66: awg.vpn.v1.VPNService.AddTunnel:output_type -> awg.vpn.v1.AddTunnelResponse
-	26, // 67: awg.vpn.v1.VPNService.RemoveTunnel:output_type -> awg.vpn.v1.RemoveTunnelResponse
-	28, // 68: awg.vpn.v1.VPNService.UpdateTunnel:output_type -> awg.vpn.v1.UpdateTunnelResponse
-	20, // 69: awg.vpn.v1.VPNService.Connect:output_type -> awg.vpn.v1.ConnectResponse
-	22, // 70: awg.vpn.v1.VPNService.Disconnect:output_type -> awg.vpn.v1.DisconnectResponse
-	20, // 71: awg.vpn.v1.VPNService.RestartTunnel:output_type -> awg.vpn.v1.ConnectResponse
-	31, // 72: awg.vpn.v1.VPNService.ListRules:output_type -> awg.vpn.v1.RuleListResponse
-	33, // 73: awg.vpn.v1.VPNService.SaveRules:output_type -> awg.vpn.v1.SaveRulesResponse
-	34, // 74: awg.vpn.v1.VPNService.ListDomainRules:output_type -> awg.vpn.v1.DomainRuleListResponse
-	36, // 75: awg.vpn.v1.VPNService.SaveDomainRules:output_type -> awg.vpn.v1.SaveDomainRulesResponse
-	37, // 76: awg.vpn.v1.VPNService.ListGeositeCategories:output_type -> awg.vpn.v1.GeositeCategoriesResponse
-	38, // 77: awg.vpn.v1.VPNService.UpdateGeosite:output_type -> awg.vpn.v1.UpdateGeositeResponse
-	14, // 78: awg.vpn.v1.VPNService.GetConfig:output_type -> awg.vpn.v1.AppConfig
-	40, // 79: awg.vpn.v1.VPNService.SaveConfig:output_type -> awg.vpn.v1.SaveConfigResponse
-	17, // 80: awg.vpn.v1.VPNService.StreamLogs:output_type -> awg.vpn.v1.LogEntry
-	16, // 81: awg.vpn.v1.VPNService.StreamStats:output_type -> awg.vpn.v1.StatsSnapshot
-	44, // 82: awg.vpn.v1.VPNService.ListProcesses:output_type -> awg.vpn.v1.ProcessListResponse
-	53, // 83: awg.vpn.v1.VPNService.GetAutostart:output_type -> awg.vpn.v1.AutostartConfig
-	55, // 84: awg.vpn.v1.VPNService.SetAutostart:output_type -> awg.vpn.v1.SetAutostartResponse
-	45, // 85: awg.vpn.v1.VPNService.ListSubscriptions:output_type -> awg.vpn.v1.SubscriptionListResponse
-	47, // 86: awg.vpn.v1.VPNService.AddSubscription:output_type -> awg.vpn.v1.AddSubscriptionResponse
-	49, // 87: awg.vpn.v1.VPNService.RemoveSubscription:output_type -> awg.vpn.v1.RemoveSubscriptionResponse
-	51, // 88: awg.vpn.v1.VPNService.RefreshSubscription:output_type -> awg.vpn.v1.RefreshSubscriptionResponse
-	20, // 89: awg.vpn.v1.VPNService.RestoreConnections:output_type -> awg.vpn.v1.ConnectResponse
-	62, // [62:90] is the sub-list for method output_type
-	34, // [34:62] is the sub-list for method input_type
-	34, // [34:34] is the sub-list for extension type_name
-	34, // [34:34] is the sub-list for extension extendee
-	0,  // [0:34] is the sub-list for field type_name
+	53, // 33: awg.vpn.v1.CheckUpdateResponse.info:type_name -> awg.vpn.v1.UpdateInfo
+	56, // 34: awg.vpn.v1.SetAutostartRequest.config:type_name -> awg.vpn.v1.AutostartConfig
+	62, // 35: awg.vpn.v1.VPNService.GetStatus:input_type -> google.protobuf.Empty
+	62, // 36: awg.vpn.v1.VPNService.Shutdown:input_type -> google.protobuf.Empty
+	62, // 37: awg.vpn.v1.VPNService.ListTunnels:input_type -> google.protobuf.Empty
+	29, // 38: awg.vpn.v1.VPNService.GetTunnel:input_type -> awg.vpn.v1.GetTunnelRequest
+	23, // 39: awg.vpn.v1.VPNService.AddTunnel:input_type -> awg.vpn.v1.AddTunnelRequest
+	25, // 40: awg.vpn.v1.VPNService.RemoveTunnel:input_type -> awg.vpn.v1.RemoveTunnelRequest
+	27, // 41: awg.vpn.v1.VPNService.UpdateTunnel:input_type -> awg.vpn.v1.UpdateTunnelRequest
+	19, // 42: awg.vpn.v1.VPNService.Connect:input_type -> awg.vpn.v1.ConnectRequest
+	21, // 43: awg.vpn.v1.VPNService.Disconnect:input_type -> awg.vpn.v1.DisconnectRequest
+	19, // 44: awg.vpn.v1.VPNService.RestartTunnel:input_type -> awg.vpn.v1.ConnectRequest
+	62, // 45: awg.vpn.v1.VPNService.ListRules:input_type -> google.protobuf.Empty
+	32, // 46: awg.vpn.v1.VPNService.SaveRules:input_type -> awg.vpn.v1.SaveRulesRequest
+	62, // 47: awg.vpn.v1.VPNService.ListDomainRules:input_type -> google.protobuf.Empty
+	35, // 48: awg.vpn.v1.VPNService.SaveDomainRules:input_type -> awg.vpn.v1.SaveDomainRulesRequest
+	62, // 49: awg.vpn.v1.VPNService.ListGeositeCategories:input_type -> google.protobuf.Empty
+	62, // 50: awg.vpn.v1.VPNService.UpdateGeosite:input_type -> google.protobuf.Empty
+	62, // 51: awg.vpn.v1.VPNService.GetConfig:input_type -> google.protobuf.Empty
+	39, // 52: awg.vpn.v1.VPNService.SaveConfig:input_type -> awg.vpn.v1.SaveConfigRequest
+	41, // 53: awg.vpn.v1.VPNService.StreamLogs:input_type -> awg.vpn.v1.LogStreamRequest
+	42, // 54: awg.vpn.v1.VPNService.StreamStats:input_type -> awg.vpn.v1.StatsStreamRequest
+	43, // 55: awg.vpn.v1.VPNService.ListProcesses:input_type -> awg.vpn.v1.ProcessListRequest
+	62, // 56: awg.vpn.v1.VPNService.GetAutostart:input_type -> google.protobuf.Empty
+	57, // 57: awg.vpn.v1.VPNService.SetAutostart:input_type -> awg.vpn.v1.SetAutostartRequest
+	62, // 58: awg.vpn.v1.VPNService.ListSubscriptions:input_type -> google.protobuf.Empty
+	46, // 59: awg.vpn.v1.VPNService.AddSubscription:input_type -> awg.vpn.v1.AddSubscriptionRequest
+	48, // 60: awg.vpn.v1.VPNService.RemoveSubscription:input_type -> awg.vpn.v1.RemoveSubscriptionRequest
+	50, // 61: awg.vpn.v1.VPNService.RefreshSubscription:input_type -> awg.vpn.v1.RefreshSubscriptionRequest
+	62, // 62: awg.vpn.v1.VPNService.RestoreConnections:input_type -> google.protobuf.Empty
+	62, // 63: awg.vpn.v1.VPNService.CheckUpdate:input_type -> google.protobuf.Empty
+	62, // 64: awg.vpn.v1.VPNService.ApplyUpdate:input_type -> google.protobuf.Empty
+	52, // 65: awg.vpn.v1.VPNService.GetStatus:output_type -> awg.vpn.v1.ServiceStatus
+	62, // 66: awg.vpn.v1.VPNService.Shutdown:output_type -> google.protobuf.Empty
+	30, // 67: awg.vpn.v1.VPNService.ListTunnels:output_type -> awg.vpn.v1.TunnelListResponse
+	5,  // 68: awg.vpn.v1.VPNService.GetTunnel:output_type -> awg.vpn.v1.TunnelStatus
+	24, // 69: awg.vpn.v1.VPNService.AddTunnel:output_type -> awg.vpn.v1.AddTunnelResponse
+	26, // 70: awg.vpn.v1.VPNService.RemoveTunnel:output_type -> awg.vpn.v1.RemoveTunnelResponse
+	28, // 71: awg.vpn.v1.VPNService.UpdateTunnel:output_type -> awg.vpn.v1.UpdateTunnelResponse
+	20, // 72: awg.vpn.v1.VPNService.Connect:output_type -> awg.vpn.v1.ConnectResponse
+	22, // 73: awg.vpn.v1.VPNService.Disconnect:output_type -> awg.vpn.v1.DisconnectResponse
+	20, // 74: awg.vpn.v1.VPNService.RestartTunnel:output_type -> awg.vpn.v1.ConnectResponse
+	31, // 75: awg.vpn.v1.VPNService.ListRules:output_type -> awg.vpn.v1.RuleListResponse
+	33, // 76: awg.vpn.v1.VPNService.SaveRules:output_type -> awg.vpn.v1.SaveRulesResponse
+	34, // 77: awg.vpn.v1.VPNService.ListDomainRules:output_type -> awg.vpn.v1.DomainRuleListResponse
+	36, // 78: awg.vpn.v1.VPNService.SaveDomainRules:output_type -> awg.vpn.v1.SaveDomainRulesResponse
+	37, // 79: awg.vpn.v1.VPNService.ListGeositeCategories:output_type -> awg.vpn.v1.GeositeCategoriesResponse
+	38, // 80: awg.vpn.v1.VPNService.UpdateGeosite:output_type -> awg.vpn.v1.UpdateGeositeResponse
+	14, // 81: awg.vpn.v1.VPNService.GetConfig:output_type -> awg.vpn.v1.AppConfig
+	40, // 82: awg.vpn.v1.VPNService.SaveConfig:output_type -> awg.vpn.v1.SaveConfigResponse
+	17, // 83: awg.vpn.v1.VPNService.StreamLogs:output_type -> awg.vpn.v1.LogEntry
+	16, // 84: awg.vpn.v1.VPNService.StreamStats:output_type -> awg.vpn.v1.StatsSnapshot
+	44, // 85: awg.vpn.v1.VPNService.ListProcesses:output_type -> awg.vpn.v1.ProcessListResponse
+	56, // 86: awg.vpn.v1.VPNService.GetAutostart:output_type -> awg.vpn.v1.AutostartConfig
+	58, // 87: awg.vpn.v1.VPNService.SetAutostart:output_type -> awg.vpn.v1.SetAutostartResponse
+	45, // 88: awg.vpn.v1.VPNService.ListSubscriptions:output_type -> awg.vpn.v1.SubscriptionListResponse
+	47, // 89: awg.vpn.v1.VPNService.AddSubscription:output_type -> awg.vpn.v1.AddSubscriptionResponse
+	49, // 90: awg.vpn.v1.VPNService.RemoveSubscription:output_type -> awg.vpn.v1.RemoveSubscriptionResponse
+	51, // 91: awg.vpn.v1.VPNService.RefreshSubscription:output_type -> awg.vpn.v1.RefreshSubscriptionResponse
+	20, // 92: awg.vpn.v1.VPNService.RestoreConnections:output_type -> awg.vpn.v1.ConnectResponse
+	54, // 93: awg.vpn.v1.VPNService.CheckUpdate:output_type -> awg.vpn.v1.CheckUpdateResponse
+	55, // 94: awg.vpn.v1.VPNService.ApplyUpdate:output_type -> awg.vpn.v1.ApplyUpdateResponse
+	65, // [65:95] is the sub-list for method output_type
+	35, // [35:65] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_vpn_service_proto_init() }
@@ -3602,7 +3797,7 @@ func file_vpn_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vpn_service_proto_rawDesc), len(file_vpn_service_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   54,
+			NumMessages:   57,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -4,6 +4,9 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -12,6 +15,7 @@ import (
 	vpnapi "awg-split-tunnel/api/gen"
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/gateway"
+	"awg-split-tunnel/internal/update"
 )
 
 // Ensure Service implements VPNServiceServer.
@@ -551,4 +555,84 @@ func (s *Service) removeSubscriptionTunnels(subName string) {
 			}
 		}
 	}
+}
+
+// ─── Updates ─────────────────────────────────────────────────────────
+
+func (s *Service) CheckUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.CheckUpdateResponse, error) {
+	if s.updateChecker == nil {
+		return &vpnapi.CheckUpdateResponse{Available: false}, nil
+	}
+
+	info, err := s.updateChecker.CheckNow(ctx)
+	if err != nil {
+		return &vpnapi.CheckUpdateResponse{Available: false}, nil
+	}
+	if info == nil {
+		return &vpnapi.CheckUpdateResponse{Available: false}, nil
+	}
+
+	return &vpnapi.CheckUpdateResponse{
+		Available: true,
+		Info: &vpnapi.UpdateInfo{
+			Version:      info.Version,
+			ReleaseNotes: info.ReleaseNotes,
+			AssetUrl:     info.AssetURL,
+			AssetSize:    info.AssetSize,
+		},
+	}, nil
+}
+
+func (s *Service) ApplyUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.ApplyUpdateResponse, error) {
+	if s.updateChecker == nil {
+		return &vpnapi.ApplyUpdateResponse{Success: false, Error: "update checker not initialized"}, nil
+	}
+
+	info := s.updateChecker.GetLatestInfo()
+	if info == nil {
+		return &vpnapi.ApplyUpdateResponse{Success: false, Error: "no update available"}, nil
+	}
+
+	// Download the update.
+	extractDir, err := update.Download(ctx, info, s.httpClient, nil)
+	if err != nil {
+		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("download failed: %v", err)}, nil
+	}
+
+	// Find updater binary in the current install directory.
+	exe, err := os.Executable()
+	if err != nil {
+		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("cannot determine install dir: %v", err)}, nil
+	}
+	installDir := filepath.Dir(exe)
+	updaterPath := filepath.Join(installDir, "awg-split-tunnel-updater.exe")
+
+	if _, err := os.Stat(updaterPath); err != nil {
+		return &vpnapi.ApplyUpdateResponse{Success: false, Error: "updater binary not found"}, nil
+	}
+
+	// Launch updater process.
+	core.Log.Infof("Update", "Launching updater: %s", updaterPath)
+	attr := &os.ProcAttr{
+		Dir:   installDir,
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	}
+	_, err = os.StartProcess(updaterPath, []string{
+		updaterPath,
+		"--install-dir", installDir,
+		"--temp-dir", extractDir,
+		"--start-service",
+		"--launch-gui",
+	}, attr)
+	if err != nil {
+		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("failed to launch updater: %v", err)}, nil
+	}
+
+	// Signal shutdown after a short delay so the response gets sent first.
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		s.bus.PublishAsync(core.Event{Type: core.EventConfigReloaded, Payload: "shutdown"})
+	}()
+
+	return &vpnapi.ApplyUpdateResponse{Success: true}, nil
 }

@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { Events } from '@wailsio/runtime';
+  import * as api from './lib/api.js';
   import ConnectionsTab from './lib/tabs/ConnectionsTab.svelte';
   import SubscriptionsTab from './lib/tabs/SubscriptionsTab.svelte';
   import RulesTab from './lib/tabs/RulesTab.svelte';
@@ -36,6 +37,11 @@
 
   onMount(() => {
     Events.On('navigate', handleNavigate);
+
+    // Start background update notifier if auto-update is enabled (default: true).
+    if (localStorage.getItem('autoUpdateEnabled') !== 'false') {
+      api.startUpdateNotifier();
+    }
   });
 
   onDestroy(() => {

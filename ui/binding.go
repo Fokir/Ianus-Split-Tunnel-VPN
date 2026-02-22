@@ -673,3 +673,61 @@ func (b *BindingService) RefreshAllSubscriptions() (*RefreshResult, error) {
 	}
 	return &RefreshResult{TunnelCount: resp.TunnelCount}, nil
 }
+
+// ─── Updates ─────────────────────────────────────────────────────────
+
+type UpdateInfoResult struct {
+	Available    bool   `json:"available"`
+	Version      string `json:"version"`
+	ReleaseNotes string `json:"releaseNotes"`
+	AssetSize    int64  `json:"assetSize"`
+}
+
+func (b *BindingService) CheckUpdate() (*UpdateInfoResult, error) {
+	resp, err := b.client.Service.CheckUpdate(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	result := &UpdateInfoResult{
+		Available: resp.Available,
+	}
+	if resp.Info != nil {
+		result.Version = resp.Info.Version
+		result.ReleaseNotes = resp.Info.ReleaseNotes
+		result.AssetSize = resp.Info.AssetSize
+	}
+	return result, nil
+}
+
+func (b *BindingService) ApplyUpdate() error {
+	resp, err := b.client.Service.ApplyUpdate(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
+// StartUpdateNotifier starts a background goroutine that periodically checks
+// for updates and emits a "update-available" Wails event when found.
+func (b *BindingService) StartUpdateNotifier() {
+	go func() {
+		app := application.Get()
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			result, err := b.CheckUpdate()
+			if err != nil || !result.Available {
+				continue
+			}
+			app.Event.Emit("update-available", map[string]interface{}{
+				"version":      result.Version,
+				"releaseNotes": result.ReleaseNotes,
+				"assetSize":    result.AssetSize,
+			})
+		}
+	}()
+}

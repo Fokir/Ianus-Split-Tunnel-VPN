@@ -13,6 +13,9 @@
   // DNS cache section expanded
   let dnsCacheExpanded = false;
 
+  // Auto-update toggle (persisted in localStorage)
+  let autoUpdateEnabled = localStorage.getItem('autoUpdateEnabled') !== 'false';
+
   onMount(async () => {
     await loadData();
   });
@@ -57,6 +60,9 @@
 
       // Save autostart separately (both enabled and restoreConnections)
       await api.setAutostart(autostart.enabled, autostart.restoreConnections);
+
+      // Persist auto-update preference
+      localStorage.setItem('autoUpdateEnabled', autoUpdateEnabled);
 
       dirty = false;
     } catch (e) {
@@ -173,6 +179,29 @@
             type="checkbox"
             bind:checked={autostart.restoreConnections}
             on:change={markDirty}
+            class="w-9 h-5 bg-zinc-700 rounded-full appearance-none relative cursor-pointer
+                   checked:bg-blue-600 transition-colors
+                   after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4
+                   after:bg-white after:rounded-full after:transition-transform
+                   checked:after:translate-x-4"
+          />
+        </label>
+      </div>
+    </section>
+
+    <!-- Updates -->
+    <section class="space-y-3">
+      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">Обновления</h3>
+      <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4">
+        <label class="flex items-center justify-between cursor-pointer">
+          <div>
+            <div class="text-sm text-zinc-200">Автопроверка обновлений</div>
+            <div class="text-xs text-zinc-500">Периодически проверять новые версии</div>
+          </div>
+          <input
+            type="checkbox"
+            checked={autoUpdateEnabled}
+            on:change={e => { autoUpdateEnabled = e.target.checked; markDirty(); }}
             class="w-9 h-5 bg-zinc-700 rounded-full appearance-none relative cursor-pointer
                    checked:bg-blue-600 transition-colors
                    after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4

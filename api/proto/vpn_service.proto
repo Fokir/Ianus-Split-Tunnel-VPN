@@ -352,6 +352,25 @@ message ServiceStatus {
   int64 uptime_seconds = 5;
 }
 
+// -- Update --
+
+message UpdateInfo {
+  string version = 1;           // new version string (e.g. "1.2.0")
+  string release_notes = 2;     // markdown release notes
+  string asset_url = 3;         // download URL
+  int64 asset_size = 4;         // asset size in bytes
+}
+
+message CheckUpdateResponse {
+  bool available = 1;
+  UpdateInfo info = 2;
+}
+
+message ApplyUpdateResponse {
+  bool success = 1;
+  string error = 2;
+}
+
 // -- Autostart --
 
 message AutostartConfig {
@@ -418,4 +437,8 @@ service VPNService {
 
   // -- Connection restore --
   rpc RestoreConnections(google.protobuf.Empty) returns (ConnectResponse);
+
+  // -- Updates --
+  rpc CheckUpdate(google.protobuf.Empty) returns (CheckUpdateResponse);
+  rpc ApplyUpdate(google.protobuf.Empty) returns (ApplyUpdateResponse);
 }

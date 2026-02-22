@@ -243,6 +243,22 @@ type GlobalFilterConfig struct {
 	DisableLocal   bool     `yaml:"disable_local,omitempty"`
 }
 
+// UpdateConfig holds auto-update settings.
+type UpdateConfig struct {
+	// Enabled controls whether periodic update checks run (default true).
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// CheckInterval is how often to check for updates (e.g. "24h"). Default "24h".
+	CheckInterval string `yaml:"check_interval,omitempty"`
+}
+
+// IsEnabled returns whether auto-update checks are enabled (default true).
+func (u UpdateConfig) IsEnabled() bool {
+	if u.Enabled == nil {
+		return true
+	}
+	return *u.Enabled
+}
+
 // GUIConfig holds GUI-specific settings.
 type GUIConfig struct {
 	RestoreConnections bool     `yaml:"restore_connections,omitempty"`
@@ -263,14 +279,15 @@ type SubscriptionConfig struct {
 
 // Config is the top-level application configuration.
 type Config struct {
-	Global        GlobalFilterConfig          `yaml:"global,omitempty"`
-	Tunnels       []TunnelConfig              `yaml:"tunnels"`
+	Global        GlobalFilterConfig            `yaml:"global,omitempty"`
+	Tunnels       []TunnelConfig                `yaml:"tunnels"`
 	Subscriptions map[string]SubscriptionConfig `yaml:"subscriptions,omitempty"`
-	Rules         []Rule                      `yaml:"rules"`
-	DomainRules   []DomainRule                `yaml:"domain_rules,omitempty"`
-	DNS           DNSRouteConfig              `yaml:"dns,omitempty"`
-	Logging       LogConfig                   `yaml:"logging,omitempty"`
-	GUI           GUIConfig                   `yaml:"gui,omitempty"`
+	Rules         []Rule                        `yaml:"rules"`
+	DomainRules   []DomainRule                  `yaml:"domain_rules,omitempty"`
+	DNS           DNSRouteConfig                `yaml:"dns,omitempty"`
+	Logging       LogConfig                     `yaml:"logging,omitempty"`
+	GUI           GUIConfig                     `yaml:"gui,omitempty"`
+	Update        UpdateConfig                  `yaml:"update,omitempty"`
 }
 
 // ConfigManager handles loading, saving, and hot-reloading configuration.

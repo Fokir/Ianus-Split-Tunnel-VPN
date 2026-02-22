@@ -125,3 +125,17 @@ export function refreshAllSubscriptions() {
 export function startStatsStream() {
   return BindingService.StartStatsStream();
 }
+
+// ─── Updates ──────────────────────────────────────────────────────
+
+export function checkUpdate() {
+  return BindingService.CheckUpdate();
+}
+
+export function applyUpdate() {
+  return BindingService.ApplyUpdate();
+}
+
+export function startUpdateNotifier() {
+  return BindingService.StartUpdateNotifier();
+}

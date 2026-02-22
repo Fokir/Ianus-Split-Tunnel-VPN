@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"awg-split-tunnel/internal/ipc"
+	"awg-split-tunnel/internal/winsvc"
 )
 
 //go:embed all:frontend/dist
@@ -122,8 +123,16 @@ func connectOrLaunchService() (*ipc.Client, error) {
 	return nil, fmt.Errorf("VPN service did not start within 15 seconds")
 }
 
-// launchServiceElevated starts the VPN service binary with UAC elevation ("Run as administrator").
+// launchServiceElevated starts the VPN service.
+// If the service is registered in the SCM, it starts via SCM (no UAC prompt).
+// Otherwise, falls back to ShellExecute with elevation (dev mode).
 func launchServiceElevated() error {
+	// Prefer SCM start if the service is installed.
+	if winsvc.IsServiceInstalled() {
+		return winsvc.StartService()
+	}
+
+	// Fallback: launch as elevated process (development mode).
 	exe, err := os.Executable()
 	if err != nil {
 		return err

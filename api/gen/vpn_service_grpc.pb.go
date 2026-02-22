@@ -48,6 +48,8 @@ const (
 	VPNService_RemoveSubscription_FullMethodName    = "/awg.vpn.v1.VPNService/RemoveSubscription"
 	VPNService_RefreshSubscription_FullMethodName   = "/awg.vpn.v1.VPNService/RefreshSubscription"
 	VPNService_RestoreConnections_FullMethodName    = "/awg.vpn.v1.VPNService/RestoreConnections"
+	VPNService_CheckUpdate_FullMethodName           = "/awg.vpn.v1.VPNService/CheckUpdate"
+	VPNService_ApplyUpdate_FullMethodName           = "/awg.vpn.v1.VPNService/ApplyUpdate"
 )
 
 // VPNServiceClient is the client API for VPNService service.
@@ -92,6 +94,9 @@ type VPNServiceClient interface {
 	RefreshSubscription(ctx context.Context, in *RefreshSubscriptionRequest, opts ...grpc.CallOption) (*RefreshSubscriptionResponse, error)
 	// -- Connection restore --
 	RestoreConnections(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConnectResponse, error)
+	// -- Updates --
+	CheckUpdate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*CheckUpdateResponse, error)
+	ApplyUpdate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ApplyUpdateResponse, error)
 }
 
 type vPNServiceClient struct {
@@ -400,6 +405,26 @@ func (c *vPNServiceClient) RestoreConnections(ctx context.Context, in *emptypb.E
 	return out, nil
 }
 
+func (c *vPNServiceClient) CheckUpdate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*CheckUpdateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckUpdateResponse)
+	err := c.cc.Invoke(ctx, VPNService_CheckUpdate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) ApplyUpdate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ApplyUpdateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyUpdateResponse)
+	err := c.cc.Invoke(ctx, VPNService_ApplyUpdate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VPNServiceServer is the server API for VPNService service.
 // All implementations must embed UnimplementedVPNServiceServer
 // for forward compatibility.
@@ -442,6 +467,9 @@ type VPNServiceServer interface {
 	RefreshSubscription(context.Context, *RefreshSubscriptionRequest) (*RefreshSubscriptionResponse, error)
 	// -- Connection restore --
 	RestoreConnections(context.Context, *emptypb.Empty) (*ConnectResponse, error)
+	// -- Updates --
+	CheckUpdate(context.Context, *emptypb.Empty) (*CheckUpdateResponse, error)
+	ApplyUpdate(context.Context, *emptypb.Empty) (*ApplyUpdateResponse, error)
 	mustEmbedUnimplementedVPNServiceServer()
 }
 
@@ -535,6 +563,12 @@ func (UnimplementedVPNServiceServer) RefreshSubscription(context.Context, *Refre
 }
 func (UnimplementedVPNServiceServer) RestoreConnections(context.Context, *emptypb.Empty) (*ConnectResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RestoreConnections not implemented")
+}
+func (UnimplementedVPNServiceServer) CheckUpdate(context.Context, *emptypb.Empty) (*CheckUpdateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckUpdate not implemented")
+}
+func (UnimplementedVPNServiceServer) ApplyUpdate(context.Context, *emptypb.Empty) (*ApplyUpdateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyUpdate not implemented")
 }
 func (UnimplementedVPNServiceServer) mustEmbedUnimplementedVPNServiceServer() {}
 func (UnimplementedVPNServiceServer) testEmbeddedByValue()                    {}
@@ -1047,6 +1081,42 @@ func _VPNService_RestoreConnections_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VPNService_CheckUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).CheckUpdate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_CheckUpdate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).CheckUpdate(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_ApplyUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).ApplyUpdate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_ApplyUpdate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).ApplyUpdate(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // VPNService_ServiceDesc is the grpc.ServiceDesc for VPNService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1157,6 +1227,14 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RestoreConnections",
 			Handler:    _VPNService_RestoreConnections_Handler,
+		},
+		{
+			MethodName: "CheckUpdate",
+			Handler:    _VPNService_CheckUpdate_Handler,
+		},
+		{
+			MethodName: "ApplyUpdate",
+			Handler:    _VPNService_ApplyUpdate_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

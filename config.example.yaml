@@ -13,13 +13,13 @@ global:
   # Additional IPs that always bypass VPN (go direct). Checked before AllowedIPs.
   # Bare IPs (without /mask) are treated as /32.
   disallowed_ips:
-    - "212.193.55.91/32"   # Specific server
+#    - "212.193.55.91/32"   # Specific server
 
   # Apps that always go direct (bypass VPN entirely).
   # Same pattern syntax as rules: exe name, substring, path glob, dir\*
   disallowed_apps:
-    - "steam.exe"
-    - 'C:\Games\*'
+#    - "steam.exe"
+#    - 'C:\Games\*'
 
   # If set, only these IPs go through VPN. Default: all traffic.
   # Omit to route all matched traffic through VPN.
@@ -27,11 +27,11 @@ global:
   #   - "0.0.0.0/0"
 
 tunnels:
-  - id: awg-germany
-    protocol: amneziawg
-    name: "AWG Germany"
-    settings:
-      config_file: "awg-germany.conf"  # Path to AmneziaWG .conf file (required)
+#  - id: awg-germany
+#    protocol: amneziawg
+#    name: "AWG Germany"
+#    settings:
+#      config_file: "awg-germany.conf"  # Path to AmneziaWG .conf file (required)
       # adapter_ip: "10.8.1.2"         # Optional: override IP from .conf Address
 
     # Per-tunnel IP/app filters (optional, override global).
@@ -44,35 +44,35 @@ tunnels:
 
 rules:
   # Route Firefox through the German AWG tunnel, block if tunnel is down (kill switch)
-  - pattern: "firefox.exe"
-    tunnel_id: awg-germany
-    fallback: block
+#  - pattern: "firefox.exe"
+#    tunnel_id: awg-germany
+#    fallback: block
 
   # Route Chrome through tunnel, allow direct if tunnel is down
-  - pattern: "chrome"
-    tunnel_id: awg-germany
-    fallback: allow_direct
+#  - pattern: "chrome"
+#    tunnel_id: awg-germany
+#    fallback: allow_direct
 
   # Block all traffic from processes in C:\blocked\ directory
-  - pattern: 'C:\blocked\*'
-    fallback: drop
+#  - pattern: 'C:\blocked\*'
+#    fallback: drop
 
   # Route Steam through tunnel with kill switch
-  - pattern: "steam.exe"
-    tunnel_id: awg-germany
-    fallback: block
+#  - pattern: "steam.exe"
+#    tunnel_id: awg-germany
+#    fallback: block
 
   # Discord: realtime priority — voice/video packets skip the bulk queue
-  - pattern: "discord.exe"
-    tunnel_id: awg-germany
-    fallback: block
-    priority: realtime
+#  - pattern: "discord.exe"
+#    tunnel_id: awg-germany
+#    fallback: block
+#    priority: realtime
 
   # Torrent client: low priority — bulk downloads yield to interactive traffic
-  - pattern: "qbittorrent.exe"
-    tunnel_id: awg-germany
-    fallback: allow_direct
-    priority: low
+#  - pattern: "qbittorrent.exe"
+#    tunnel_id: awg-germany
+#    fallback: allow_direct
+#    priority: low
 
   # Priority values: auto (default), realtime, normal, low
   # "auto" classifies packets by their characteristics:
@@ -115,3 +115,9 @@ logging:
   # components:
   #   dns: off       # Silence DNS per-query logs
   #   gateway: debug # Verbose gateway/packet logs
+
+# Auto-update settings (optional).
+# Checks GitHub Releases for new versions periodically.
+# update:
+#   enabled: true          # Enable periodic update checks (default: true)
+#   check_interval: "24h"  # How often to check (default: "24h")

@@ -14,6 +14,7 @@ const (
 	EventRuleUpdated
 	EventConfigReloaded
 	EventSubscriptionUpdated
+	EventUpdateAvailable
 )
 
 // Event carries data about something that happened in the system.
@@ -39,6 +40,14 @@ type SubscriptionPayload struct {
 	Name    string
 	Tunnels []TunnelConfig
 	Error   error
+}
+
+// UpdatePayload is the payload for EventUpdateAvailable.
+type UpdatePayload struct {
+	Version      string
+	ReleaseNotes string
+	AssetURL     string
+	AssetSize    int64
 }
 
 // Handler is a callback for bus subscribers.
