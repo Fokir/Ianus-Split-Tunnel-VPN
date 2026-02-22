@@ -381,6 +381,12 @@ func runVPN(configPath string) error {
 			if err := wfpMgr.BlockDNSOnInterface(realNIC.LUID); err != nil {
 				core.Log.Warnf("DNS", "Failed to add DNS leak protection: %v", err)
 			}
+
+			// Allow our own process to send DNS through the real NIC,
+			// so the DNS resolver can fall back to direct when VPN tunnels are down.
+			if err := wfpMgr.PermitDNSForSelf(realNIC.LUID); err != nil {
+				core.Log.Warnf("DNS", "Failed to add DNS self-permit: %v", err)
+			}
 		}
 	}
 

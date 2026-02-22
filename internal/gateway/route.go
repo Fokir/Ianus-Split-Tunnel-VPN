@@ -271,6 +271,10 @@ func discoverRealNIC(tunLUID uint64) (RealNIC, error) {
 	const rowSize = uintptr(104) // sizeof(MIB_IPFORWARD_ROW2)
 	headerSize := unsafe.Sizeof(uint64(0)) // alignment padding after NumEntries
 
+	var bestNIC RealNIC
+	bestMetric := uint32(0xFFFFFFFF)
+	found := false
+
 	for i := uint32(0); i < numEntries; i++ {
 		family := fwdRowUint16(table, headerSize, rowSize, i, fwdDestFamily)
 		if family != windows.AF_INET {
@@ -289,16 +293,24 @@ func discoverRealNIC(tunLUID uint64) (RealNIC, error) {
 			continue
 		}
 
-		ifIndex := fwdRowUint32(table, headerSize, rowSize, i, fwdInterfaceIndex)
-		gwBytes := fwdRowBytes4(table, headerSize, rowSize, i, fwdNextHopAddr)
-		gwIP := netip.AddrFrom4(gwBytes)
+		metric := fwdRowUint32(table, headerSize, rowSize, i, fwdMetric)
+		if !found || metric < bestMetric {
+			ifIndex := fwdRowUint32(table, headerSize, rowSize, i, fwdInterfaceIndex)
+			gwBytes := fwdRowBytes4(table, headerSize, rowSize, i, fwdNextHopAddr)
+			gwIP := netip.AddrFrom4(gwBytes)
 
-		return RealNIC{
-			LUID:    luid,
-			Index:   ifIndex,
-			Gateway: gwIP,
-		}, nil
+			bestNIC = RealNIC{
+				LUID:    luid,
+				Index:   ifIndex,
+				Gateway: gwIP,
+			}
+			bestMetric = metric
+			found = true
+		}
 	}
 
-	return RealNIC{}, fmt.Errorf("no default gateway found")
+	if !found {
+		return RealNIC{}, fmt.Errorf("no default gateway found")
+	}
+	return bestNIC, nil
 }

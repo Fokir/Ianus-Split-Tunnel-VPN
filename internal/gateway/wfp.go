@@ -5,6 +5,7 @@ package gateway
 import (
 	"fmt"
 	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -325,6 +326,69 @@ func (w *WFPManager) BlockDNSOnInterface(ifLUID uint64) error {
 	}
 
 	core.Log.Infof("WFP", "DNS blocked on interface LUID 0x%x (port 53 UDP+TCP)", ifLUID)
+	return nil
+}
+
+// PermitDNSForSelf adds WFP PERMIT rules allowing our own process to send DNS
+// queries on the specified interface. This is needed so the DNS resolver can
+// fall back to the direct provider (real NIC) when VPN tunnels are down.
+// Weight 4000 overrides BlockDNSOnInterface (weight 3000).
+func (w *WFPManager) PermitDNSForSelf(ifLUID uint64) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("[WFP] get executable path: %w", err)
+	}
+
+	appID, err := wf.AppID(exePath)
+	if err != nil {
+		return fmt.Errorf("[WFP] AppID(%s): %w", exePath, err)
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	for _, proto := range []uint8{17, 6} {
+		protoName := "UDP"
+		if proto == 6 {
+			protoName = "TCP"
+		}
+
+		ruleID := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:       ruleID,
+			Name:     fmt.Sprintf("AWG permit DNS self: %s:53 on LUID 0x%x", protoName, ifLUID),
+			Layer:    wf.LayerALEAuthConnectV4,
+			Sublayer: awgSublayerID,
+			Weight:   4000,
+			Conditions: []*wf.Match{
+				{
+					Field: wf.FieldALEAppID,
+					Op:    wf.MatchTypeEqual,
+					Value: appID,
+				},
+				{
+					Field: wf.FieldIPProtocol,
+					Op:    wf.MatchTypeEqual,
+					Value: proto,
+				},
+				{
+					Field: wf.FieldIPRemotePort,
+					Op:    wf.MatchTypeEqual,
+					Value: uint16(53),
+				},
+				{
+					Field: wf.FieldIPLocalInterface,
+					Op:    wf.MatchTypeEqual,
+					Value: ifLUID,
+				},
+			},
+			Action: wf.ActionPermit,
+		}); err != nil {
+			return fmt.Errorf("[WFP] permit DNS self %s: %w", protoName, err)
+		}
+	}
+
+	core.Log.Infof("WFP", "DNS self-permit on interface LUID 0x%x (port 53 UDP+TCP)", ifLUID)
 	return nil
 }
 

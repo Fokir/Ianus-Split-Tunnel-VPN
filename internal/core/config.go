@@ -5,6 +5,7 @@ package core
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -352,6 +353,12 @@ func (cm *ConfigManager) Save() error {
 	cm.mu.RUnlock()
 	if err != nil {
 		return fmt.Errorf("[Core] failed to marshal config: %w", err)
+	}
+
+	if dir := filepath.Dir(cm.filePath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("[Core] failed to create config directory %s: %w", dir, err)
+		}
 	}
 
 	if err := os.WriteFile(cm.filePath, data, 0644); err != nil {
