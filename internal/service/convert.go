@@ -133,6 +133,27 @@ func domainRuleFromProto(pr *vpnapi.DomainRule) core.DomainRule {
 	}
 }
 
+// ─── Subscription conversions ────────────────────────────────────────
+
+func subscriptionConfigToProto(name string, c core.SubscriptionConfig) *vpnapi.SubscriptionConfig {
+	return &vpnapi.SubscriptionConfig{
+		Name:            name,
+		Url:             c.URL,
+		RefreshInterval: c.RefreshInterval,
+		UserAgent:       c.UserAgent,
+		Prefix:          c.Prefix,
+	}
+}
+
+func subscriptionConfigFromProto(pc *vpnapi.SubscriptionConfig) (string, core.SubscriptionConfig) {
+	return pc.Name, core.SubscriptionConfig{
+		URL:             pc.Url,
+		RefreshInterval: pc.RefreshInterval,
+		UserAgent:       pc.UserAgent,
+		Prefix:          pc.Prefix,
+	}
+}
+
 // ─── Config conversions ─────────────────────────────────────────────
 
 func configToProto(c core.Config) *vpnapi.AppConfig {
@@ -151,6 +172,11 @@ func configToProto(c core.Config) *vpnapi.AppConfig {
 		domainRules = append(domainRules, domainRuleToProto(r))
 	}
 
+	subs := make([]*vpnapi.SubscriptionConfig, 0, len(c.Subscriptions))
+	for name, sub := range c.Subscriptions {
+		subs = append(subs, subscriptionConfigToProto(name, sub))
+	}
+
 	return &vpnapi.AppConfig{
 		Global: &vpnapi.GlobalFilterConfig{
 			AllowedIps:     c.Global.AllowedIPs,
@@ -158,9 +184,10 @@ func configToProto(c core.Config) *vpnapi.AppConfig {
 			DisallowedApps: c.Global.DisallowedApps,
 			DisableLocal:   c.Global.DisableLocal,
 		},
-		Tunnels: tunnels,
-		Rules:   rules,
-		DomainRules: domainRules,
+		Tunnels:       tunnels,
+		Rules:         rules,
+		DomainRules:   domainRules,
+		Subscriptions: subs,
 		Dns: &vpnapi.DNSConfig{
 			TunnelId: c.DNS.FallbackTunnelID,
 			Servers:  c.DNS.Servers,
@@ -224,6 +251,14 @@ func configFromProto(pc *vpnapi.AppConfig) core.Config {
 		cfg.Logging = core.LogConfig{
 			Level:      pc.Logging.Level,
 			Components: pc.Logging.Components,
+		}
+	}
+
+	if len(pc.Subscriptions) > 0 {
+		cfg.Subscriptions = make(map[string]core.SubscriptionConfig, len(pc.Subscriptions))
+		for _, ps := range pc.Subscriptions {
+			name, sub := subscriptionConfigFromProto(ps)
+			cfg.Subscriptions[name] = sub
 		}
 	}
 

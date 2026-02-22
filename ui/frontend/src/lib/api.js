@@ -98,6 +98,28 @@ export function setAutostart(enabled, restoreConnections) {
   return BindingService.SetAutostart(enabled, restoreConnections);
 }
 
+// ─── Subscriptions ───────────────────────────────────────────────
+
+export function listSubscriptions() {
+  return BindingService.ListSubscriptions();
+}
+
+export function addSubscription(params) {
+  return BindingService.AddSubscription(params);
+}
+
+export function removeSubscription(name) {
+  return BindingService.RemoveSubscription(name);
+}
+
+export function refreshSubscription(name) {
+  return BindingService.RefreshSubscription(name);
+}
+
+export function refreshAllSubscriptions() {
+  return BindingService.RefreshAllSubscriptions();
+}
+
 // ─── Stats streaming ──────────────────────────────────────────────
 
 export function startStatsStream() {

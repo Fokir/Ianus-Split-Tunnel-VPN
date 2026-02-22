@@ -443,6 +443,17 @@ func CreateProvider(cfg core.TunnelConfig) (provider.TunnelProvider, error) {
 				ServiceName: getStringSetting(grpcCfg, "service_name", ""),
 			}
 		}
+		// Parse nested XHTTP settings.
+		if xhttpCfg := getMapSetting(cfg.Settings, "xhttp"); xhttpCfg != nil {
+			vlessCfg.XHTTP = vless.XHTTPConfig{
+				Path: getStringSetting(xhttpCfg, "path", ""),
+				Host: getStringSetting(xhttpCfg, "host", ""),
+				Mode: getStringSetting(xhttpCfg, "mode", ""),
+			}
+			if extra := getMapSetting(xhttpCfg, "extra"); extra != nil {
+				vlessCfg.XHTTP.Extra = extra
+			}
+		}
 		return vless.New(cfg.Name, vlessCfg)
 	default:
 		return nil, fmt.Errorf("unknown protocol %q for tunnel %q", cfg.Protocol, cfg.ID)

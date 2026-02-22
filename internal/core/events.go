@@ -13,6 +13,7 @@ const (
 	EventRuleRemoved
 	EventRuleUpdated
 	EventConfigReloaded
+	EventSubscriptionUpdated
 )
 
 // Event carries data about something that happened in the system.
@@ -31,6 +32,13 @@ type TunnelStatePayload struct {
 // RulePayload is the payload for rule-related events.
 type RulePayload struct {
 	Rule Rule
+}
+
+// SubscriptionPayload is the payload for EventSubscriptionUpdated.
+type SubscriptionPayload struct {
+	Name    string
+	Tunnels []TunnelConfig
+	Error   error
 }
 
 // Handler is a callback for bus subscribers.

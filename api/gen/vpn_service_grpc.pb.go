@@ -43,6 +43,10 @@ const (
 	VPNService_ListProcesses_FullMethodName         = "/awg.vpn.v1.VPNService/ListProcesses"
 	VPNService_GetAutostart_FullMethodName          = "/awg.vpn.v1.VPNService/GetAutostart"
 	VPNService_SetAutostart_FullMethodName          = "/awg.vpn.v1.VPNService/SetAutostart"
+	VPNService_ListSubscriptions_FullMethodName     = "/awg.vpn.v1.VPNService/ListSubscriptions"
+	VPNService_AddSubscription_FullMethodName       = "/awg.vpn.v1.VPNService/AddSubscription"
+	VPNService_RemoveSubscription_FullMethodName    = "/awg.vpn.v1.VPNService/RemoveSubscription"
+	VPNService_RefreshSubscription_FullMethodName   = "/awg.vpn.v1.VPNService/RefreshSubscription"
 	VPNService_RestoreConnections_FullMethodName    = "/awg.vpn.v1.VPNService/RestoreConnections"
 )
 
@@ -81,6 +85,11 @@ type VPNServiceClient interface {
 	// -- Autostart --
 	GetAutostart(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*AutostartConfig, error)
 	SetAutostart(ctx context.Context, in *SetAutostartRequest, opts ...grpc.CallOption) (*SetAutostartResponse, error)
+	// -- Subscriptions --
+	ListSubscriptions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*SubscriptionListResponse, error)
+	AddSubscription(ctx context.Context, in *AddSubscriptionRequest, opts ...grpc.CallOption) (*AddSubscriptionResponse, error)
+	RemoveSubscription(ctx context.Context, in *RemoveSubscriptionRequest, opts ...grpc.CallOption) (*RemoveSubscriptionResponse, error)
+	RefreshSubscription(ctx context.Context, in *RefreshSubscriptionRequest, opts ...grpc.CallOption) (*RefreshSubscriptionResponse, error)
 	// -- Connection restore --
 	RestoreConnections(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConnectResponse, error)
 }
@@ -341,6 +350,46 @@ func (c *vPNServiceClient) SetAutostart(ctx context.Context, in *SetAutostartReq
 	return out, nil
 }
 
+func (c *vPNServiceClient) ListSubscriptions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*SubscriptionListResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubscriptionListResponse)
+	err := c.cc.Invoke(ctx, VPNService_ListSubscriptions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) AddSubscription(ctx context.Context, in *AddSubscriptionRequest, opts ...grpc.CallOption) (*AddSubscriptionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddSubscriptionResponse)
+	err := c.cc.Invoke(ctx, VPNService_AddSubscription_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) RemoveSubscription(ctx context.Context, in *RemoveSubscriptionRequest, opts ...grpc.CallOption) (*RemoveSubscriptionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveSubscriptionResponse)
+	err := c.cc.Invoke(ctx, VPNService_RemoveSubscription_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) RefreshSubscription(ctx context.Context, in *RefreshSubscriptionRequest, opts ...grpc.CallOption) (*RefreshSubscriptionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RefreshSubscriptionResponse)
+	err := c.cc.Invoke(ctx, VPNService_RefreshSubscription_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *vPNServiceClient) RestoreConnections(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConnectResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ConnectResponse)
@@ -386,6 +435,11 @@ type VPNServiceServer interface {
 	// -- Autostart --
 	GetAutostart(context.Context, *emptypb.Empty) (*AutostartConfig, error)
 	SetAutostart(context.Context, *SetAutostartRequest) (*SetAutostartResponse, error)
+	// -- Subscriptions --
+	ListSubscriptions(context.Context, *emptypb.Empty) (*SubscriptionListResponse, error)
+	AddSubscription(context.Context, *AddSubscriptionRequest) (*AddSubscriptionResponse, error)
+	RemoveSubscription(context.Context, *RemoveSubscriptionRequest) (*RemoveSubscriptionResponse, error)
+	RefreshSubscription(context.Context, *RefreshSubscriptionRequest) (*RefreshSubscriptionResponse, error)
 	// -- Connection restore --
 	RestoreConnections(context.Context, *emptypb.Empty) (*ConnectResponse, error)
 	mustEmbedUnimplementedVPNServiceServer()
@@ -466,6 +520,18 @@ func (UnimplementedVPNServiceServer) GetAutostart(context.Context, *emptypb.Empt
 }
 func (UnimplementedVPNServiceServer) SetAutostart(context.Context, *SetAutostartRequest) (*SetAutostartResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetAutostart not implemented")
+}
+func (UnimplementedVPNServiceServer) ListSubscriptions(context.Context, *emptypb.Empty) (*SubscriptionListResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSubscriptions not implemented")
+}
+func (UnimplementedVPNServiceServer) AddSubscription(context.Context, *AddSubscriptionRequest) (*AddSubscriptionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddSubscription not implemented")
+}
+func (UnimplementedVPNServiceServer) RemoveSubscription(context.Context, *RemoveSubscriptionRequest) (*RemoveSubscriptionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveSubscription not implemented")
+}
+func (UnimplementedVPNServiceServer) RefreshSubscription(context.Context, *RefreshSubscriptionRequest) (*RefreshSubscriptionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RefreshSubscription not implemented")
 }
 func (UnimplementedVPNServiceServer) RestoreConnections(context.Context, *emptypb.Empty) (*ConnectResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RestoreConnections not implemented")
@@ -891,6 +957,78 @@ func _VPNService_SetAutostart_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VPNService_ListSubscriptions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).ListSubscriptions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_ListSubscriptions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).ListSubscriptions(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_AddSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddSubscriptionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).AddSubscription(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_AddSubscription_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).AddSubscription(ctx, req.(*AddSubscriptionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_RemoveSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveSubscriptionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).RemoveSubscription(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_RemoveSubscription_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).RemoveSubscription(ctx, req.(*RemoveSubscriptionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_RefreshSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RefreshSubscriptionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).RefreshSubscription(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_RefreshSubscription_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).RefreshSubscription(ctx, req.(*RefreshSubscriptionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _VPNService_RestoreConnections_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -999,6 +1137,22 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetAutostart",
 			Handler:    _VPNService_SetAutostart_Handler,
+		},
+		{
+			MethodName: "ListSubscriptions",
+			Handler:    _VPNService_ListSubscriptions_Handler,
+		},
+		{
+			MethodName: "AddSubscription",
+			Handler:    _VPNService_AddSubscription_Handler,
+		},
+		{
+			MethodName: "RemoveSubscription",
+			Handler:    _VPNService_RemoveSubscription_Handler,
+		},
+		{
+			MethodName: "RefreshSubscription",
+			Handler:    _VPNService_RefreshSubscription_Handler,
 		},
 		{
 			MethodName: "RestoreConnections",

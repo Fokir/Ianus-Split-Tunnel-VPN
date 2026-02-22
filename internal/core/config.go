@@ -249,15 +249,28 @@ type GUIConfig struct {
 	ActiveTunnels      []string `yaml:"active_tunnels,omitempty"`
 }
 
+// SubscriptionConfig holds configuration for a VLESS subscription URL.
+type SubscriptionConfig struct {
+	// URL is the subscription endpoint that returns base64-encoded proxy URIs.
+	URL string `yaml:"url"`
+	// RefreshInterval is how often to auto-refresh (e.g. "6h", "24h"). Zero disables auto-refresh.
+	RefreshInterval string `yaml:"refresh_interval,omitempty"`
+	// UserAgent is the HTTP User-Agent header for subscription requests.
+	UserAgent string `yaml:"user_agent,omitempty"`
+	// Prefix is prepended to generated tunnel IDs (default: subscription name).
+	Prefix string `yaml:"prefix,omitempty"`
+}
+
 // Config is the top-level application configuration.
 type Config struct {
-	Global      GlobalFilterConfig `yaml:"global,omitempty"`
-	Tunnels     []TunnelConfig     `yaml:"tunnels"`
-	Rules       []Rule             `yaml:"rules"`
-	DomainRules []DomainRule       `yaml:"domain_rules,omitempty"`
-	DNS         DNSRouteConfig     `yaml:"dns,omitempty"`
-	Logging     LogConfig          `yaml:"logging,omitempty"`
-	GUI         GUIConfig          `yaml:"gui,omitempty"`
+	Global        GlobalFilterConfig          `yaml:"global,omitempty"`
+	Tunnels       []TunnelConfig              `yaml:"tunnels"`
+	Subscriptions map[string]SubscriptionConfig `yaml:"subscriptions,omitempty"`
+	Rules         []Rule                      `yaml:"rules"`
+	DomainRules   []DomainRule                `yaml:"domain_rules,omitempty"`
+	DNS           DNSRouteConfig              `yaml:"dns,omitempty"`
+	Logging       LogConfig                   `yaml:"logging,omitempty"`
+	GUI           GUIConfig                   `yaml:"gui,omitempty"`
 }
 
 // ConfigManager handles loading, saving, and hot-reloading configuration.
@@ -392,6 +405,28 @@ func (cm *ConfigManager) SetDomainRules(rules []DomainRule) {
 func (cm *ConfigManager) SetFromGUI(cfg Config) {
 	cm.mu.Lock()
 	cm.config = cfg
+	cm.mu.Unlock()
+
+	if cm.bus != nil {
+		cm.bus.Publish(Event{Type: EventConfigReloaded})
+	}
+}
+
+// GetSubscriptions returns subscription configurations.
+func (cm *ConfigManager) GetSubscriptions() map[string]SubscriptionConfig {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	result := make(map[string]SubscriptionConfig, len(cm.config.Subscriptions))
+	for k, v := range cm.config.Subscriptions {
+		result[k] = v
+	}
+	return result
+}
+
+// SetSubscriptions replaces subscription configurations.
+func (cm *ConfigManager) SetSubscriptions(subs map[string]SubscriptionConfig) {
+	cm.mu.Lock()
+	cm.config.Subscriptions = subs
 	cm.mu.Unlock()
 
 	if cm.bus != nil {

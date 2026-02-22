@@ -50,6 +50,9 @@
   let vlessWsPath = '';
   let vlessWsHost = '';
   let vlessGrpcServiceName = '';
+  let vlessXhttpPath = '';
+  let vlessXhttpHost = '';
+  let vlessXhttpMode = 'auto';
 
   onMount(async () => {
     await refresh();
@@ -172,6 +175,7 @@
     vlessRealityPublicKey = ''; vlessRealityShortId = ''; vlessRealityServerName = ''; vlessRealityFingerprint = 'chrome';
     vlessTlsServerName = ''; vlessTlsFingerprint = 'chrome'; vlessTlsAllowInsecure = false;
     vlessWsPath = ''; vlessWsHost = ''; vlessGrpcServiceName = '';
+    vlessXhttpPath = ''; vlessXhttpHost = ''; vlessXhttpMode = 'auto';
   }
 
   function closeModal() {
@@ -230,6 +234,10 @@
           if (vlessWsHost) settings['ws.headers.Host'] = vlessWsHost;
         } else if (vlessNetwork === 'grpc') {
           settings['grpc.service_name'] = vlessGrpcServiceName;
+        } else if (vlessNetwork === 'xhttp') {
+          settings['xhttp.path'] = vlessXhttpPath;
+          if (vlessXhttpHost) settings['xhttp.host'] = vlessXhttpHost;
+          if (vlessXhttpMode) settings['xhttp.mode'] = vlessXhttpMode;
         }
       }
 
@@ -579,6 +587,7 @@
                 <option value="tcp">TCP</option>
                 <option value="ws">WebSocket</option>
                 <option value="grpc">gRPC</option>
+                <option value="xhttp">XHTTP (SplitHTTP)</option>
               </select>
             </div>
           </div>
@@ -676,6 +685,33 @@
                 <label for="vless-gsn" class="block text-xs font-medium text-zinc-400 mb-1">Service Name</label>
                 <input id="vless-gsn" type="text" bind:value={vlessGrpcServiceName} placeholder="grpc-service"
                   class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
+              </div>
+            </div>
+          {/if}
+
+          <!-- XHTTP (SplitHTTP) settings -->
+          {#if vlessNetwork === 'xhttp'}
+            <div class="pl-3 border-l-2 border-cyan-500/30 space-y-3">
+              <p class="text-xs font-medium text-cyan-400">XHTTP (SplitHTTP)</p>
+              <div>
+                <label for="vless-xhp" class="block text-xs font-medium text-zinc-400 mb-1">Path</label>
+                <input id="vless-xhp" type="text" bind:value={vlessXhttpPath} placeholder="/xhttp"
+                  class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
+              </div>
+              <div>
+                <label for="vless-xhh" class="block text-xs font-medium text-zinc-400 mb-1">Host</label>
+                <input id="vless-xhh" type="text" bind:value={vlessXhttpHost} placeholder="example.com"
+                  class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
+              </div>
+              <div>
+                <label for="vless-xhm" class="block text-xs font-medium text-zinc-400 mb-1">Режим</label>
+                <select id="vless-xhm" bind:value={vlessXhttpMode}
+                  class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none">
+                  <option value="auto">auto</option>
+                  <option value="packet-up">packet-up</option>
+                  <option value="stream-up">stream-up</option>
+                  <option value="stream-one">stream-one</option>
+                </select>
               </div>
             </div>
           {/if}

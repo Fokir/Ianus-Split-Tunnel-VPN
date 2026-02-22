@@ -21,6 +21,7 @@ import (
 	"awg-split-tunnel/internal/process"
 	"awg-split-tunnel/internal/provider"
 	"awg-split-tunnel/internal/provider/direct"
+	"awg-split-tunnel/internal/provider/vless"
 	"awg-split-tunnel/internal/proxy"
 	"awg-split-tunnel/internal/service"
 )
@@ -176,6 +177,20 @@ func main() {
 		core.Log.Fatalf("Core", "Failed to start direct UDP proxy: %v", err)
 	}
 
+	// === 8a. Subscriptions: fetch and merge into tunnel list ===
+	var subMgr *core.SubscriptionManager
+	if len(cfg.Subscriptions) > 0 {
+		subMgr = core.NewSubscriptionManager(cfgManager, bus, nil, vless.ParseURIToTunnelConfig)
+		subTunnels, err := subMgr.RefreshAll(ctx)
+		if err != nil {
+			core.Log.Warnf("Core", "Subscription errors: %v", err)
+		}
+		if len(subTunnels) > 0 {
+			cfg.Tunnels = append(cfg.Tunnels, subTunnels...)
+			core.Log.Infof("Core", "Added %d tunnels from subscriptions", len(subTunnels))
+		}
+	}
+
 	// === 9. VPN Providers + proxies ===
 	var jitterProbes []*gateway.JitterProbe
 	for _, tcfg := range cfg.Tunnels {
@@ -296,6 +311,11 @@ func main() {
 		}
 	}
 
+	// === 10b. Start subscription auto-refresh ===
+	if subMgr != nil {
+		subMgr.Start(ctx)
+	}
+
 	// === 11. Set default route via TUN (LAST — after all bypass routes) ===
 	if err := routeMgr.SetDefaultRoute(); err != nil {
 		core.Log.Fatalf("Core", "Failed to set default route: %v", err)
@@ -387,7 +407,8 @@ func main() {
 		Version:         version,
 		DomainReloader:  domainReloader,
 		GeositeFilePath: geositeFilePath,
-		HTTPClient:      nicHTTPClient,
+		HTTPClient:          nicHTTPClient,
+		SubscriptionManager: subMgr,
 	})
 	svc.Start(ctx)
 
@@ -422,6 +443,11 @@ func main() {
 		// 0. Stop IPC server and service.
 		ipcServer.Stop()
 		svc.Stop()
+
+		// 0a. Stop subscription manager.
+		if subMgr != nil {
+			subMgr.Stop()
+		}
 
 		// 1. Stop DNS Resolver
 		if dnsResolver != nil {

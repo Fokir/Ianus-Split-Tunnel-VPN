@@ -1,0 +1,293 @@
+<script>
+  import { onMount } from 'svelte';
+  import * as api from '../api.js';
+
+  let subscriptions = [];
+  let loading = true;
+  let error = '';
+
+  // Add modal state
+  let showAddModal = false;
+  let addName = '';
+  let addUrl = '';
+  let addRefreshInterval = '6h';
+  let addUserAgent = '';
+  let addPrefix = '';
+  let addSaving = false;
+
+  // Refresh state
+  let refreshingName = '';
+  let refreshingAll = false;
+
+  onMount(async () => {
+    await refresh();
+  });
+
+  async function refresh() {
+    loading = true;
+    error = '';
+    try {
+      subscriptions = await api.listSubscriptions() || [];
+    } catch (e) {
+      error = e.message || 'Failed to load subscriptions';
+    } finally {
+      loading = false;
+    }
+  }
+
+  function openAddModal() {
+    addName = '';
+    addUrl = '';
+    addRefreshInterval = '6h';
+    addUserAgent = '';
+    addPrefix = '';
+    addSaving = false;
+    error = '';
+    showAddModal = true;
+  }
+
+  function closeAddModal() {
+    showAddModal = false;
+  }
+
+  async function saveSubscription() {
+    if (!addName.trim()) { error = 'Name is required'; return; }
+    if (!addUrl.trim()) { error = 'URL is required'; return; }
+    addSaving = true;
+    error = '';
+    try {
+      const result = await api.addSubscription({
+        name: addName.trim(),
+        url: addUrl.trim(),
+        refreshInterval: addRefreshInterval.trim(),
+        userAgent: addUserAgent.trim(),
+        prefix: addPrefix.trim(),
+      });
+      showAddModal = false;
+      await refresh();
+    } catch (e) {
+      error = e.message;
+    } finally {
+      addSaving = false;
+    }
+  }
+
+  async function removeSub(name) {
+    error = '';
+    try {
+      await api.removeSubscription(name);
+      await refresh();
+    } catch (e) {
+      error = e.message;
+    }
+  }
+
+  async function refreshSub(name) {
+    refreshingName = name;
+    error = '';
+    try {
+      await api.refreshSubscription(name);
+      await refresh();
+    } catch (e) {
+      error = e.message;
+    } finally {
+      refreshingName = '';
+    }
+  }
+
+  async function refreshAll() {
+    refreshingAll = true;
+    error = '';
+    try {
+      await api.refreshAllSubscriptions();
+      await refresh();
+    } catch (e) {
+      error = e.message;
+    } finally {
+      refreshingAll = false;
+    }
+  }
+</script>
+
+<div class="p-4 space-y-4">
+  <!-- Header -->
+  <div class="flex items-center justify-between">
+    <h2 class="text-lg font-semibold text-zinc-100">Подписки</h2>
+    <div class="flex items-center gap-2">
+      {#if subscriptions.length > 0}
+        <button
+          class="px-3 py-1.5 text-xs font-medium rounded-md bg-green-600/20 text-green-400 hover:bg-green-600/30 transition-colors disabled:opacity-50"
+          disabled={refreshingAll}
+          on:click={refreshAll}
+        >
+          {refreshingAll ? 'Обновление...' : 'Обновить все'}
+        </button>
+      {/if}
+      <button
+        class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
+        on:click={openAddModal}
+      >
+        + Добавить
+      </button>
+    </div>
+  </div>
+
+  <!-- Error -->
+  {#if error}
+    <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
+      {error}
+    </div>
+  {/if}
+
+  <!-- Loading -->
+  {#if loading}
+    <div class="flex items-center justify-center py-12 text-zinc-500">
+      <svg class="animate-spin h-5 w-5 mr-2" viewBox="0 0 24 24" fill="none">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+      </svg>
+      Loading...
+    </div>
+  {:else if subscriptions.length === 0}
+    <div class="flex flex-col items-center justify-center py-16 text-zinc-500">
+      <svg class="w-12 h-12 mb-3 text-zinc-600" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
+      </svg>
+      <p class="text-sm">Subscription URL</p>
+      <p class="text-xs text-zinc-600 mt-1">URL (base64-encoded vless:// URI)</p>
+    </div>
+  {:else}
+    <!-- Subscription list -->
+    <div class="space-y-2">
+      {#each subscriptions as sub}
+        <div class="p-3 bg-zinc-800/50 border border-zinc-700/40 rounded-lg hover:bg-zinc-800/70 transition-colors">
+          <div class="flex items-center justify-between">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-zinc-200">{sub.name}</span>
+                {#if sub.tunnelCount > 0}
+                  <span class="px-1.5 py-0.5 text-xs rounded bg-green-600/20 text-green-400">{sub.tunnelCount} {sub.tunnelCount === 1 ? 'tunnel' : 'tunnels'}</span>
+                {/if}
+                {#if sub.lastError}
+                  <span class="px-1.5 py-0.5 text-xs rounded bg-red-600/20 text-red-400">Error</span>
+                {/if}
+              </div>
+              <div class="text-xs text-zinc-500 mt-0.5 truncate" title={sub.url}>{sub.url}</div>
+              <div class="flex items-center gap-3 text-xs text-zinc-500 mt-0.5">
+                {#if sub.refreshInterval}
+                  <span>refresh: {sub.refreshInterval}</span>
+                {/if}
+                {#if sub.prefix}
+                  <span>prefix: {sub.prefix}</span>
+                {/if}
+              </div>
+              {#if sub.lastError}
+                <div class="text-xs text-red-400 mt-1">{sub.lastError}</div>
+              {/if}
+            </div>
+
+            <div class="flex items-center gap-1 shrink-0 ml-3">
+              <!-- Refresh button -->
+              <button
+                class="p-1.5 rounded-md text-zinc-400 hover:text-green-400 hover:bg-zinc-700/50 transition-colors disabled:opacity-50"
+                title="Refresh"
+                disabled={refreshingName === sub.name}
+                on:click={() => refreshSub(sub.name)}
+              >
+                <svg class="w-4 h-4 {refreshingName === sub.name ? 'animate-spin' : ''}" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                </svg>
+              </button>
+              <!-- Remove button -->
+              <button
+                class="p-1.5 rounded-md text-zinc-400 hover:text-red-400 hover:bg-zinc-700/50 transition-colors"
+                title="Remove"
+                on:click={() => removeSub(sub.name)}
+              >
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
+  <!-- Info block -->
+  <div class="px-3 py-2 text-xs bg-zinc-800/50 border border-zinc-700/30 rounded-lg text-zinc-500">
+    Subscriptions allow importing VLESS tunnels from remote URLs (base64-encoded lists of vless:// URIs).
+    Supported by panels like 3x-ui, v2board, and others.
+  </div>
+</div>
+
+<!-- Add subscription modal -->
+{#if showAddModal}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    on:click|self={closeAddModal}
+    on:keydown={(e) => e.key === 'Escape' && closeAddModal()}
+    role="presentation">
+    <div class="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4 max-h-[85vh] overflow-y-auto">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-700">
+        <h3 class="text-base font-semibold text-zinc-100">Add Subscription</h3>
+        <button class="text-zinc-400 hover:text-zinc-200" on:click={closeAddModal}>
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </div>
+
+      <div class="px-5 py-4 space-y-3">
+        <div>
+          <label for="sub-name" class="block text-xs font-medium text-zinc-400 mb-1">Name</label>
+          <input id="sub-name" type="text" bind:value={addName} placeholder="my-provider"
+            class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
+        </div>
+        <div>
+          <label for="sub-url" class="block text-xs font-medium text-zinc-400 mb-1">URL</label>
+          <input id="sub-url" type="text" bind:value={addUrl} placeholder="https://panel.example.com/api/v1/client/subscribe?token=..."
+            class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 font-mono text-xs focus:border-blue-500 focus:outline-none" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label for="sub-interval" class="block text-xs font-medium text-zinc-400 mb-1">Refresh interval</label>
+            <select id="sub-interval" bind:value={addRefreshInterval}
+              class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none">
+              <option value="">None</option>
+              <option value="1h">1 hour</option>
+              <option value="6h">6 hours</option>
+              <option value="12h">12 hours</option>
+              <option value="24h">24 hours</option>
+            </select>
+          </div>
+          <div>
+            <label for="sub-prefix" class="block text-xs font-medium text-zinc-400 mb-1">Prefix</label>
+            <input id="sub-prefix" type="text" bind:value={addPrefix} placeholder="(auto)"
+              class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
+          </div>
+        </div>
+        <div>
+          <label for="sub-ua" class="block text-xs font-medium text-zinc-400 mb-1">User-Agent (optional)</label>
+          <input id="sub-ua" type="text" bind:value={addUserAgent} placeholder="ClashForWindows/0.20.39"
+            class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
+        </div>
+      </div>
+
+      <!-- Modal footer -->
+      <div class="flex justify-end gap-2 px-5 py-4 border-t border-zinc-700">
+        <button
+          class="px-4 py-2 text-sm rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
+          on:click={closeAddModal}
+        >
+          Cancel
+        </button>
+        <button
+          class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-50"
+          disabled={addSaving || !addName.trim() || !addUrl.trim()}
+          on:click={saveSubscription}
+        >
+          {addSaving ? 'Saving...' : 'Add & Refresh'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}

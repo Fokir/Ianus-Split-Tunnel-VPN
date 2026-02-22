@@ -108,6 +108,22 @@ message LogConfig {
   map<string, string> components = 2;  // per-component overrides
 }
 
+// ─── Subscription config ───────────────────────────────────────────
+
+message SubscriptionConfig {
+  string name = 1;              // unique subscription name
+  string url = 2;               // subscription URL
+  string refresh_interval = 3;  // e.g. "6h", "24h"
+  string user_agent = 4;        // custom User-Agent header
+  string prefix = 5;            // prefix for generated tunnel IDs
+}
+
+message SubscriptionStatus {
+  SubscriptionConfig config = 1;
+  int32 tunnel_count = 2;       // number of tunnels fetched
+  string last_error = 3;        // last error message (empty if OK)
+}
+
 // ─── Full config ────────────────────────────────────────────────────
 
 message AppConfig {
@@ -117,6 +133,7 @@ message AppConfig {
   DNSConfig dns = 4;
   LogConfig logging = 5;
   repeated DomainRule domain_rules = 6;
+  repeated SubscriptionConfig subscriptions = 7;
 }
 
 // ─── Stats messages ─────────────────────────────────────────────────
@@ -290,6 +307,41 @@ message ProcessListResponse {
   repeated ProcessInfo processes = 1;
 }
 
+// -- Subscriptions --
+
+message SubscriptionListResponse {
+  repeated SubscriptionStatus subscriptions = 1;
+}
+
+message AddSubscriptionRequest {
+  SubscriptionConfig config = 1;
+}
+
+message AddSubscriptionResponse {
+  bool success = 1;
+  string error = 2;
+  int32 tunnel_count = 3;       // number of tunnels fetched on initial refresh
+}
+
+message RemoveSubscriptionRequest {
+  string name = 1;
+}
+
+message RemoveSubscriptionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message RefreshSubscriptionRequest {
+  string name = 1;              // specific subscription, or empty for all
+}
+
+message RefreshSubscriptionResponse {
+  bool success = 1;
+  string error = 2;
+  int32 tunnel_count = 3;
+}
+
 // -- Service status --
 
 message ServiceStatus {
@@ -357,6 +409,12 @@ service VPNService {
   // -- Autostart --
   rpc GetAutostart(google.protobuf.Empty) returns (AutostartConfig);
   rpc SetAutostart(SetAutostartRequest) returns (SetAutostartResponse);
+
+  // -- Subscriptions --
+  rpc ListSubscriptions(google.protobuf.Empty) returns (SubscriptionListResponse);
+  rpc AddSubscription(AddSubscriptionRequest) returns (AddSubscriptionResponse);
+  rpc RemoveSubscription(RemoveSubscriptionRequest) returns (RemoveSubscriptionResponse);
+  rpc RefreshSubscription(RefreshSubscriptionRequest) returns (RefreshSubscriptionResponse);
 
   // -- Connection restore --
   rpc RestoreConnections(google.protobuf.Empty) returns (ConnectResponse);

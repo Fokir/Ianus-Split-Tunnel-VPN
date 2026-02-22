@@ -55,6 +55,8 @@ type Service struct {
 	geositeFilePath string
 	httpClient      *http.Client
 
+	subMgr *core.SubscriptionManager
+
 	mu sync.RWMutex
 }
 
@@ -76,6 +78,8 @@ type Config struct {
 	GeositeFilePath string
 	// HTTPClient is bound to the real NIC to bypass TUN for outbound HTTP (geosite downloads).
 	HTTPClient *http.Client
+	// SubscriptionManager manages subscription URL fetching and refresh.
+	SubscriptionManager *core.SubscriptionManager
 }
 
 // New creates a new Service instance.
@@ -102,6 +106,7 @@ func New(c Config) *Service {
 	} else {
 		s.stats = NewStatsCollector(c.TunnelRegistry, c.EventBus)
 	}
+	s.subMgr = c.SubscriptionManager
 	return s
 }
 

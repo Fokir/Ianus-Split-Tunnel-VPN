@@ -228,9 +228,14 @@ func (s *Service) GetConfig(_ context.Context, _ *emptypb.Empty) (*vpnapi.AppCon
 func (s *Service) SaveConfig(ctx context.Context, req *vpnapi.SaveConfigRequest) (*vpnapi.SaveConfigResponse, error) {
 	newCfg := configFromProto(req.Config)
 
-	// Preserve GUI-only fields not present in the proto AppConfig.
+	// Preserve fields managed separately.
 	oldCfg := s.cfg.Get()
 	newCfg.GUI = oldCfg.GUI
+	// Subscriptions are now part of AppConfig proto, but if the client sends
+	// an empty list we preserve the existing subscriptions (backward compat).
+	if len(newCfg.Subscriptions) == 0 && len(oldCfg.Subscriptions) > 0 {
+		newCfg.Subscriptions = oldCfg.Subscriptions
+	}
 
 	// Check if VPN is connected before saving.
 	wasConnected := false
@@ -380,4 +385,98 @@ func (s *Service) RestoreConnections(ctx context.Context, _ *emptypb.Empty) (*vp
 		return &vpnapi.ConnectResponse{Success: false, Error: lastErr.Error()}, nil
 	}
 	return &vpnapi.ConnectResponse{Success: true}, nil
+}
+
+// ─── Subscriptions ──────────────────────────────────────────────────
+
+func (s *Service) ListSubscriptions(_ context.Context, _ *emptypb.Empty) (*vpnapi.SubscriptionListResponse, error) {
+	cfg := s.cfg.Get()
+	result := make([]*vpnapi.SubscriptionStatus, 0, len(cfg.Subscriptions))
+	for name, sub := range cfg.Subscriptions {
+		status := &vpnapi.SubscriptionStatus{
+			Config: subscriptionConfigToProto(name, sub),
+		}
+		if s.subMgr != nil {
+			cached := s.subMgr.GetCached(name)
+			status.TunnelCount = int32(len(cached))
+		}
+		result = append(result, status)
+	}
+	return &vpnapi.SubscriptionListResponse{Subscriptions: result}, nil
+}
+
+func (s *Service) AddSubscription(ctx context.Context, req *vpnapi.AddSubscriptionRequest) (*vpnapi.AddSubscriptionResponse, error) {
+	if req.Config == nil || req.Config.Name == "" || req.Config.Url == "" {
+		return &vpnapi.AddSubscriptionResponse{Success: false, Error: "name and url are required"}, nil
+	}
+
+	name, sub := subscriptionConfigFromProto(req.Config)
+
+	// Add to config.
+	subs := s.cfg.GetSubscriptions()
+	if subs == nil {
+		subs = make(map[string]core.SubscriptionConfig)
+	}
+	subs[name] = sub
+	s.cfg.SetSubscriptions(subs)
+	if err := s.cfg.Save(); err != nil {
+		return &vpnapi.AddSubscriptionResponse{Success: false, Error: err.Error()}, nil
+	}
+
+	// Initial refresh.
+	var tunnelCount int32
+	if s.subMgr != nil {
+		tunnels, err := s.subMgr.Refresh(ctx, name, sub)
+		if err != nil {
+			return &vpnapi.AddSubscriptionResponse{Success: true, Error: "saved but refresh failed: " + err.Error()}, nil
+		}
+		tunnelCount = int32(len(tunnels))
+	}
+
+	return &vpnapi.AddSubscriptionResponse{Success: true, TunnelCount: tunnelCount}, nil
+}
+
+func (s *Service) RemoveSubscription(_ context.Context, req *vpnapi.RemoveSubscriptionRequest) (*vpnapi.RemoveSubscriptionResponse, error) {
+	if req.Name == "" {
+		return &vpnapi.RemoveSubscriptionResponse{Success: false, Error: "name is required"}, nil
+	}
+
+	subs := s.cfg.GetSubscriptions()
+	if _, ok := subs[req.Name]; !ok {
+		return &vpnapi.RemoveSubscriptionResponse{Success: false, Error: "subscription not found"}, nil
+	}
+	delete(subs, req.Name)
+	s.cfg.SetSubscriptions(subs)
+	if err := s.cfg.Save(); err != nil {
+		return &vpnapi.RemoveSubscriptionResponse{Success: false, Error: err.Error()}, nil
+	}
+
+	return &vpnapi.RemoveSubscriptionResponse{Success: true}, nil
+}
+
+func (s *Service) RefreshSubscription(ctx context.Context, req *vpnapi.RefreshSubscriptionRequest) (*vpnapi.RefreshSubscriptionResponse, error) {
+	if s.subMgr == nil {
+		return &vpnapi.RefreshSubscriptionResponse{Success: false, Error: "subscription manager not initialized"}, nil
+	}
+
+	if req.Name == "" {
+		// Refresh all.
+		tunnels, err := s.subMgr.RefreshAll(ctx)
+		if err != nil {
+			return &vpnapi.RefreshSubscriptionResponse{Success: false, Error: err.Error(), TunnelCount: int32(len(tunnels))}, nil
+		}
+		return &vpnapi.RefreshSubscriptionResponse{Success: true, TunnelCount: int32(len(tunnels))}, nil
+	}
+
+	// Refresh specific.
+	cfg := s.cfg.Get()
+	sub, ok := cfg.Subscriptions[req.Name]
+	if !ok {
+		return &vpnapi.RefreshSubscriptionResponse{Success: false, Error: "subscription not found"}, nil
+	}
+	tunnels, err := s.subMgr.Refresh(ctx, req.Name, sub)
+	if err != nil {
+		return &vpnapi.RefreshSubscriptionResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &vpnapi.RefreshSubscriptionResponse{Success: true, TunnelCount: int32(len(tunnels))}, nil
 }

@@ -29,4 +29,7 @@ import (
 
 	// Transport: gRPC (optional, for grpc transport).
 	_ "github.com/xtls/xray-core/transport/internet/grpc"
+
+	// Transport: XHTTP / SplitHTTP (optional, for xhttp transport).
+	_ "github.com/xtls/xray-core/transport/internet/splithttp"
 )

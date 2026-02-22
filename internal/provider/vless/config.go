@@ -38,6 +38,9 @@ type Config struct {
 
 	// GRPC holds gRPC-specific settings (when Network == "grpc").
 	GRPC GRPCConfig `yaml:"grpc"`
+
+	// XHTTP holds XHTTP/SplitHTTP-specific settings (when Network == "xhttp" or "splithttp").
+	XHTTP XHTTPConfig `yaml:"xhttp"`
 }
 
 // RealityConfig holds REALITY TLS settings.
@@ -76,6 +79,18 @@ type WSConfig struct {
 type GRPCConfig struct {
 	// ServiceName is the gRPC service name.
 	ServiceName string `yaml:"service_name"`
+}
+
+// XHTTPConfig holds XHTTP (SplitHTTP) transport settings.
+type XHTTPConfig struct {
+	// Path is the HTTP request path.
+	Path string `yaml:"path"`
+	// Host is the HTTP Host header value.
+	Host string `yaml:"host"`
+	// Mode is the XHTTP mode: "auto", "packet-up", "stream-up", "stream-one".
+	Mode string `yaml:"mode"`
+	// Extra holds additional xhttp settings passed directly to xray-core.
+	Extra map[string]any `yaml:"extra,omitempty"`
 }
 
 // buildXrayJSON builds the xray-core JSON config from Config.
@@ -160,6 +175,22 @@ func buildXrayJSON(cfg Config) ([]byte, error) {
 		stream["grpcSettings"] = map[string]any{
 			"serviceName": cfg.GRPC.ServiceName,
 		}
+	case "xhttp", "splithttp":
+		stream["network"] = "xhttp"
+		xhttpSettings := map[string]any{}
+		if cfg.XHTTP.Path != "" {
+			xhttpSettings["path"] = cfg.XHTTP.Path
+		}
+		if cfg.XHTTP.Host != "" {
+			xhttpSettings["host"] = cfg.XHTTP.Host
+		}
+		if cfg.XHTTP.Mode != "" {
+			xhttpSettings["mode"] = cfg.XHTTP.Mode
+		}
+		for k, v := range cfg.XHTTP.Extra {
+			xhttpSettings[k] = v
+		}
+		stream["xhttpSettings"] = xhttpSettings
 	}
 
 	outbound["streamSettings"] = stream
@@ -225,6 +256,11 @@ func ParseXrayJSON(data []byte) (Config, error) {
 				GRPCSettings struct {
 					ServiceName string `json:"serviceName"`
 				} `json:"grpcSettings"`
+				XHTTPSettings struct {
+					Path string `json:"path"`
+					Host string `json:"host"`
+					Mode string `json:"mode"`
+				} `json:"xhttpSettings"`
 			} `json:"streamSettings"`
 		} `json:"outbounds"`
 	}
@@ -296,6 +332,16 @@ func ParseXrayJSON(data []byte) (Config, error) {
 		if ss.Network == "grpc" {
 			cfg.GRPC = GRPCConfig{
 				ServiceName: ss.GRPCSettings.ServiceName,
+			}
+		}
+
+		// XHTTP settings.
+		if ss.Network == "xhttp" || ss.Network == "splithttp" {
+			cfg.Network = "xhttp"
+			cfg.XHTTP = XHTTPConfig{
+				Path: ss.XHTTPSettings.Path,
+				Host: ss.XHTTPSettings.Host,
+				Mode: ss.XHTTPSettings.Mode,
 			}
 		}
 
@@ -400,6 +446,13 @@ func ParseVLESSURI(uri string) (Config, string, error) {
 	case "grpc":
 		cfg.GRPC = GRPCConfig{
 			ServiceName: q.Get("serviceName"),
+		}
+	case "xhttp", "splithttp":
+		cfg.Network = "xhttp"
+		cfg.XHTTP = XHTTPConfig{
+			Path: q.Get("path"),
+			Host: q.Get("host"),
+			Mode: q.Get("mode"),
 		}
 	}
 

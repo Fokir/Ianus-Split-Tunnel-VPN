@@ -799,6 +799,142 @@ func (x *LogConfig) GetComponents() map[string]string {
 	return nil
 }
 
+type SubscriptionConfig struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`                                              // unique subscription name
+	Url             string                 `protobuf:"bytes,2,opt,name=url,proto3" json:"url,omitempty"`                                                // subscription URL
+	RefreshInterval string                 `protobuf:"bytes,3,opt,name=refresh_interval,json=refreshInterval,proto3" json:"refresh_interval,omitempty"` // e.g. "6h", "24h"
+	UserAgent       string                 `protobuf:"bytes,4,opt,name=user_agent,json=userAgent,proto3" json:"user_agent,omitempty"`                   // custom User-Agent header
+	Prefix          string                 `protobuf:"bytes,5,opt,name=prefix,proto3" json:"prefix,omitempty"`                                          // prefix for generated tunnel IDs
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SubscriptionConfig) Reset() {
+	*x = SubscriptionConfig{}
+	mi := &file_vpn_service_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubscriptionConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubscriptionConfig) ProtoMessage() {}
+
+func (x *SubscriptionConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_service_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubscriptionConfig.ProtoReflect.Descriptor instead.
+func (*SubscriptionConfig) Descriptor() ([]byte, []int) {
+	return file_vpn_service_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *SubscriptionConfig) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SubscriptionConfig) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *SubscriptionConfig) GetRefreshInterval() string {
+	if x != nil {
+		return x.RefreshInterval
+	}
+	return ""
+}
+
+func (x *SubscriptionConfig) GetUserAgent() string {
+	if x != nil {
+		return x.UserAgent
+	}
+	return ""
+}
+
+func (x *SubscriptionConfig) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+type SubscriptionStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Config        *SubscriptionConfig    `protobuf:"bytes,1,opt,name=config,proto3" json:"config,omitempty"`
+	TunnelCount   int32                  `protobuf:"varint,2,opt,name=tunnel_count,json=tunnelCount,proto3" json:"tunnel_count,omitempty"` // number of tunnels fetched
+	LastError     string                 `protobuf:"bytes,3,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`        // last error message (empty if OK)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubscriptionStatus) Reset() {
+	*x = SubscriptionStatus{}
+	mi := &file_vpn_service_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubscriptionStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubscriptionStatus) ProtoMessage() {}
+
+func (x *SubscriptionStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_service_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubscriptionStatus.ProtoReflect.Descriptor instead.
+func (*SubscriptionStatus) Descriptor() ([]byte, []int) {
+	return file_vpn_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *SubscriptionStatus) GetConfig() *SubscriptionConfig {
+	if x != nil {
+		return x.Config
+	}
+	return nil
+}
+
+func (x *SubscriptionStatus) GetTunnelCount() int32 {
+	if x != nil {
+		return x.TunnelCount
+	}
+	return 0
+}
+
+func (x *SubscriptionStatus) GetLastError() string {
+	if x != nil {
+		return x.LastError
+	}
+	return ""
+}
+
 type AppConfig struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Global        *GlobalFilterConfig    `protobuf:"bytes,1,opt,name=global,proto3" json:"global,omitempty"`
@@ -807,13 +943,14 @@ type AppConfig struct {
 	Dns           *DNSConfig             `protobuf:"bytes,4,opt,name=dns,proto3" json:"dns,omitempty"`
 	Logging       *LogConfig             `protobuf:"bytes,5,opt,name=logging,proto3" json:"logging,omitempty"`
 	DomainRules   []*DomainRule          `protobuf:"bytes,6,rep,name=domain_rules,json=domainRules,proto3" json:"domain_rules,omitempty"`
+	Subscriptions []*SubscriptionConfig  `protobuf:"bytes,7,rep,name=subscriptions,proto3" json:"subscriptions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AppConfig) Reset() {
 	*x = AppConfig{}
-	mi := &file_vpn_service_proto_msgTypes[8]
+	mi := &file_vpn_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -825,7 +962,7 @@ func (x *AppConfig) String() string {
 func (*AppConfig) ProtoMessage() {}
 
 func (x *AppConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[8]
+	mi := &file_vpn_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -838,7 +975,7 @@ func (x *AppConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppConfig.ProtoReflect.Descriptor instead.
 func (*AppConfig) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{8}
+	return file_vpn_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *AppConfig) GetGlobal() *GlobalFilterConfig {
@@ -883,6 +1020,13 @@ func (x *AppConfig) GetDomainRules() []*DomainRule {
 	return nil
 }
 
+func (x *AppConfig) GetSubscriptions() []*SubscriptionConfig {
+	if x != nil {
+		return x.Subscriptions
+	}
+	return nil
+}
+
 type TunnelStats struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TunnelId      string                 `protobuf:"bytes,1,opt,name=tunnel_id,json=tunnelId,proto3" json:"tunnel_id,omitempty"`
@@ -901,7 +1045,7 @@ type TunnelStats struct {
 
 func (x *TunnelStats) Reset() {
 	*x = TunnelStats{}
-	mi := &file_vpn_service_proto_msgTypes[9]
+	mi := &file_vpn_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -913,7 +1057,7 @@ func (x *TunnelStats) String() string {
 func (*TunnelStats) ProtoMessage() {}
 
 func (x *TunnelStats) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[9]
+	mi := &file_vpn_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -926,7 +1070,7 @@ func (x *TunnelStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelStats.ProtoReflect.Descriptor instead.
 func (*TunnelStats) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{9}
+	return file_vpn_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *TunnelStats) GetTunnelId() string {
@@ -1009,7 +1153,7 @@ type StatsSnapshot struct {
 
 func (x *StatsSnapshot) Reset() {
 	*x = StatsSnapshot{}
-	mi := &file_vpn_service_proto_msgTypes[10]
+	mi := &file_vpn_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1021,7 +1165,7 @@ func (x *StatsSnapshot) String() string {
 func (*StatsSnapshot) ProtoMessage() {}
 
 func (x *StatsSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[10]
+	mi := &file_vpn_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1034,7 +1178,7 @@ func (x *StatsSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatsSnapshot.ProtoReflect.Descriptor instead.
 func (*StatsSnapshot) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{10}
+	return file_vpn_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *StatsSnapshot) GetTunnels() []*TunnelStats {
@@ -1063,7 +1207,7 @@ type LogEntry struct {
 
 func (x *LogEntry) Reset() {
 	*x = LogEntry{}
-	mi := &file_vpn_service_proto_msgTypes[11]
+	mi := &file_vpn_service_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1075,7 +1219,7 @@ func (x *LogEntry) String() string {
 func (*LogEntry) ProtoMessage() {}
 
 func (x *LogEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[11]
+	mi := &file_vpn_service_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1088,7 +1232,7 @@ func (x *LogEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogEntry.ProtoReflect.Descriptor instead.
 func (*LogEntry) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{11}
+	return file_vpn_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *LogEntry) GetTimestamp() *timestamppb.Timestamp {
@@ -1130,7 +1274,7 @@ type ProcessInfo struct {
 
 func (x *ProcessInfo) Reset() {
 	*x = ProcessInfo{}
-	mi := &file_vpn_service_proto_msgTypes[12]
+	mi := &file_vpn_service_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1142,7 +1286,7 @@ func (x *ProcessInfo) String() string {
 func (*ProcessInfo) ProtoMessage() {}
 
 func (x *ProcessInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[12]
+	mi := &file_vpn_service_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1155,7 +1299,7 @@ func (x *ProcessInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessInfo.ProtoReflect.Descriptor instead.
 func (*ProcessInfo) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{12}
+	return file_vpn_service_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ProcessInfo) GetPid() uint32 {
@@ -1188,7 +1332,7 @@ type ConnectRequest struct {
 
 func (x *ConnectRequest) Reset() {
 	*x = ConnectRequest{}
-	mi := &file_vpn_service_proto_msgTypes[13]
+	mi := &file_vpn_service_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1200,7 +1344,7 @@ func (x *ConnectRequest) String() string {
 func (*ConnectRequest) ProtoMessage() {}
 
 func (x *ConnectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[13]
+	mi := &file_vpn_service_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1213,7 +1357,7 @@ func (x *ConnectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConnectRequest.ProtoReflect.Descriptor instead.
 func (*ConnectRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{13}
+	return file_vpn_service_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ConnectRequest) GetTunnelId() string {
@@ -1233,7 +1377,7 @@ type ConnectResponse struct {
 
 func (x *ConnectResponse) Reset() {
 	*x = ConnectResponse{}
-	mi := &file_vpn_service_proto_msgTypes[14]
+	mi := &file_vpn_service_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1245,7 +1389,7 @@ func (x *ConnectResponse) String() string {
 func (*ConnectResponse) ProtoMessage() {}
 
 func (x *ConnectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[14]
+	mi := &file_vpn_service_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1258,7 +1402,7 @@ func (x *ConnectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConnectResponse.ProtoReflect.Descriptor instead.
 func (*ConnectResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{14}
+	return file_vpn_service_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ConnectResponse) GetSuccess() bool {
@@ -1284,7 +1428,7 @@ type DisconnectRequest struct {
 
 func (x *DisconnectRequest) Reset() {
 	*x = DisconnectRequest{}
-	mi := &file_vpn_service_proto_msgTypes[15]
+	mi := &file_vpn_service_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1296,7 +1440,7 @@ func (x *DisconnectRequest) String() string {
 func (*DisconnectRequest) ProtoMessage() {}
 
 func (x *DisconnectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[15]
+	mi := &file_vpn_service_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1309,7 +1453,7 @@ func (x *DisconnectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DisconnectRequest.ProtoReflect.Descriptor instead.
 func (*DisconnectRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{15}
+	return file_vpn_service_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *DisconnectRequest) GetTunnelId() string {
@@ -1329,7 +1473,7 @@ type DisconnectResponse struct {
 
 func (x *DisconnectResponse) Reset() {
 	*x = DisconnectResponse{}
-	mi := &file_vpn_service_proto_msgTypes[16]
+	mi := &file_vpn_service_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1341,7 +1485,7 @@ func (x *DisconnectResponse) String() string {
 func (*DisconnectResponse) ProtoMessage() {}
 
 func (x *DisconnectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[16]
+	mi := &file_vpn_service_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1354,7 +1498,7 @@ func (x *DisconnectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DisconnectResponse.ProtoReflect.Descriptor instead.
 func (*DisconnectResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{16}
+	return file_vpn_service_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *DisconnectResponse) GetSuccess() bool {
@@ -1381,7 +1525,7 @@ type AddTunnelRequest struct {
 
 func (x *AddTunnelRequest) Reset() {
 	*x = AddTunnelRequest{}
-	mi := &file_vpn_service_proto_msgTypes[17]
+	mi := &file_vpn_service_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1393,7 +1537,7 @@ func (x *AddTunnelRequest) String() string {
 func (*AddTunnelRequest) ProtoMessage() {}
 
 func (x *AddTunnelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[17]
+	mi := &file_vpn_service_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1406,7 +1550,7 @@ func (x *AddTunnelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddTunnelRequest.ProtoReflect.Descriptor instead.
 func (*AddTunnelRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{17}
+	return file_vpn_service_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *AddTunnelRequest) GetConfig() *TunnelConfig {
@@ -1433,7 +1577,7 @@ type AddTunnelResponse struct {
 
 func (x *AddTunnelResponse) Reset() {
 	*x = AddTunnelResponse{}
-	mi := &file_vpn_service_proto_msgTypes[18]
+	mi := &file_vpn_service_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1445,7 +1589,7 @@ func (x *AddTunnelResponse) String() string {
 func (*AddTunnelResponse) ProtoMessage() {}
 
 func (x *AddTunnelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[18]
+	mi := &file_vpn_service_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1458,7 +1602,7 @@ func (x *AddTunnelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddTunnelResponse.ProtoReflect.Descriptor instead.
 func (*AddTunnelResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{18}
+	return file_vpn_service_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *AddTunnelResponse) GetSuccess() bool {
@@ -1484,7 +1628,7 @@ type RemoveTunnelRequest struct {
 
 func (x *RemoveTunnelRequest) Reset() {
 	*x = RemoveTunnelRequest{}
-	mi := &file_vpn_service_proto_msgTypes[19]
+	mi := &file_vpn_service_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1496,7 +1640,7 @@ func (x *RemoveTunnelRequest) String() string {
 func (*RemoveTunnelRequest) ProtoMessage() {}
 
 func (x *RemoveTunnelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[19]
+	mi := &file_vpn_service_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1509,7 +1653,7 @@ func (x *RemoveTunnelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveTunnelRequest.ProtoReflect.Descriptor instead.
 func (*RemoveTunnelRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{19}
+	return file_vpn_service_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *RemoveTunnelRequest) GetTunnelId() string {
@@ -1529,7 +1673,7 @@ type RemoveTunnelResponse struct {
 
 func (x *RemoveTunnelResponse) Reset() {
 	*x = RemoveTunnelResponse{}
-	mi := &file_vpn_service_proto_msgTypes[20]
+	mi := &file_vpn_service_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1541,7 +1685,7 @@ func (x *RemoveTunnelResponse) String() string {
 func (*RemoveTunnelResponse) ProtoMessage() {}
 
 func (x *RemoveTunnelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[20]
+	mi := &file_vpn_service_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1554,7 +1698,7 @@ func (x *RemoveTunnelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveTunnelResponse.ProtoReflect.Descriptor instead.
 func (*RemoveTunnelResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{20}
+	return file_vpn_service_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *RemoveTunnelResponse) GetSuccess() bool {
@@ -1580,7 +1724,7 @@ type UpdateTunnelRequest struct {
 
 func (x *UpdateTunnelRequest) Reset() {
 	*x = UpdateTunnelRequest{}
-	mi := &file_vpn_service_proto_msgTypes[21]
+	mi := &file_vpn_service_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1592,7 +1736,7 @@ func (x *UpdateTunnelRequest) String() string {
 func (*UpdateTunnelRequest) ProtoMessage() {}
 
 func (x *UpdateTunnelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[21]
+	mi := &file_vpn_service_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1605,7 +1749,7 @@ func (x *UpdateTunnelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateTunnelRequest.ProtoReflect.Descriptor instead.
 func (*UpdateTunnelRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{21}
+	return file_vpn_service_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *UpdateTunnelRequest) GetConfig() *TunnelConfig {
@@ -1625,7 +1769,7 @@ type UpdateTunnelResponse struct {
 
 func (x *UpdateTunnelResponse) Reset() {
 	*x = UpdateTunnelResponse{}
-	mi := &file_vpn_service_proto_msgTypes[22]
+	mi := &file_vpn_service_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1637,7 +1781,7 @@ func (x *UpdateTunnelResponse) String() string {
 func (*UpdateTunnelResponse) ProtoMessage() {}
 
 func (x *UpdateTunnelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[22]
+	mi := &file_vpn_service_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1650,7 +1794,7 @@ func (x *UpdateTunnelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateTunnelResponse.ProtoReflect.Descriptor instead.
 func (*UpdateTunnelResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{22}
+	return file_vpn_service_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *UpdateTunnelResponse) GetSuccess() bool {
@@ -1676,7 +1820,7 @@ type GetTunnelRequest struct {
 
 func (x *GetTunnelRequest) Reset() {
 	*x = GetTunnelRequest{}
-	mi := &file_vpn_service_proto_msgTypes[23]
+	mi := &file_vpn_service_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1688,7 +1832,7 @@ func (x *GetTunnelRequest) String() string {
 func (*GetTunnelRequest) ProtoMessage() {}
 
 func (x *GetTunnelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[23]
+	mi := &file_vpn_service_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1701,7 +1845,7 @@ func (x *GetTunnelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTunnelRequest.ProtoReflect.Descriptor instead.
 func (*GetTunnelRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{23}
+	return file_vpn_service_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetTunnelRequest) GetTunnelId() string {
@@ -1720,7 +1864,7 @@ type TunnelListResponse struct {
 
 func (x *TunnelListResponse) Reset() {
 	*x = TunnelListResponse{}
-	mi := &file_vpn_service_proto_msgTypes[24]
+	mi := &file_vpn_service_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1732,7 +1876,7 @@ func (x *TunnelListResponse) String() string {
 func (*TunnelListResponse) ProtoMessage() {}
 
 func (x *TunnelListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[24]
+	mi := &file_vpn_service_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1745,7 +1889,7 @@ func (x *TunnelListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelListResponse.ProtoReflect.Descriptor instead.
 func (*TunnelListResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{24}
+	return file_vpn_service_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *TunnelListResponse) GetTunnels() []*TunnelStatus {
@@ -1764,7 +1908,7 @@ type RuleListResponse struct {
 
 func (x *RuleListResponse) Reset() {
 	*x = RuleListResponse{}
-	mi := &file_vpn_service_proto_msgTypes[25]
+	mi := &file_vpn_service_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1776,7 +1920,7 @@ func (x *RuleListResponse) String() string {
 func (*RuleListResponse) ProtoMessage() {}
 
 func (x *RuleListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[25]
+	mi := &file_vpn_service_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1789,7 +1933,7 @@ func (x *RuleListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuleListResponse.ProtoReflect.Descriptor instead.
 func (*RuleListResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{25}
+	return file_vpn_service_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *RuleListResponse) GetRules() []*Rule {
@@ -1808,7 +1952,7 @@ type SaveRulesRequest struct {
 
 func (x *SaveRulesRequest) Reset() {
 	*x = SaveRulesRequest{}
-	mi := &file_vpn_service_proto_msgTypes[26]
+	mi := &file_vpn_service_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1820,7 +1964,7 @@ func (x *SaveRulesRequest) String() string {
 func (*SaveRulesRequest) ProtoMessage() {}
 
 func (x *SaveRulesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[26]
+	mi := &file_vpn_service_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1833,7 +1977,7 @@ func (x *SaveRulesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveRulesRequest.ProtoReflect.Descriptor instead.
 func (*SaveRulesRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{26}
+	return file_vpn_service_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SaveRulesRequest) GetRules() []*Rule {
@@ -1853,7 +1997,7 @@ type SaveRulesResponse struct {
 
 func (x *SaveRulesResponse) Reset() {
 	*x = SaveRulesResponse{}
-	mi := &file_vpn_service_proto_msgTypes[27]
+	mi := &file_vpn_service_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1865,7 +2009,7 @@ func (x *SaveRulesResponse) String() string {
 func (*SaveRulesResponse) ProtoMessage() {}
 
 func (x *SaveRulesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[27]
+	mi := &file_vpn_service_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1878,7 +2022,7 @@ func (x *SaveRulesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveRulesResponse.ProtoReflect.Descriptor instead.
 func (*SaveRulesResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{27}
+	return file_vpn_service_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *SaveRulesResponse) GetSuccess() bool {
@@ -1904,7 +2048,7 @@ type DomainRuleListResponse struct {
 
 func (x *DomainRuleListResponse) Reset() {
 	*x = DomainRuleListResponse{}
-	mi := &file_vpn_service_proto_msgTypes[28]
+	mi := &file_vpn_service_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1916,7 +2060,7 @@ func (x *DomainRuleListResponse) String() string {
 func (*DomainRuleListResponse) ProtoMessage() {}
 
 func (x *DomainRuleListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[28]
+	mi := &file_vpn_service_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1929,7 +2073,7 @@ func (x *DomainRuleListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DomainRuleListResponse.ProtoReflect.Descriptor instead.
 func (*DomainRuleListResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{28}
+	return file_vpn_service_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *DomainRuleListResponse) GetRules() []*DomainRule {
@@ -1948,7 +2092,7 @@ type SaveDomainRulesRequest struct {
 
 func (x *SaveDomainRulesRequest) Reset() {
 	*x = SaveDomainRulesRequest{}
-	mi := &file_vpn_service_proto_msgTypes[29]
+	mi := &file_vpn_service_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1960,7 +2104,7 @@ func (x *SaveDomainRulesRequest) String() string {
 func (*SaveDomainRulesRequest) ProtoMessage() {}
 
 func (x *SaveDomainRulesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[29]
+	mi := &file_vpn_service_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1973,7 +2117,7 @@ func (x *SaveDomainRulesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveDomainRulesRequest.ProtoReflect.Descriptor instead.
 func (*SaveDomainRulesRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{29}
+	return file_vpn_service_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *SaveDomainRulesRequest) GetRules() []*DomainRule {
@@ -1993,7 +2137,7 @@ type SaveDomainRulesResponse struct {
 
 func (x *SaveDomainRulesResponse) Reset() {
 	*x = SaveDomainRulesResponse{}
-	mi := &file_vpn_service_proto_msgTypes[30]
+	mi := &file_vpn_service_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2005,7 +2149,7 @@ func (x *SaveDomainRulesResponse) String() string {
 func (*SaveDomainRulesResponse) ProtoMessage() {}
 
 func (x *SaveDomainRulesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[30]
+	mi := &file_vpn_service_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2018,7 +2162,7 @@ func (x *SaveDomainRulesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveDomainRulesResponse.ProtoReflect.Descriptor instead.
 func (*SaveDomainRulesResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{30}
+	return file_vpn_service_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SaveDomainRulesResponse) GetSuccess() bool {
@@ -2044,7 +2188,7 @@ type GeositeCategoriesResponse struct {
 
 func (x *GeositeCategoriesResponse) Reset() {
 	*x = GeositeCategoriesResponse{}
-	mi := &file_vpn_service_proto_msgTypes[31]
+	mi := &file_vpn_service_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2056,7 +2200,7 @@ func (x *GeositeCategoriesResponse) String() string {
 func (*GeositeCategoriesResponse) ProtoMessage() {}
 
 func (x *GeositeCategoriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[31]
+	mi := &file_vpn_service_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2069,7 +2213,7 @@ func (x *GeositeCategoriesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GeositeCategoriesResponse.ProtoReflect.Descriptor instead.
 func (*GeositeCategoriesResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{31}
+	return file_vpn_service_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *GeositeCategoriesResponse) GetCategories() []string {
@@ -2089,7 +2233,7 @@ type UpdateGeositeResponse struct {
 
 func (x *UpdateGeositeResponse) Reset() {
 	*x = UpdateGeositeResponse{}
-	mi := &file_vpn_service_proto_msgTypes[32]
+	mi := &file_vpn_service_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2101,7 +2245,7 @@ func (x *UpdateGeositeResponse) String() string {
 func (*UpdateGeositeResponse) ProtoMessage() {}
 
 func (x *UpdateGeositeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[32]
+	mi := &file_vpn_service_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2114,7 +2258,7 @@ func (x *UpdateGeositeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateGeositeResponse.ProtoReflect.Descriptor instead.
 func (*UpdateGeositeResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{32}
+	return file_vpn_service_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *UpdateGeositeResponse) GetSuccess() bool {
@@ -2141,7 +2285,7 @@ type SaveConfigRequest struct {
 
 func (x *SaveConfigRequest) Reset() {
 	*x = SaveConfigRequest{}
-	mi := &file_vpn_service_proto_msgTypes[33]
+	mi := &file_vpn_service_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2153,7 +2297,7 @@ func (x *SaveConfigRequest) String() string {
 func (*SaveConfigRequest) ProtoMessage() {}
 
 func (x *SaveConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[33]
+	mi := &file_vpn_service_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2166,7 +2310,7 @@ func (x *SaveConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveConfigRequest.ProtoReflect.Descriptor instead.
 func (*SaveConfigRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{33}
+	return file_vpn_service_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *SaveConfigRequest) GetConfig() *AppConfig {
@@ -2194,7 +2338,7 @@ type SaveConfigResponse struct {
 
 func (x *SaveConfigResponse) Reset() {
 	*x = SaveConfigResponse{}
-	mi := &file_vpn_service_proto_msgTypes[34]
+	mi := &file_vpn_service_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2206,7 +2350,7 @@ func (x *SaveConfigResponse) String() string {
 func (*SaveConfigResponse) ProtoMessage() {}
 
 func (x *SaveConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[34]
+	mi := &file_vpn_service_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2219,7 +2363,7 @@ func (x *SaveConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveConfigResponse.ProtoReflect.Descriptor instead.
 func (*SaveConfigResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{34}
+	return file_vpn_service_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *SaveConfigResponse) GetSuccess() bool {
@@ -2254,7 +2398,7 @@ type LogStreamRequest struct {
 
 func (x *LogStreamRequest) Reset() {
 	*x = LogStreamRequest{}
-	mi := &file_vpn_service_proto_msgTypes[35]
+	mi := &file_vpn_service_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2266,7 +2410,7 @@ func (x *LogStreamRequest) String() string {
 func (*LogStreamRequest) ProtoMessage() {}
 
 func (x *LogStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[35]
+	mi := &file_vpn_service_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2279,7 +2423,7 @@ func (x *LogStreamRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogStreamRequest.ProtoReflect.Descriptor instead.
 func (*LogStreamRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{35}
+	return file_vpn_service_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *LogStreamRequest) GetMinLevel() LogLevel {
@@ -2312,7 +2456,7 @@ type StatsStreamRequest struct {
 
 func (x *StatsStreamRequest) Reset() {
 	*x = StatsStreamRequest{}
-	mi := &file_vpn_service_proto_msgTypes[36]
+	mi := &file_vpn_service_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2324,7 +2468,7 @@ func (x *StatsStreamRequest) String() string {
 func (*StatsStreamRequest) ProtoMessage() {}
 
 func (x *StatsStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[36]
+	mi := &file_vpn_service_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2337,7 +2481,7 @@ func (x *StatsStreamRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatsStreamRequest.ProtoReflect.Descriptor instead.
 func (*StatsStreamRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{36}
+	return file_vpn_service_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *StatsStreamRequest) GetIntervalMs() int32 {
@@ -2356,7 +2500,7 @@ type ProcessListRequest struct {
 
 func (x *ProcessListRequest) Reset() {
 	*x = ProcessListRequest{}
-	mi := &file_vpn_service_proto_msgTypes[37]
+	mi := &file_vpn_service_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2368,7 +2512,7 @@ func (x *ProcessListRequest) String() string {
 func (*ProcessListRequest) ProtoMessage() {}
 
 func (x *ProcessListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[37]
+	mi := &file_vpn_service_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2381,7 +2525,7 @@ func (x *ProcessListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessListRequest.ProtoReflect.Descriptor instead.
 func (*ProcessListRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{37}
+	return file_vpn_service_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ProcessListRequest) GetNameFilter() string {
@@ -2400,7 +2544,7 @@ type ProcessListResponse struct {
 
 func (x *ProcessListResponse) Reset() {
 	*x = ProcessListResponse{}
-	mi := &file_vpn_service_proto_msgTypes[38]
+	mi := &file_vpn_service_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2412,7 +2556,7 @@ func (x *ProcessListResponse) String() string {
 func (*ProcessListResponse) ProtoMessage() {}
 
 func (x *ProcessListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[38]
+	mi := &file_vpn_service_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2425,7 +2569,7 @@ func (x *ProcessListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessListResponse.ProtoReflect.Descriptor instead.
 func (*ProcessListResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{38}
+	return file_vpn_service_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ProcessListResponse) GetProcesses() []*ProcessInfo {
@@ -2433,6 +2577,354 @@ func (x *ProcessListResponse) GetProcesses() []*ProcessInfo {
 		return x.Processes
 	}
 	return nil
+}
+
+type SubscriptionListResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Subscriptions []*SubscriptionStatus  `protobuf:"bytes,1,rep,name=subscriptions,proto3" json:"subscriptions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubscriptionListResponse) Reset() {
+	*x = SubscriptionListResponse{}
+	mi := &file_vpn_service_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubscriptionListResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubscriptionListResponse) ProtoMessage() {}
+
+func (x *SubscriptionListResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_service_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubscriptionListResponse.ProtoReflect.Descriptor instead.
+func (*SubscriptionListResponse) Descriptor() ([]byte, []int) {
+	return file_vpn_service_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *SubscriptionListResponse) GetSubscriptions() []*SubscriptionStatus {
+	if x != nil {
+		return x.Subscriptions
+	}
+	return nil
+}
+
+type AddSubscriptionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Config        *SubscriptionConfig    `protobuf:"bytes,1,opt,name=config,proto3" json:"config,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddSubscriptionRequest) Reset() {
+	*x = AddSubscriptionRequest{}
+	mi := &file_vpn_service_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddSubscriptionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddSubscriptionRequest) ProtoMessage() {}
+
+func (x *AddSubscriptionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_service_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddSubscriptionRequest.ProtoReflect.Descriptor instead.
+func (*AddSubscriptionRequest) Descriptor() ([]byte, []int) {
+	return file_vpn_service_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *AddSubscriptionRequest) GetConfig() *SubscriptionConfig {
+	if x != nil {
+		return x.Config
+	}
+	return nil
+}
+
+type AddSubscriptionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	TunnelCount   int32                  `protobuf:"varint,3,opt,name=tunnel_count,json=tunnelCount,proto3" json:"tunnel_count,omitempty"` // number of tunnels fetched on initial refresh
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddSubscriptionResponse) Reset() {
+	*x = AddSubscriptionResponse{}
+	mi := &file_vpn_service_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddSubscriptionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddSubscriptionResponse) ProtoMessage() {}
+
+func (x *AddSubscriptionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_service_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddSubscriptionResponse.ProtoReflect.Descriptor instead.
+func (*AddSubscriptionResponse) Descriptor() ([]byte, []int) {
+	return file_vpn_service_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *AddSubscriptionResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *AddSubscriptionResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *AddSubscriptionResponse) GetTunnelCount() int32 {
+	if x != nil {
+		return x.TunnelCount
+	}
+	return 0
+}
+
+type RemoveSubscriptionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveSubscriptionRequest) Reset() {
+	*x = RemoveSubscriptionRequest{}
+	mi := &file_vpn_service_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveSubscriptionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveSubscriptionRequest) ProtoMessage() {}
+
+func (x *RemoveSubscriptionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_service_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveSubscriptionRequest.ProtoReflect.Descriptor instead.
+func (*RemoveSubscriptionRequest) Descriptor() ([]byte, []int) {
+	return file_vpn_service_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *RemoveSubscriptionRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type RemoveSubscriptionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveSubscriptionResponse) Reset() {
+	*x = RemoveSubscriptionResponse{}
+	mi := &file_vpn_service_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveSubscriptionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveSubscriptionResponse) ProtoMessage() {}
+
+func (x *RemoveSubscriptionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_service_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveSubscriptionResponse.ProtoReflect.Descriptor instead.
+func (*RemoveSubscriptionResponse) Descriptor() ([]byte, []int) {
+	return file_vpn_service_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *RemoveSubscriptionResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RemoveSubscriptionResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type RefreshSubscriptionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // specific subscription, or empty for all
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RefreshSubscriptionRequest) Reset() {
+	*x = RefreshSubscriptionRequest{}
+	mi := &file_vpn_service_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RefreshSubscriptionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RefreshSubscriptionRequest) ProtoMessage() {}
+
+func (x *RefreshSubscriptionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_service_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RefreshSubscriptionRequest.ProtoReflect.Descriptor instead.
+func (*RefreshSubscriptionRequest) Descriptor() ([]byte, []int) {
+	return file_vpn_service_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *RefreshSubscriptionRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type RefreshSubscriptionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	TunnelCount   int32                  `protobuf:"varint,3,opt,name=tunnel_count,json=tunnelCount,proto3" json:"tunnel_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RefreshSubscriptionResponse) Reset() {
+	*x = RefreshSubscriptionResponse{}
+	mi := &file_vpn_service_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RefreshSubscriptionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RefreshSubscriptionResponse) ProtoMessage() {}
+
+func (x *RefreshSubscriptionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_service_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RefreshSubscriptionResponse.ProtoReflect.Descriptor instead.
+func (*RefreshSubscriptionResponse) Descriptor() ([]byte, []int) {
+	return file_vpn_service_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *RefreshSubscriptionResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RefreshSubscriptionResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *RefreshSubscriptionResponse) GetTunnelCount() int32 {
+	if x != nil {
+		return x.TunnelCount
+	}
+	return 0
 }
 
 type ServiceStatus struct {
@@ -2448,7 +2940,7 @@ type ServiceStatus struct {
 
 func (x *ServiceStatus) Reset() {
 	*x = ServiceStatus{}
-	mi := &file_vpn_service_proto_msgTypes[39]
+	mi := &file_vpn_service_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2460,7 +2952,7 @@ func (x *ServiceStatus) String() string {
 func (*ServiceStatus) ProtoMessage() {}
 
 func (x *ServiceStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[39]
+	mi := &file_vpn_service_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2473,7 +2965,7 @@ func (x *ServiceStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceStatus.ProtoReflect.Descriptor instead.
 func (*ServiceStatus) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{39}
+	return file_vpn_service_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ServiceStatus) GetRunning() bool {
@@ -2521,7 +3013,7 @@ type AutostartConfig struct {
 
 func (x *AutostartConfig) Reset() {
 	*x = AutostartConfig{}
-	mi := &file_vpn_service_proto_msgTypes[40]
+	mi := &file_vpn_service_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2533,7 +3025,7 @@ func (x *AutostartConfig) String() string {
 func (*AutostartConfig) ProtoMessage() {}
 
 func (x *AutostartConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[40]
+	mi := &file_vpn_service_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2546,7 +3038,7 @@ func (x *AutostartConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AutostartConfig.ProtoReflect.Descriptor instead.
 func (*AutostartConfig) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{40}
+	return file_vpn_service_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *AutostartConfig) GetEnabled() bool {
@@ -2572,7 +3064,7 @@ type SetAutostartRequest struct {
 
 func (x *SetAutostartRequest) Reset() {
 	*x = SetAutostartRequest{}
-	mi := &file_vpn_service_proto_msgTypes[41]
+	mi := &file_vpn_service_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2584,7 +3076,7 @@ func (x *SetAutostartRequest) String() string {
 func (*SetAutostartRequest) ProtoMessage() {}
 
 func (x *SetAutostartRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[41]
+	mi := &file_vpn_service_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2597,7 +3089,7 @@ func (x *SetAutostartRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetAutostartRequest.ProtoReflect.Descriptor instead.
 func (*SetAutostartRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{41}
+	return file_vpn_service_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *SetAutostartRequest) GetConfig() *AutostartConfig {
@@ -2617,7 +3109,7 @@ type SetAutostartResponse struct {
 
 func (x *SetAutostartResponse) Reset() {
 	*x = SetAutostartResponse{}
-	mi := &file_vpn_service_proto_msgTypes[42]
+	mi := &file_vpn_service_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2629,7 +3121,7 @@ func (x *SetAutostartResponse) String() string {
 func (*SetAutostartResponse) ProtoMessage() {}
 
 func (x *SetAutostartResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_service_proto_msgTypes[42]
+	mi := &file_vpn_service_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2642,7 +3134,7 @@ func (x *SetAutostartResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetAutostartResponse.ProtoReflect.Descriptor instead.
 func (*SetAutostartResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_service_proto_rawDescGZIP(), []int{42}
+	return file_vpn_service_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *SetAutostartResponse) GetSuccess() bool {
@@ -2719,14 +3211,27 @@ const file_vpn_service_proto_rawDesc = "" +
 	"components\x1a=\n" +
 	"\x0fComponentsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb4\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9c\x01\n" +
+	"\x12SubscriptionConfig\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
+	"\x03url\x18\x02 \x01(\tR\x03url\x12)\n" +
+	"\x10refresh_interval\x18\x03 \x01(\tR\x0frefreshInterval\x12\x1d\n" +
+	"\n" +
+	"user_agent\x18\x04 \x01(\tR\tuserAgent\x12\x16\n" +
+	"\x06prefix\x18\x05 \x01(\tR\x06prefix\"\x8e\x01\n" +
+	"\x12SubscriptionStatus\x126\n" +
+	"\x06config\x18\x01 \x01(\v2\x1e.awg.vpn.v1.SubscriptionConfigR\x06config\x12!\n" +
+	"\ftunnel_count\x18\x02 \x01(\x05R\vtunnelCount\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\x03 \x01(\tR\tlastError\"\xfa\x02\n" +
 	"\tAppConfig\x126\n" +
 	"\x06global\x18\x01 \x01(\v2\x1e.awg.vpn.v1.GlobalFilterConfigR\x06global\x122\n" +
 	"\atunnels\x18\x02 \x03(\v2\x18.awg.vpn.v1.TunnelConfigR\atunnels\x12&\n" +
 	"\x05rules\x18\x03 \x03(\v2\x10.awg.vpn.v1.RuleR\x05rules\x12'\n" +
 	"\x03dns\x18\x04 \x01(\v2\x15.awg.vpn.v1.DNSConfigR\x03dns\x12/\n" +
 	"\alogging\x18\x05 \x01(\v2\x15.awg.vpn.v1.LogConfigR\alogging\x129\n" +
-	"\fdomain_rules\x18\x06 \x03(\v2\x16.awg.vpn.v1.DomainRuleR\vdomainRules\"\xe5\x02\n" +
+	"\fdomain_rules\x18\x06 \x03(\v2\x16.awg.vpn.v1.DomainRuleR\vdomainRules\x12D\n" +
+	"\rsubscriptions\x18\a \x03(\v2\x1e.awg.vpn.v1.SubscriptionConfigR\rsubscriptions\"\xe5\x02\n" +
 	"\vTunnelStats\x12\x1b\n" +
 	"\ttunnel_id\x18\x01 \x01(\tR\btunnelId\x12-\n" +
 	"\x05state\x18\x02 \x01(\x0e2\x17.awg.vpn.v1.TunnelStateR\x05state\x12\x19\n" +
@@ -2824,7 +3329,26 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\vname_filter\x18\x01 \x01(\tR\n" +
 	"nameFilter\"L\n" +
 	"\x13ProcessListResponse\x125\n" +
-	"\tprocesses\x18\x01 \x03(\v2\x17.awg.vpn.v1.ProcessInfoR\tprocesses\"\xb6\x01\n" +
+	"\tprocesses\x18\x01 \x03(\v2\x17.awg.vpn.v1.ProcessInfoR\tprocesses\"`\n" +
+	"\x18SubscriptionListResponse\x12D\n" +
+	"\rsubscriptions\x18\x01 \x03(\v2\x1e.awg.vpn.v1.SubscriptionStatusR\rsubscriptions\"P\n" +
+	"\x16AddSubscriptionRequest\x126\n" +
+	"\x06config\x18\x01 \x01(\v2\x1e.awg.vpn.v1.SubscriptionConfigR\x06config\"l\n" +
+	"\x17AddSubscriptionResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12!\n" +
+	"\ftunnel_count\x18\x03 \x01(\x05R\vtunnelCount\"/\n" +
+	"\x19RemoveSubscriptionRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"L\n" +
+	"\x1aRemoveSubscriptionResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"0\n" +
+	"\x1aRefreshSubscriptionRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"p\n" +
+	"\x1bRefreshSubscriptionResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12!\n" +
+	"\ftunnel_count\x18\x03 \x01(\x05R\vtunnelCount\"\xb6\x01\n" +
 	"\rServiceStatus\x12\x18\n" +
 	"\arunning\x18\x01 \x01(\bR\arunning\x12%\n" +
 	"\x0eactive_tunnels\x18\x02 \x01(\x05R\ractiveTunnels\x12#\n" +
@@ -2858,7 +3382,7 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\fDomainAction\x12\x17\n" +
 	"\x13DOMAIN_ACTION_ROUTE\x10\x00\x12\x18\n" +
 	"\x14DOMAIN_ACTION_DIRECT\x10\x01\x12\x17\n" +
-	"\x13DOMAIN_ACTION_BLOCK\x10\x022\x89\x0e\n" +
+	"\x13DOMAIN_ACTION_BLOCK\x10\x022\x85\x11\n" +
 	"\n" +
 	"VPNService\x12>\n" +
 	"\tGetStatus\x12\x16.google.protobuf.Empty\x1a\x19.awg.vpn.v1.ServiceStatus\x12:\n" +
@@ -2886,7 +3410,11 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\vStreamStats\x12\x1e.awg.vpn.v1.StatsStreamRequest\x1a\x19.awg.vpn.v1.StatsSnapshot0\x01\x12P\n" +
 	"\rListProcesses\x12\x1e.awg.vpn.v1.ProcessListRequest\x1a\x1f.awg.vpn.v1.ProcessListResponse\x12C\n" +
 	"\fGetAutostart\x12\x16.google.protobuf.Empty\x1a\x1b.awg.vpn.v1.AutostartConfig\x12Q\n" +
-	"\fSetAutostart\x12\x1f.awg.vpn.v1.SetAutostartRequest\x1a .awg.vpn.v1.SetAutostartResponse\x12I\n" +
+	"\fSetAutostart\x12\x1f.awg.vpn.v1.SetAutostartRequest\x1a .awg.vpn.v1.SetAutostartResponse\x12Q\n" +
+	"\x11ListSubscriptions\x12\x16.google.protobuf.Empty\x1a$.awg.vpn.v1.SubscriptionListResponse\x12Z\n" +
+	"\x0fAddSubscription\x12\".awg.vpn.v1.AddSubscriptionRequest\x1a#.awg.vpn.v1.AddSubscriptionResponse\x12c\n" +
+	"\x12RemoveSubscription\x12%.awg.vpn.v1.RemoveSubscriptionRequest\x1a&.awg.vpn.v1.RemoveSubscriptionResponse\x12f\n" +
+	"\x13RefreshSubscription\x12&.awg.vpn.v1.RefreshSubscriptionRequest\x1a'.awg.vpn.v1.RefreshSubscriptionResponse\x12I\n" +
 	"\x12RestoreConnections\x12\x16.google.protobuf.Empty\x1a\x1b.awg.vpn.v1.ConnectResponseB!Z\x1fawg-split-tunnel/api/gen;vpnapib\x06proto3"
 
 var (
@@ -2902,144 +3430,165 @@ func file_vpn_service_proto_rawDescGZIP() []byte {
 }
 
 var file_vpn_service_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_vpn_service_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
+var file_vpn_service_proto_msgTypes = make([]protoimpl.MessageInfo, 54)
 var file_vpn_service_proto_goTypes = []any{
-	(TunnelState)(0),                  // 0: awg.vpn.v1.TunnelState
-	(FallbackPolicy)(0),               // 1: awg.vpn.v1.FallbackPolicy
-	(LogLevel)(0),                     // 2: awg.vpn.v1.LogLevel
-	(DomainAction)(0),                 // 3: awg.vpn.v1.DomainAction
-	(*TunnelConfig)(nil),              // 4: awg.vpn.v1.TunnelConfig
-	(*TunnelStatus)(nil),              // 5: awg.vpn.v1.TunnelStatus
-	(*DomainRule)(nil),                // 6: awg.vpn.v1.DomainRule
-	(*Rule)(nil),                      // 7: awg.vpn.v1.Rule
-	(*DNSCacheConfig)(nil),            // 8: awg.vpn.v1.DNSCacheConfig
-	(*DNSConfig)(nil),                 // 9: awg.vpn.v1.DNSConfig
-	(*GlobalFilterConfig)(nil),        // 10: awg.vpn.v1.GlobalFilterConfig
-	(*LogConfig)(nil),                 // 11: awg.vpn.v1.LogConfig
-	(*AppConfig)(nil),                 // 12: awg.vpn.v1.AppConfig
-	(*TunnelStats)(nil),               // 13: awg.vpn.v1.TunnelStats
-	(*StatsSnapshot)(nil),             // 14: awg.vpn.v1.StatsSnapshot
-	(*LogEntry)(nil),                  // 15: awg.vpn.v1.LogEntry
-	(*ProcessInfo)(nil),               // 16: awg.vpn.v1.ProcessInfo
-	(*ConnectRequest)(nil),            // 17: awg.vpn.v1.ConnectRequest
-	(*ConnectResponse)(nil),           // 18: awg.vpn.v1.ConnectResponse
-	(*DisconnectRequest)(nil),         // 19: awg.vpn.v1.DisconnectRequest
-	(*DisconnectResponse)(nil),        // 20: awg.vpn.v1.DisconnectResponse
-	(*AddTunnelRequest)(nil),          // 21: awg.vpn.v1.AddTunnelRequest
-	(*AddTunnelResponse)(nil),         // 22: awg.vpn.v1.AddTunnelResponse
-	(*RemoveTunnelRequest)(nil),       // 23: awg.vpn.v1.RemoveTunnelRequest
-	(*RemoveTunnelResponse)(nil),      // 24: awg.vpn.v1.RemoveTunnelResponse
-	(*UpdateTunnelRequest)(nil),       // 25: awg.vpn.v1.UpdateTunnelRequest
-	(*UpdateTunnelResponse)(nil),      // 26: awg.vpn.v1.UpdateTunnelResponse
-	(*GetTunnelRequest)(nil),          // 27: awg.vpn.v1.GetTunnelRequest
-	(*TunnelListResponse)(nil),        // 28: awg.vpn.v1.TunnelListResponse
-	(*RuleListResponse)(nil),          // 29: awg.vpn.v1.RuleListResponse
-	(*SaveRulesRequest)(nil),          // 30: awg.vpn.v1.SaveRulesRequest
-	(*SaveRulesResponse)(nil),         // 31: awg.vpn.v1.SaveRulesResponse
-	(*DomainRuleListResponse)(nil),    // 32: awg.vpn.v1.DomainRuleListResponse
-	(*SaveDomainRulesRequest)(nil),    // 33: awg.vpn.v1.SaveDomainRulesRequest
-	(*SaveDomainRulesResponse)(nil),   // 34: awg.vpn.v1.SaveDomainRulesResponse
-	(*GeositeCategoriesResponse)(nil), // 35: awg.vpn.v1.GeositeCategoriesResponse
-	(*UpdateGeositeResponse)(nil),     // 36: awg.vpn.v1.UpdateGeositeResponse
-	(*SaveConfigRequest)(nil),         // 37: awg.vpn.v1.SaveConfigRequest
-	(*SaveConfigResponse)(nil),        // 38: awg.vpn.v1.SaveConfigResponse
-	(*LogStreamRequest)(nil),          // 39: awg.vpn.v1.LogStreamRequest
-	(*StatsStreamRequest)(nil),        // 40: awg.vpn.v1.StatsStreamRequest
-	(*ProcessListRequest)(nil),        // 41: awg.vpn.v1.ProcessListRequest
-	(*ProcessListResponse)(nil),       // 42: awg.vpn.v1.ProcessListResponse
-	(*ServiceStatus)(nil),             // 43: awg.vpn.v1.ServiceStatus
-	(*AutostartConfig)(nil),           // 44: awg.vpn.v1.AutostartConfig
-	(*SetAutostartRequest)(nil),       // 45: awg.vpn.v1.SetAutostartRequest
-	(*SetAutostartResponse)(nil),      // 46: awg.vpn.v1.SetAutostartResponse
-	nil,                               // 47: awg.vpn.v1.TunnelConfig.SettingsEntry
-	nil,                               // 48: awg.vpn.v1.LogConfig.ComponentsEntry
-	(*timestamppb.Timestamp)(nil),     // 49: google.protobuf.Timestamp
-	(*emptypb.Empty)(nil),             // 50: google.protobuf.Empty
+	(TunnelState)(0),                    // 0: awg.vpn.v1.TunnelState
+	(FallbackPolicy)(0),                 // 1: awg.vpn.v1.FallbackPolicy
+	(LogLevel)(0),                       // 2: awg.vpn.v1.LogLevel
+	(DomainAction)(0),                   // 3: awg.vpn.v1.DomainAction
+	(*TunnelConfig)(nil),                // 4: awg.vpn.v1.TunnelConfig
+	(*TunnelStatus)(nil),                // 5: awg.vpn.v1.TunnelStatus
+	(*DomainRule)(nil),                  // 6: awg.vpn.v1.DomainRule
+	(*Rule)(nil),                        // 7: awg.vpn.v1.Rule
+	(*DNSCacheConfig)(nil),              // 8: awg.vpn.v1.DNSCacheConfig
+	(*DNSConfig)(nil),                   // 9: awg.vpn.v1.DNSConfig
+	(*GlobalFilterConfig)(nil),          // 10: awg.vpn.v1.GlobalFilterConfig
+	(*LogConfig)(nil),                   // 11: awg.vpn.v1.LogConfig
+	(*SubscriptionConfig)(nil),          // 12: awg.vpn.v1.SubscriptionConfig
+	(*SubscriptionStatus)(nil),          // 13: awg.vpn.v1.SubscriptionStatus
+	(*AppConfig)(nil),                   // 14: awg.vpn.v1.AppConfig
+	(*TunnelStats)(nil),                 // 15: awg.vpn.v1.TunnelStats
+	(*StatsSnapshot)(nil),               // 16: awg.vpn.v1.StatsSnapshot
+	(*LogEntry)(nil),                    // 17: awg.vpn.v1.LogEntry
+	(*ProcessInfo)(nil),                 // 18: awg.vpn.v1.ProcessInfo
+	(*ConnectRequest)(nil),              // 19: awg.vpn.v1.ConnectRequest
+	(*ConnectResponse)(nil),             // 20: awg.vpn.v1.ConnectResponse
+	(*DisconnectRequest)(nil),           // 21: awg.vpn.v1.DisconnectRequest
+	(*DisconnectResponse)(nil),          // 22: awg.vpn.v1.DisconnectResponse
+	(*AddTunnelRequest)(nil),            // 23: awg.vpn.v1.AddTunnelRequest
+	(*AddTunnelResponse)(nil),           // 24: awg.vpn.v1.AddTunnelResponse
+	(*RemoveTunnelRequest)(nil),         // 25: awg.vpn.v1.RemoveTunnelRequest
+	(*RemoveTunnelResponse)(nil),        // 26: awg.vpn.v1.RemoveTunnelResponse
+	(*UpdateTunnelRequest)(nil),         // 27: awg.vpn.v1.UpdateTunnelRequest
+	(*UpdateTunnelResponse)(nil),        // 28: awg.vpn.v1.UpdateTunnelResponse
+	(*GetTunnelRequest)(nil),            // 29: awg.vpn.v1.GetTunnelRequest
+	(*TunnelListResponse)(nil),          // 30: awg.vpn.v1.TunnelListResponse
+	(*RuleListResponse)(nil),            // 31: awg.vpn.v1.RuleListResponse
+	(*SaveRulesRequest)(nil),            // 32: awg.vpn.v1.SaveRulesRequest
+	(*SaveRulesResponse)(nil),           // 33: awg.vpn.v1.SaveRulesResponse
+	(*DomainRuleListResponse)(nil),      // 34: awg.vpn.v1.DomainRuleListResponse
+	(*SaveDomainRulesRequest)(nil),      // 35: awg.vpn.v1.SaveDomainRulesRequest
+	(*SaveDomainRulesResponse)(nil),     // 36: awg.vpn.v1.SaveDomainRulesResponse
+	(*GeositeCategoriesResponse)(nil),   // 37: awg.vpn.v1.GeositeCategoriesResponse
+	(*UpdateGeositeResponse)(nil),       // 38: awg.vpn.v1.UpdateGeositeResponse
+	(*SaveConfigRequest)(nil),           // 39: awg.vpn.v1.SaveConfigRequest
+	(*SaveConfigResponse)(nil),          // 40: awg.vpn.v1.SaveConfigResponse
+	(*LogStreamRequest)(nil),            // 41: awg.vpn.v1.LogStreamRequest
+	(*StatsStreamRequest)(nil),          // 42: awg.vpn.v1.StatsStreamRequest
+	(*ProcessListRequest)(nil),          // 43: awg.vpn.v1.ProcessListRequest
+	(*ProcessListResponse)(nil),         // 44: awg.vpn.v1.ProcessListResponse
+	(*SubscriptionListResponse)(nil),    // 45: awg.vpn.v1.SubscriptionListResponse
+	(*AddSubscriptionRequest)(nil),      // 46: awg.vpn.v1.AddSubscriptionRequest
+	(*AddSubscriptionResponse)(nil),     // 47: awg.vpn.v1.AddSubscriptionResponse
+	(*RemoveSubscriptionRequest)(nil),   // 48: awg.vpn.v1.RemoveSubscriptionRequest
+	(*RemoveSubscriptionResponse)(nil),  // 49: awg.vpn.v1.RemoveSubscriptionResponse
+	(*RefreshSubscriptionRequest)(nil),  // 50: awg.vpn.v1.RefreshSubscriptionRequest
+	(*RefreshSubscriptionResponse)(nil), // 51: awg.vpn.v1.RefreshSubscriptionResponse
+	(*ServiceStatus)(nil),               // 52: awg.vpn.v1.ServiceStatus
+	(*AutostartConfig)(nil),             // 53: awg.vpn.v1.AutostartConfig
+	(*SetAutostartRequest)(nil),         // 54: awg.vpn.v1.SetAutostartRequest
+	(*SetAutostartResponse)(nil),        // 55: awg.vpn.v1.SetAutostartResponse
+	nil,                                 // 56: awg.vpn.v1.TunnelConfig.SettingsEntry
+	nil,                                 // 57: awg.vpn.v1.LogConfig.ComponentsEntry
+	(*timestamppb.Timestamp)(nil),       // 58: google.protobuf.Timestamp
+	(*emptypb.Empty)(nil),               // 59: google.protobuf.Empty
 }
 var file_vpn_service_proto_depIdxs = []int32{
-	47, // 0: awg.vpn.v1.TunnelConfig.settings:type_name -> awg.vpn.v1.TunnelConfig.SettingsEntry
+	56, // 0: awg.vpn.v1.TunnelConfig.settings:type_name -> awg.vpn.v1.TunnelConfig.SettingsEntry
 	4,  // 1: awg.vpn.v1.TunnelStatus.config:type_name -> awg.vpn.v1.TunnelConfig
 	0,  // 2: awg.vpn.v1.TunnelStatus.state:type_name -> awg.vpn.v1.TunnelState
 	3,  // 3: awg.vpn.v1.DomainRule.action:type_name -> awg.vpn.v1.DomainAction
 	1,  // 4: awg.vpn.v1.Rule.fallback:type_name -> awg.vpn.v1.FallbackPolicy
 	8,  // 5: awg.vpn.v1.DNSConfig.cache:type_name -> awg.vpn.v1.DNSCacheConfig
-	48, // 6: awg.vpn.v1.LogConfig.components:type_name -> awg.vpn.v1.LogConfig.ComponentsEntry
-	10, // 7: awg.vpn.v1.AppConfig.global:type_name -> awg.vpn.v1.GlobalFilterConfig
-	4,  // 8: awg.vpn.v1.AppConfig.tunnels:type_name -> awg.vpn.v1.TunnelConfig
-	7,  // 9: awg.vpn.v1.AppConfig.rules:type_name -> awg.vpn.v1.Rule
-	9,  // 10: awg.vpn.v1.AppConfig.dns:type_name -> awg.vpn.v1.DNSConfig
-	11, // 11: awg.vpn.v1.AppConfig.logging:type_name -> awg.vpn.v1.LogConfig
-	6,  // 12: awg.vpn.v1.AppConfig.domain_rules:type_name -> awg.vpn.v1.DomainRule
-	0,  // 13: awg.vpn.v1.TunnelStats.state:type_name -> awg.vpn.v1.TunnelState
-	49, // 14: awg.vpn.v1.TunnelStats.last_handshake:type_name -> google.protobuf.Timestamp
-	13, // 15: awg.vpn.v1.StatsSnapshot.tunnels:type_name -> awg.vpn.v1.TunnelStats
-	49, // 16: awg.vpn.v1.StatsSnapshot.timestamp:type_name -> google.protobuf.Timestamp
-	49, // 17: awg.vpn.v1.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
-	2,  // 18: awg.vpn.v1.LogEntry.level:type_name -> awg.vpn.v1.LogLevel
-	4,  // 19: awg.vpn.v1.AddTunnelRequest.config:type_name -> awg.vpn.v1.TunnelConfig
-	4,  // 20: awg.vpn.v1.UpdateTunnelRequest.config:type_name -> awg.vpn.v1.TunnelConfig
-	5,  // 21: awg.vpn.v1.TunnelListResponse.tunnels:type_name -> awg.vpn.v1.TunnelStatus
-	7,  // 22: awg.vpn.v1.RuleListResponse.rules:type_name -> awg.vpn.v1.Rule
-	7,  // 23: awg.vpn.v1.SaveRulesRequest.rules:type_name -> awg.vpn.v1.Rule
-	6,  // 24: awg.vpn.v1.DomainRuleListResponse.rules:type_name -> awg.vpn.v1.DomainRule
-	6,  // 25: awg.vpn.v1.SaveDomainRulesRequest.rules:type_name -> awg.vpn.v1.DomainRule
-	12, // 26: awg.vpn.v1.SaveConfigRequest.config:type_name -> awg.vpn.v1.AppConfig
-	2,  // 27: awg.vpn.v1.LogStreamRequest.min_level:type_name -> awg.vpn.v1.LogLevel
-	16, // 28: awg.vpn.v1.ProcessListResponse.processes:type_name -> awg.vpn.v1.ProcessInfo
-	44, // 29: awg.vpn.v1.SetAutostartRequest.config:type_name -> awg.vpn.v1.AutostartConfig
-	50, // 30: awg.vpn.v1.VPNService.GetStatus:input_type -> google.protobuf.Empty
-	50, // 31: awg.vpn.v1.VPNService.Shutdown:input_type -> google.protobuf.Empty
-	50, // 32: awg.vpn.v1.VPNService.ListTunnels:input_type -> google.protobuf.Empty
-	27, // 33: awg.vpn.v1.VPNService.GetTunnel:input_type -> awg.vpn.v1.GetTunnelRequest
-	21, // 34: awg.vpn.v1.VPNService.AddTunnel:input_type -> awg.vpn.v1.AddTunnelRequest
-	23, // 35: awg.vpn.v1.VPNService.RemoveTunnel:input_type -> awg.vpn.v1.RemoveTunnelRequest
-	25, // 36: awg.vpn.v1.VPNService.UpdateTunnel:input_type -> awg.vpn.v1.UpdateTunnelRequest
-	17, // 37: awg.vpn.v1.VPNService.Connect:input_type -> awg.vpn.v1.ConnectRequest
-	19, // 38: awg.vpn.v1.VPNService.Disconnect:input_type -> awg.vpn.v1.DisconnectRequest
-	17, // 39: awg.vpn.v1.VPNService.RestartTunnel:input_type -> awg.vpn.v1.ConnectRequest
-	50, // 40: awg.vpn.v1.VPNService.ListRules:input_type -> google.protobuf.Empty
-	30, // 41: awg.vpn.v1.VPNService.SaveRules:input_type -> awg.vpn.v1.SaveRulesRequest
-	50, // 42: awg.vpn.v1.VPNService.ListDomainRules:input_type -> google.protobuf.Empty
-	33, // 43: awg.vpn.v1.VPNService.SaveDomainRules:input_type -> awg.vpn.v1.SaveDomainRulesRequest
-	50, // 44: awg.vpn.v1.VPNService.ListGeositeCategories:input_type -> google.protobuf.Empty
-	50, // 45: awg.vpn.v1.VPNService.UpdateGeosite:input_type -> google.protobuf.Empty
-	50, // 46: awg.vpn.v1.VPNService.GetConfig:input_type -> google.protobuf.Empty
-	37, // 47: awg.vpn.v1.VPNService.SaveConfig:input_type -> awg.vpn.v1.SaveConfigRequest
-	39, // 48: awg.vpn.v1.VPNService.StreamLogs:input_type -> awg.vpn.v1.LogStreamRequest
-	40, // 49: awg.vpn.v1.VPNService.StreamStats:input_type -> awg.vpn.v1.StatsStreamRequest
-	41, // 50: awg.vpn.v1.VPNService.ListProcesses:input_type -> awg.vpn.v1.ProcessListRequest
-	50, // 51: awg.vpn.v1.VPNService.GetAutostart:input_type -> google.protobuf.Empty
-	45, // 52: awg.vpn.v1.VPNService.SetAutostart:input_type -> awg.vpn.v1.SetAutostartRequest
-	50, // 53: awg.vpn.v1.VPNService.RestoreConnections:input_type -> google.protobuf.Empty
-	43, // 54: awg.vpn.v1.VPNService.GetStatus:output_type -> awg.vpn.v1.ServiceStatus
-	50, // 55: awg.vpn.v1.VPNService.Shutdown:output_type -> google.protobuf.Empty
-	28, // 56: awg.vpn.v1.VPNService.ListTunnels:output_type -> awg.vpn.v1.TunnelListResponse
-	5,  // 57: awg.vpn.v1.VPNService.GetTunnel:output_type -> awg.vpn.v1.TunnelStatus
-	22, // 58: awg.vpn.v1.VPNService.AddTunnel:output_type -> awg.vpn.v1.AddTunnelResponse
-	24, // 59: awg.vpn.v1.VPNService.RemoveTunnel:output_type -> awg.vpn.v1.RemoveTunnelResponse
-	26, // 60: awg.vpn.v1.VPNService.UpdateTunnel:output_type -> awg.vpn.v1.UpdateTunnelResponse
-	18, // 61: awg.vpn.v1.VPNService.Connect:output_type -> awg.vpn.v1.ConnectResponse
-	20, // 62: awg.vpn.v1.VPNService.Disconnect:output_type -> awg.vpn.v1.DisconnectResponse
-	18, // 63: awg.vpn.v1.VPNService.RestartTunnel:output_type -> awg.vpn.v1.ConnectResponse
-	29, // 64: awg.vpn.v1.VPNService.ListRules:output_type -> awg.vpn.v1.RuleListResponse
-	31, // 65: awg.vpn.v1.VPNService.SaveRules:output_type -> awg.vpn.v1.SaveRulesResponse
-	32, // 66: awg.vpn.v1.VPNService.ListDomainRules:output_type -> awg.vpn.v1.DomainRuleListResponse
-	34, // 67: awg.vpn.v1.VPNService.SaveDomainRules:output_type -> awg.vpn.v1.SaveDomainRulesResponse
-	35, // 68: awg.vpn.v1.VPNService.ListGeositeCategories:output_type -> awg.vpn.v1.GeositeCategoriesResponse
-	36, // 69: awg.vpn.v1.VPNService.UpdateGeosite:output_type -> awg.vpn.v1.UpdateGeositeResponse
-	12, // 70: awg.vpn.v1.VPNService.GetConfig:output_type -> awg.vpn.v1.AppConfig
-	38, // 71: awg.vpn.v1.VPNService.SaveConfig:output_type -> awg.vpn.v1.SaveConfigResponse
-	15, // 72: awg.vpn.v1.VPNService.StreamLogs:output_type -> awg.vpn.v1.LogEntry
-	14, // 73: awg.vpn.v1.VPNService.StreamStats:output_type -> awg.vpn.v1.StatsSnapshot
-	42, // 74: awg.vpn.v1.VPNService.ListProcesses:output_type -> awg.vpn.v1.ProcessListResponse
-	44, // 75: awg.vpn.v1.VPNService.GetAutostart:output_type -> awg.vpn.v1.AutostartConfig
-	46, // 76: awg.vpn.v1.VPNService.SetAutostart:output_type -> awg.vpn.v1.SetAutostartResponse
-	18, // 77: awg.vpn.v1.VPNService.RestoreConnections:output_type -> awg.vpn.v1.ConnectResponse
-	54, // [54:78] is the sub-list for method output_type
-	30, // [30:54] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	57, // 6: awg.vpn.v1.LogConfig.components:type_name -> awg.vpn.v1.LogConfig.ComponentsEntry
+	12, // 7: awg.vpn.v1.SubscriptionStatus.config:type_name -> awg.vpn.v1.SubscriptionConfig
+	10, // 8: awg.vpn.v1.AppConfig.global:type_name -> awg.vpn.v1.GlobalFilterConfig
+	4,  // 9: awg.vpn.v1.AppConfig.tunnels:type_name -> awg.vpn.v1.TunnelConfig
+	7,  // 10: awg.vpn.v1.AppConfig.rules:type_name -> awg.vpn.v1.Rule
+	9,  // 11: awg.vpn.v1.AppConfig.dns:type_name -> awg.vpn.v1.DNSConfig
+	11, // 12: awg.vpn.v1.AppConfig.logging:type_name -> awg.vpn.v1.LogConfig
+	6,  // 13: awg.vpn.v1.AppConfig.domain_rules:type_name -> awg.vpn.v1.DomainRule
+	12, // 14: awg.vpn.v1.AppConfig.subscriptions:type_name -> awg.vpn.v1.SubscriptionConfig
+	0,  // 15: awg.vpn.v1.TunnelStats.state:type_name -> awg.vpn.v1.TunnelState
+	58, // 16: awg.vpn.v1.TunnelStats.last_handshake:type_name -> google.protobuf.Timestamp
+	15, // 17: awg.vpn.v1.StatsSnapshot.tunnels:type_name -> awg.vpn.v1.TunnelStats
+	58, // 18: awg.vpn.v1.StatsSnapshot.timestamp:type_name -> google.protobuf.Timestamp
+	58, // 19: awg.vpn.v1.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	2,  // 20: awg.vpn.v1.LogEntry.level:type_name -> awg.vpn.v1.LogLevel
+	4,  // 21: awg.vpn.v1.AddTunnelRequest.config:type_name -> awg.vpn.v1.TunnelConfig
+	4,  // 22: awg.vpn.v1.UpdateTunnelRequest.config:type_name -> awg.vpn.v1.TunnelConfig
+	5,  // 23: awg.vpn.v1.TunnelListResponse.tunnels:type_name -> awg.vpn.v1.TunnelStatus
+	7,  // 24: awg.vpn.v1.RuleListResponse.rules:type_name -> awg.vpn.v1.Rule
+	7,  // 25: awg.vpn.v1.SaveRulesRequest.rules:type_name -> awg.vpn.v1.Rule
+	6,  // 26: awg.vpn.v1.DomainRuleListResponse.rules:type_name -> awg.vpn.v1.DomainRule
+	6,  // 27: awg.vpn.v1.SaveDomainRulesRequest.rules:type_name -> awg.vpn.v1.DomainRule
+	14, // 28: awg.vpn.v1.SaveConfigRequest.config:type_name -> awg.vpn.v1.AppConfig
+	2,  // 29: awg.vpn.v1.LogStreamRequest.min_level:type_name -> awg.vpn.v1.LogLevel
+	18, // 30: awg.vpn.v1.ProcessListResponse.processes:type_name -> awg.vpn.v1.ProcessInfo
+	13, // 31: awg.vpn.v1.SubscriptionListResponse.subscriptions:type_name -> awg.vpn.v1.SubscriptionStatus
+	12, // 32: awg.vpn.v1.AddSubscriptionRequest.config:type_name -> awg.vpn.v1.SubscriptionConfig
+	53, // 33: awg.vpn.v1.SetAutostartRequest.config:type_name -> awg.vpn.v1.AutostartConfig
+	59, // 34: awg.vpn.v1.VPNService.GetStatus:input_type -> google.protobuf.Empty
+	59, // 35: awg.vpn.v1.VPNService.Shutdown:input_type -> google.protobuf.Empty
+	59, // 36: awg.vpn.v1.VPNService.ListTunnels:input_type -> google.protobuf.Empty
+	29, // 37: awg.vpn.v1.VPNService.GetTunnel:input_type -> awg.vpn.v1.GetTunnelRequest
+	23, // 38: awg.vpn.v1.VPNService.AddTunnel:input_type -> awg.vpn.v1.AddTunnelRequest
+	25, // 39: awg.vpn.v1.VPNService.RemoveTunnel:input_type -> awg.vpn.v1.RemoveTunnelRequest
+	27, // 40: awg.vpn.v1.VPNService.UpdateTunnel:input_type -> awg.vpn.v1.UpdateTunnelRequest
+	19, // 41: awg.vpn.v1.VPNService.Connect:input_type -> awg.vpn.v1.ConnectRequest
+	21, // 42: awg.vpn.v1.VPNService.Disconnect:input_type -> awg.vpn.v1.DisconnectRequest
+	19, // 43: awg.vpn.v1.VPNService.RestartTunnel:input_type -> awg.vpn.v1.ConnectRequest
+	59, // 44: awg.vpn.v1.VPNService.ListRules:input_type -> google.protobuf.Empty
+	32, // 45: awg.vpn.v1.VPNService.SaveRules:input_type -> awg.vpn.v1.SaveRulesRequest
+	59, // 46: awg.vpn.v1.VPNService.ListDomainRules:input_type -> google.protobuf.Empty
+	35, // 47: awg.vpn.v1.VPNService.SaveDomainRules:input_type -> awg.vpn.v1.SaveDomainRulesRequest
+	59, // 48: awg.vpn.v1.VPNService.ListGeositeCategories:input_type -> google.protobuf.Empty
+	59, // 49: awg.vpn.v1.VPNService.UpdateGeosite:input_type -> google.protobuf.Empty
+	59, // 50: awg.vpn.v1.VPNService.GetConfig:input_type -> google.protobuf.Empty
+	39, // 51: awg.vpn.v1.VPNService.SaveConfig:input_type -> awg.vpn.v1.SaveConfigRequest
+	41, // 52: awg.vpn.v1.VPNService.StreamLogs:input_type -> awg.vpn.v1.LogStreamRequest
+	42, // 53: awg.vpn.v1.VPNService.StreamStats:input_type -> awg.vpn.v1.StatsStreamRequest
+	43, // 54: awg.vpn.v1.VPNService.ListProcesses:input_type -> awg.vpn.v1.ProcessListRequest
+	59, // 55: awg.vpn.v1.VPNService.GetAutostart:input_type -> google.protobuf.Empty
+	54, // 56: awg.vpn.v1.VPNService.SetAutostart:input_type -> awg.vpn.v1.SetAutostartRequest
+	59, // 57: awg.vpn.v1.VPNService.ListSubscriptions:input_type -> google.protobuf.Empty
+	46, // 58: awg.vpn.v1.VPNService.AddSubscription:input_type -> awg.vpn.v1.AddSubscriptionRequest
+	48, // 59: awg.vpn.v1.VPNService.RemoveSubscription:input_type -> awg.vpn.v1.RemoveSubscriptionRequest
+	50, // 60: awg.vpn.v1.VPNService.RefreshSubscription:input_type -> awg.vpn.v1.RefreshSubscriptionRequest
+	59, // 61: awg.vpn.v1.VPNService.RestoreConnections:input_type -> google.protobuf.Empty
+	52, // 62: awg.vpn.v1.VPNService.GetStatus:output_type -> awg.vpn.v1.ServiceStatus
+	59, // 63: awg.vpn.v1.VPNService.Shutdown:output_type -> google.protobuf.Empty
+	30, // 64: awg.vpn.v1.VPNService.ListTunnels:output_type -> awg.vpn.v1.TunnelListResponse
+	5,  // 65: awg.vpn.v1.VPNService.GetTunnel:output_type -> awg.vpn.v1.TunnelStatus
+	24, // 66: awg.vpn.v1.VPNService.AddTunnel:output_type -> awg.vpn.v1.AddTunnelResponse
+	26, // 67: awg.vpn.v1.VPNService.RemoveTunnel:output_type -> awg.vpn.v1.RemoveTunnelResponse
+	28, // 68: awg.vpn.v1.VPNService.UpdateTunnel:output_type -> awg.vpn.v1.UpdateTunnelResponse
+	20, // 69: awg.vpn.v1.VPNService.Connect:output_type -> awg.vpn.v1.ConnectResponse
+	22, // 70: awg.vpn.v1.VPNService.Disconnect:output_type -> awg.vpn.v1.DisconnectResponse
+	20, // 71: awg.vpn.v1.VPNService.RestartTunnel:output_type -> awg.vpn.v1.ConnectResponse
+	31, // 72: awg.vpn.v1.VPNService.ListRules:output_type -> awg.vpn.v1.RuleListResponse
+	33, // 73: awg.vpn.v1.VPNService.SaveRules:output_type -> awg.vpn.v1.SaveRulesResponse
+	34, // 74: awg.vpn.v1.VPNService.ListDomainRules:output_type -> awg.vpn.v1.DomainRuleListResponse
+	36, // 75: awg.vpn.v1.VPNService.SaveDomainRules:output_type -> awg.vpn.v1.SaveDomainRulesResponse
+	37, // 76: awg.vpn.v1.VPNService.ListGeositeCategories:output_type -> awg.vpn.v1.GeositeCategoriesResponse
+	38, // 77: awg.vpn.v1.VPNService.UpdateGeosite:output_type -> awg.vpn.v1.UpdateGeositeResponse
+	14, // 78: awg.vpn.v1.VPNService.GetConfig:output_type -> awg.vpn.v1.AppConfig
+	40, // 79: awg.vpn.v1.VPNService.SaveConfig:output_type -> awg.vpn.v1.SaveConfigResponse
+	17, // 80: awg.vpn.v1.VPNService.StreamLogs:output_type -> awg.vpn.v1.LogEntry
+	16, // 81: awg.vpn.v1.VPNService.StreamStats:output_type -> awg.vpn.v1.StatsSnapshot
+	44, // 82: awg.vpn.v1.VPNService.ListProcesses:output_type -> awg.vpn.v1.ProcessListResponse
+	53, // 83: awg.vpn.v1.VPNService.GetAutostart:output_type -> awg.vpn.v1.AutostartConfig
+	55, // 84: awg.vpn.v1.VPNService.SetAutostart:output_type -> awg.vpn.v1.SetAutostartResponse
+	45, // 85: awg.vpn.v1.VPNService.ListSubscriptions:output_type -> awg.vpn.v1.SubscriptionListResponse
+	47, // 86: awg.vpn.v1.VPNService.AddSubscription:output_type -> awg.vpn.v1.AddSubscriptionResponse
+	49, // 87: awg.vpn.v1.VPNService.RemoveSubscription:output_type -> awg.vpn.v1.RemoveSubscriptionResponse
+	51, // 88: awg.vpn.v1.VPNService.RefreshSubscription:output_type -> awg.vpn.v1.RefreshSubscriptionResponse
+	20, // 89: awg.vpn.v1.VPNService.RestoreConnections:output_type -> awg.vpn.v1.ConnectResponse
+	62, // [62:90] is the sub-list for method output_type
+	34, // [34:62] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_vpn_service_proto_init() }
@@ -3053,7 +3602,7 @@ func file_vpn_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vpn_service_proto_rawDesc), len(file_vpn_service_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   45,
+			NumMessages:   54,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
