@@ -240,6 +240,7 @@ func main() {
 			continue
 		}
 		registry.SetState(tcfg.ID, core.TunnelStateUp, nil)
+		ruleEngine.SetTunnelActive(tcfg.ID, true)
 
 		// Register raw forwarder if the provider supports it.
 		if rf, ok := prov.(provider.RawForwarder); ok {
