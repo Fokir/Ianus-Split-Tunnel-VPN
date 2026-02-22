@@ -178,9 +178,8 @@ func main() {
 	}
 
 	// === 8a. Subscriptions: fetch and merge into tunnel list ===
-	var subMgr *core.SubscriptionManager
+	subMgr := core.NewSubscriptionManager(cfgManager, bus, nil, vless.ParseURIToTunnelConfig)
 	if len(cfg.Subscriptions) > 0 {
-		subMgr = core.NewSubscriptionManager(cfgManager, bus, nil, vless.ParseURIToTunnelConfig)
 		subTunnels, err := subMgr.RefreshAll(ctx)
 		if err != nil {
 			core.Log.Warnf("Core", "Subscription errors: %v", err)

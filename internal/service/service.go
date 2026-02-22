@@ -110,10 +110,22 @@ func New(c Config) *Service {
 	return s
 }
 
-// Start initializes background workers (stats collection, log capture).
+// Start initializes background workers (stats collection, log capture)
+// and subscribes to events for subscription tunnel hot-reload.
 func (s *Service) Start(ctx context.Context) {
 	s.stats.Start(ctx)
 	s.logs.Start()
+
+	// When subscriptions auto-refresh, sync tunnels into the controller.
+	if s.subMgr != nil {
+		s.bus.Subscribe(core.EventSubscriptionUpdated, func(e core.Event) {
+			payload, ok := e.Payload.(core.SubscriptionPayload)
+			if !ok || payload.Error != nil {
+				return
+			}
+			s.syncSubscriptionTunnels(ctx, payload.Name, payload.Tunnels)
+		})
+	}
 }
 
 // Stop shuts down background workers.

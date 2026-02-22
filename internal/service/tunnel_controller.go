@@ -296,8 +296,10 @@ func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelCo
 	}
 	tc.mu.Unlock()
 
-	// Persist new tunnel to config file.
-	tc.persistTunnelConfig(cfg)
+	// Persist new tunnel to config file (skip subscription-sourced tunnels).
+	if _, isSub := cfg.Settings["_subscription"]; !isSub {
+		tc.persistTunnelConfig(cfg)
+	}
 
 	return nil
 }
@@ -326,8 +328,10 @@ func (tc *TunnelControllerImpl) RemoveTunnel(tunnelID string) error {
 	delete(tc.deps.Providers, tunnelID)
 	tc.deps.Registry.Unregister(tunnelID)
 
-	// Remove tunnel from persisted config.
-	tc.removeTunnelConfig(tunnelID)
+	// Remove tunnel from persisted config (skip subscription-sourced tunnels).
+	if _, isSub := inst.config.Settings["_subscription"]; !isSub {
+		tc.removeTunnelConfig(tunnelID)
+	}
 
 	return nil
 }
