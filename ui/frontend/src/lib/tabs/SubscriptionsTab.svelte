@@ -14,6 +14,7 @@
   let addUserAgent = '';
   let addPrefix = '';
   let addSaving = false;
+  let addModalError = '';
 
   // Refresh state
   let refreshingName = '';
@@ -42,7 +43,7 @@
     addUserAgent = '';
     addPrefix = '';
     addSaving = false;
-    error = '';
+    addModalError = '';
     showAddModal = true;
   }
 
@@ -51,10 +52,10 @@
   }
 
   async function saveSubscription() {
-    if (!addName.trim()) { error = 'Name is required'; return; }
-    if (!addUrl.trim()) { error = 'URL is required'; return; }
+    if (!addName.trim()) { addModalError = 'Name is required'; return; }
+    if (!addUrl.trim()) { addModalError = 'URL is required'; return; }
     addSaving = true;
-    error = '';
+    addModalError = '';
     try {
       const result = await api.addSubscription({
         name: addName.trim(),
@@ -66,7 +67,7 @@
       showAddModal = false;
       await refresh();
     } catch (e) {
-      error = e.message;
+      addModalError = e.message;
     } finally {
       addSaving = false;
     }
@@ -237,6 +238,11 @@
       </div>
 
       <div class="px-5 py-4 space-y-3">
+        {#if addModalError}
+          <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
+            {addModalError}
+          </div>
+        {/if}
         <div>
           <label for="sub-name" class="block text-xs font-medium text-zinc-400 mb-1">Name</label>
           <input id="sub-name" type="text" bind:value={addName} placeholder="my-provider"

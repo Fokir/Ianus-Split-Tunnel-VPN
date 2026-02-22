@@ -28,6 +28,10 @@
   let httpTls = false;
   let httpTlsSkipVerify = false;
 
+  // Modal error (shown inside modal, not on tab)
+  let modalError = '';
+  let uriError = '';
+
   // VLESS URI paste modal
   let showUriModal = false;
   let uriValue = '';
@@ -130,15 +134,16 @@
     showAddMenu = false;
     uriValue = '';
     uriSaving = false;
+    uriError = '';
     showUriModal = true;
   }
 
   async function saveUri() {
     const uri = uriValue.trim();
-    if (!uri) { error = 'Вставьте ссылку vless://'; return; }
-    if (!uri.startsWith('vless://')) { error = 'Ссылка должна начинаться с vless://'; return; }
+    if (!uri) { uriError = 'Вставьте ссылку vless://'; return; }
+    if (!uri.startsWith('vless://')) { uriError = 'Ссылка должна начинаться с vless://'; return; }
     uriSaving = true;
-    error = '';
+    uriError = '';
     try {
       const data = new TextEncoder().encode(uri);
       await api.addTunnel({
@@ -151,7 +156,7 @@
       showUriModal = false;
       await refresh();
     } catch (err) {
-      error = err.message;
+      uriError = err.message;
     } finally {
       uriSaving = false;
     }
@@ -163,6 +168,7 @@
     modalProtocol = protocol;
     modalName = '';
     modalSaving = false;
+    modalError = '';
     resetFormFields();
     showModal = true;
   }
@@ -183,14 +189,14 @@
   }
 
   async function saveModal() {
-    if (!modalName.trim()) { error = 'Введите имя туннеля'; return; }
+    if (!modalName.trim()) { modalError = 'Введите имя туннеля'; return; }
     modalSaving = true;
-    error = '';
+    modalError = '';
 
     let settings = {};
     try {
       if (modalProtocol === 'socks5') {
-        if (!socks5Server) { error = 'Укажите адрес сервера'; modalSaving = false; return; }
+        if (!socks5Server) { modalError = 'Укажите адрес сервера'; modalSaving = false; return; }
         settings = {
           server: socks5Server,
           port: socks5Port,
@@ -199,7 +205,7 @@
           udp_enabled: socks5UdpEnabled ? 'true' : 'false',
         };
       } else if (modalProtocol === 'httpproxy') {
-        if (!httpServer) { error = 'Укажите адрес сервера'; modalSaving = false; return; }
+        if (!httpServer) { modalError = 'Укажите адрес сервера'; modalSaving = false; return; }
         settings = {
           server: httpServer,
           port: httpPort,
@@ -209,8 +215,8 @@
           tls_skip_verify: httpTlsSkipVerify ? 'true' : 'false',
         };
       } else if (modalProtocol === 'vless') {
-        if (!vlessAddress) { error = 'Укажите адрес сервера'; modalSaving = false; return; }
-        if (!vlessUuid) { error = 'Укажите UUID'; modalSaving = false; return; }
+        if (!vlessAddress) { modalError = 'Укажите адрес сервера'; modalSaving = false; return; }
+        if (!vlessUuid) { modalError = 'Укажите UUID'; modalSaving = false; return; }
         settings = {
           address: vlessAddress,
           port: vlessPort,
@@ -251,7 +257,7 @@
       showModal = false;
       await refresh();
     } catch (err) {
-      error = err.message;
+      modalError = err.message;
     } finally {
       modalSaving = false;
     }
@@ -478,6 +484,11 @@
       </div>
 
       <div class="px-5 py-4 space-y-3">
+        {#if modalError}
+          <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
+            {modalError}
+          </div>
+        {/if}
         <!-- Name (common) -->
         <div>
           <label for="tunnel-name" class="block text-xs font-medium text-zinc-400 mb-1">Имя</label>
@@ -752,6 +763,11 @@
         </button>
       </div>
       <div class="px-5 py-4 space-y-3">
+        {#if uriError}
+          <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
+            {uriError}
+          </div>
+        {/if}
         <div>
           <label for="vless-uri" class="block text-xs font-medium text-zinc-400 mb-1">Ссылка vless://</label>
           <textarea
