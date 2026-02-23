@@ -20,9 +20,7 @@ import (
 	"awg-split-tunnel/internal/ipc"
 	"awg-split-tunnel/internal/process"
 	"awg-split-tunnel/internal/provider"
-	"awg-split-tunnel/internal/provider/direct"
 	"awg-split-tunnel/internal/provider/vless"
-	"awg-split-tunnel/internal/proxy"
 	"awg-split-tunnel/internal/service"
 	"awg-split-tunnel/internal/update"
 	"awg-split-tunnel/internal/winsvc"
@@ -118,6 +116,9 @@ func runVPN(configPath string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Start periodic PID cache revalidation (detects PID reuse, evicts dead entries).
+	matcher.StartRevalidation(ctx)
+
 	// === 2. Gateway Adapter (WinTUN) ===
 	adapter, err := gateway.NewAdapter()
 	if err != nil {
@@ -183,48 +184,9 @@ func runVPN(configPath string) error {
 	}
 
 	// === 8. Direct Provider + proxies ===
-	providers := make(map[string]provider.TunnelProvider)
-	proxies := make([]*proxy.TunnelProxy, 0)
-	udpProxies := make([]*proxy.UDPProxy, 0)
-
-	providerLookup := func(tunnelID string) (provider.TunnelProvider, bool) {
-		p, ok := providers[tunnelID]
-		return p, ok
-	}
-
 	var nextProxyPort uint16 = 30000
 
-	// Register Direct Provider.
-	directProv := direct.New(realNIC.Index, realNIC.LocalIP)
-	directProxyPort := nextProxyPort
-	directUDPProxyPort := nextProxyPort + 1
-	nextProxyPort += 2
 
-	directCfg := core.TunnelConfig{
-		ID:       gateway.DirectTunnelID,
-		Protocol: "direct",
-		Name:     "Direct",
-	}
-	if err := registry.Register(directCfg, directProxyPort, directUDPProxyPort); err != nil {
-		return fmt.Errorf("failed to register direct provider: %w", err)
-	}
-	registry.SetState(gateway.DirectTunnelID, core.TunnelStateUp, nil)
-	providers[gateway.DirectTunnelID] = directProv
-
-	flows.RegisterProxyPort(directProxyPort)
-	flows.RegisterUDPProxyPort(directUDPProxyPort)
-
-	tp := proxy.NewTunnelProxy(directProxyPort, flows.LookupNAT, providerLookup)
-	proxies = append(proxies, tp)
-	if err := tp.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start direct TCP proxy: %w", err)
-	}
-
-	up := proxy.NewUDPProxy(directUDPProxyPort, flows.LookupUDPNAT, providerLookup)
-	udpProxies = append(udpProxies, up)
-	if err := up.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start direct UDP proxy: %w", err)
-	}
 
 	// === 8a. Subscriptions: fetch and merge into tunnel list ===
 	subMgr := core.NewSubscriptionManager(cfgManager, bus, nil, vless.ParseURIToTunnelConfig)
@@ -239,73 +201,9 @@ func runVPN(configPath string) error {
 		}
 	}
 
-	// === 9. VPN Providers + proxies ===
-	var jitterProbes []*gateway.JitterProbe
-	for _, tcfg := range cfg.Tunnels {
-		proxyPort := nextProxyPort
-		udpProxyPort := nextProxyPort + 1
-		nextProxyPort += 2
-
-		prov, err := service.CreateProvider(tcfg)
-		if err != nil {
-			core.Log.Errorf("Core", "Failed to create provider for tunnel %q: %v", tcfg.ID, err)
-			continue
-		}
-
-		if err := registry.Register(tcfg, proxyPort, udpProxyPort); err != nil {
-			core.Log.Errorf("Core", "Failed to register tunnel %q: %v", tcfg.ID, err)
-			continue
-		}
-
-		providers[tcfg.ID] = prov
-		flows.RegisterProxyPort(proxyPort)
-		flows.RegisterUDPProxyPort(udpProxyPort)
-
-		tp := proxy.NewTunnelProxy(proxyPort, flows.LookupNAT, providerLookup)
-		proxies = append(proxies, tp)
-		if err := tp.Start(ctx); err != nil {
-			core.Log.Errorf("Core", "Failed to start TCP proxy for tunnel %q: %v", tcfg.ID, err)
-			continue
-		}
-
-		up := proxy.NewUDPProxy(udpProxyPort, flows.LookupUDPNAT, providerLookup)
-		udpProxies = append(udpProxies, up)
-		if err := up.Start(ctx); err != nil {
-			core.Log.Errorf("Core", "Failed to start UDP proxy for tunnel %q: %v", tcfg.ID, err)
-			continue
-		}
-
-		if err := prov.Connect(ctx); err != nil {
-			core.Log.Errorf("Core", "Failed to connect tunnel %q: %v", tcfg.ID, err)
-			registry.SetState(tcfg.ID, core.TunnelStateError, err)
-			continue
-		}
-		registry.SetState(tcfg.ID, core.TunnelStateUp, nil)
-		ruleEngine.SetTunnelActive(tcfg.ID, true)
-
-		if rf, ok := prov.(provider.RawForwarder); ok {
-			vpnIP := prov.GetAdapterIP()
-			if vpnIP.IsValid() && vpnIP.Is4() {
-				tunRouter.RegisterRawForwarder(tcfg.ID, rf, vpnIP.As4())
-			}
-		}
-
-		_, isRaw := prov.(provider.RawForwarder)
-		probe := gateway.NewJitterProbe(prov, tcfg.ID, "8.8.8.8:53", !isRaw)
-		jitterProbes = append(jitterProbes, probe)
-		go probe.Run(ctx)
-
-		// === 10. Add bypass route for VPN server endpoints ===
-		if ep, ok := prov.(provider.EndpointProvider); ok {
-			for _, addr := range ep.GetServerEndpoints() {
-				if err := routeMgr.AddBypassRoute(addr.Addr()); err != nil {
-					core.Log.Warnf("Core", "Failed to add bypass route for %s: %v", addr, err)
-				}
-			}
-		}
-	}
-
+	// === 9. VPN Providers + proxies (managed by TunnelController) ===
 	// === 10a. Create TunnelController and register existing tunnels ===
+	providers := make(map[string]provider.TunnelProvider)
 	tunnelCtrl := service.NewTunnelController(ctx, service.ControllerDeps{
 		Registry:       registry,
 		Bus:            bus,
@@ -324,31 +222,8 @@ func runVPN(configPath string) error {
 	}, nextProxyPort)
 
 	for _, tcfg := range cfg.Tunnels {
-		if prov, ok := providers[tcfg.ID]; ok {
-			entry, entryOk := registry.Get(tcfg.ID)
-			if !entryOk {
-				continue
-			}
-			var tunnelTP *proxy.TunnelProxy
-			var tunnelUP *proxy.UDPProxy
-			for _, p := range proxies {
-				if p.Port() == entry.ProxyPort {
-					tunnelTP = p
-					break
-				}
-			}
-			for _, p := range udpProxies {
-				if p.Port() == entry.UDPProxyPort {
-					tunnelUP = p
-					break
-				}
-			}
-			if tunnelTP != nil && tunnelUP != nil {
-				tunnelCtrl.RegisterExistingTunnel(
-					tcfg.ID, prov, tunnelTP, tunnelUP,
-					entry.ProxyPort, entry.UDPProxyPort, tcfg,
-				)
-			}
+		if err := tunnelCtrl.AddTunnel(ctx, tcfg, nil); err != nil {
+			core.Log.Errorf("Core", "Failed to add tunnel %q during startup: %v", tcfg.ID, err)
 		}
 	}
 
@@ -423,9 +298,7 @@ func runVPN(configPath string) error {
 	// === 11b. Stats Collector ===
 	statsCollector := service.NewStatsCollector(registry, bus)
 	tunRouter.SetBytesReporter(statsCollector.AddBytes)
-	for _, probe := range jitterProbes {
-		statsCollector.RegisterDiagnostics(probe)
-	}
+
 
 	// === 12. Start TUN Router ===
 	if err := tunRouter.Start(ctx); err != nil {
@@ -483,23 +356,61 @@ func runVPN(configPath string) error {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
 	// Listen for RPC-initiated shutdown (Shutdown RPC publishes this event).
+	reloadCh := make(chan struct{}, 1)
 	bus.Subscribe(core.EventConfigReloaded, func(e core.Event) {
 		if e.Payload == "shutdown" {
 			sig <- syscall.SIGTERM
+		} else {
+			// Signal that config needs to be reloaded.
+			select {
+			case reloadCh <- struct{}{}:
+			default:
+				core.Log.Warnf("Core", "Skipping config reload signal, channel full.")
+			}
 		}
 	})
 
-	core.Log.Infof("Core", "Running. Press Ctrl+C to stop.")
+	core.Log.Infof("Core", "Running. Press Ctrl+C to stop, or modify config file for hot-reload.")
 
-	// Wait for either OS signal or SCM stop (via stopCh).
-	select {
-	case <-sig:
-	case <-stopCh:
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+
+mainLoop:
+	for {
+		select {
+		case <-sig:
+			core.Log.Infof("Core", "OS signal received. Shutting down...")
+			break mainLoop
+		case <-stopCh:
+			core.Log.Infof("Core", "SCM stop signal received. Shutting down...")
+			break mainLoop
+		case <-reloadCh:
+			core.Log.Infof("Core", "Config reload signal received. Reloading configuration...")
+			if err := cfgManager.Load(); err != nil {
+				core.Log.Errorf("Core", "Failed to reload config: %v", err)
+				continue
+			}
+			newCfg := cfgManager.Get()
+			// TODO: Implement actual diffing and applying changes to tunnels.
+			// For now, a simple re-initialization of IP filter and rules.
+			ipFilter = gateway.NewIPFilter(newCfg.Global, newCfg.Tunnels)
+			tunRouter.SetIPFilter(ipFilter)
+			ruleEngine.SetRules(newCfg.Rules)
+			// Rebuild domain matcher if rules changed
+			if dnsResolver != nil {
+				domainReloader(newCfg.DomainRules)
+			}
+			core.Log.Infof("Core", "Configuration reloaded.")
+		case <-runCtx.Done():
+			core.Log.Infof("Core", "Run context cancelled. Exiting main loop.")
+			break mainLoop
+		}
 	}
 
 	// === Graceful shutdown (reverse order) ===
 	core.Log.Infof("Core", "Shutting down...")
-	cancel()
+	cancel() // Cancel the main context
+	runCancel() // Cancel the run context
 
 	done := make(chan struct{})
 	go func() {
@@ -514,20 +425,8 @@ func runVPN(configPath string) error {
 			dnsResolver.Stop()
 		}
 
-		tunRouter.Stop()
-
-		for _, tp := range proxies {
-			tp.Stop()
-		}
-		for _, up := range udpProxies {
-			up.Stop()
-		}
-
-		for id, prov := range providers {
-			if err := prov.Disconnect(); err != nil {
-				core.Log.Errorf("Core", "Error disconnecting %s: %v", id, err)
-			}
-		}
+		// Use tunnel controller for graceful shutdown of all tunnels
+		tunnelCtrl.Shutdown()
 
 		wfpMgr.Close()
 		routeMgr.Cleanup()

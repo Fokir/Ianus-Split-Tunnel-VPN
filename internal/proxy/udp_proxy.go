@@ -290,7 +290,7 @@ func (up *UDPProxy) cleanupLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			now := time.Now().Unix()
+			now := up.nowSec.Load()
 			const timeout int64 = 120 // 2 minutes
 			var stale []udpSessionKey
 

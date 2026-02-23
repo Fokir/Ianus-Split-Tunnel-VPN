@@ -5,6 +5,7 @@ package ipc
 import (
 	"fmt"
 	"net"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -35,9 +36,20 @@ func (s *Server) Start() error {
 	return s.grpc.Serve(ln)
 }
 
-// Stop gracefully stops the gRPC server and closes the pipe listener.
+// Stop gracefully stops the gRPC server with a 3-second timeout.
+// If active streams don't close in time, falls back to a hard stop
+// to prevent hanging on streaming clients that never disconnect.
 func (s *Server) Stop() {
-	s.grpc.GracefulStop()
+	done := make(chan struct{})
+	go func() {
+		s.grpc.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		s.grpc.Stop()
+	}
 }
 
 // ForceStop immediately stops the gRPC server.

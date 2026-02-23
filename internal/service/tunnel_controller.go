@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/gateway"
@@ -58,6 +57,7 @@ type ControllerDeps struct {
 	Rules *core.RuleEngine
 	// ConfigManager for persisting active tunnels list.
 	Cfg *core.ConfigManager
+	Context   context.Context
 }
 
 // TunnelControllerImpl manages tunnel lifecycle: create, connect, disconnect, remove.
@@ -76,6 +76,7 @@ type TunnelControllerImpl struct {
 // NewTunnelController creates a new TunnelControllerImpl.
 // initialPort is the first proxy port to use (e.g. 30002 after direct provider gets 30000/30001).
 func NewTunnelController(ctx context.Context, deps ControllerDeps, initialPort uint16) *TunnelControllerImpl {
+	deps.Context = ctx // Set the context in deps
 	tc := &TunnelControllerImpl{
 		deps:          deps,
 		instances:     make(map[string]*tunnelInstance),
@@ -86,7 +87,48 @@ func NewTunnelController(ctx context.Context, deps ControllerDeps, initialPort u
 		p, ok := deps.Providers[tunnelID]
 		return p, ok
 	}
+
+	// Initialize the Direct tunnel.
+	directCfg := core.TunnelConfig{
+		ID:       gateway.DirectTunnelID,
+		Protocol: "direct",
+		Name:     "Direct",
+	}
+	if err := tc.AddTunnel(ctx, directCfg, nil); err != nil {
+		core.Log.Errorf("Core", "Failed to add direct tunnel during controller init: %v", err)
+	}
+
 	return tc
+}
+
+// Shutdown disconnects all tunnels and stops all proxies.
+func (tc *TunnelControllerImpl) Shutdown() {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	core.Log.Infof("Core", "Shutting down TunnelController...")
+
+	for id, inst := range tc.instances {
+		// Disconnect if active.
+		state := tc.deps.Registry.GetState(id)
+		if state == core.TunnelStateUp || state == core.TunnelStateConnecting {
+			if err := inst.provider.Disconnect(); err != nil {
+				core.Log.Errorf("Core", "Error disconnecting %s during shutdown: %v", id, err)
+			}
+		}
+
+		// Stop proxies.
+		inst.tcpProxy.Stop()
+		inst.udpProxy.Stop()
+
+		// Remove from shared provider map and registry.
+		delete(tc.deps.Providers, id)
+		tc.deps.Registry.Unregister(id)
+	}
+
+	// Clear all instances.
+	tc.instances = make(map[string]*tunnelInstance)
+	core.Log.Infof("Core", "TunnelController shutdown complete.")
 }
 
 // ─── TunnelController interface implementation ──────────────────────
@@ -107,7 +149,7 @@ func (tc *TunnelControllerImpl) ConnectTunnel(ctx context.Context, tunnelID stri
 
 	tc.deps.Registry.SetState(tunnelID, core.TunnelStateConnecting, nil)
 
-	if err := inst.provider.Connect(ctx); err != nil {
+	if err := inst.provider.Connect(tc.deps.Context); err != nil {
 		tc.deps.Registry.SetState(tunnelID, core.TunnelStateError, err)
 		return fmt.Errorf("connect tunnel %q: %w", tunnelID, err)
 	}
@@ -153,8 +195,6 @@ func (tc *TunnelControllerImpl) RestartTunnel(ctx context.Context, tunnelID stri
 	if err := tc.DisconnectTunnel(tunnelID); err != nil {
 		core.Log.Warnf("Core", "Restart disconnect %q: %v", tunnelID, err)
 	}
-	// Brief pause to allow cleanup.
-	time.Sleep(500 * time.Millisecond)
 	return tc.ConnectTunnel(ctx, tunnelID)
 }
 
@@ -275,12 +315,12 @@ func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelCo
 
 	// Start proxies.
 	tp := proxy.NewTunnelProxy(proxyPort, tc.deps.Flows.LookupNAT, tc.providerLookup)
-	if err := tp.Start(tc.ctx); err != nil {
+	if err := tp.Start(tc.deps.Context); err != nil {
 		return fmt.Errorf("start TCP proxy for %q: %w", cfg.ID, err)
 	}
 
 	up := proxy.NewUDPProxy(udpProxyPort, tc.deps.Flows.LookupUDPNAT, tc.providerLookup)
-	if err := up.Start(tc.ctx); err != nil {
+	if err := up.Start(tc.deps.Context); err != nil {
 		tp.Stop()
 		return fmt.Errorf("start UDP proxy for %q: %w", cfg.ID, err)
 	}

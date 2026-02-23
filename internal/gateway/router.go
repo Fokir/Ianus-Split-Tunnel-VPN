@@ -7,9 +7,7 @@ import (
 	"encoding/binary"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -129,6 +127,7 @@ func (r *TUNRouter) Stop() {
 		r.cancel()
 	}
 	<-r.done
+	r.flows.Wait()
 	core.Log.Infof("Gateway", "TUN Router stopped")
 }
 
@@ -200,9 +199,15 @@ func (r *TUNRouter) packetLoop(ctx context.Context) {
 			maxInbound := time.Duration(r.maxInboundRawNs.Swap(0))
 			inCount := r.inboundCount.Swap(0)
 			inSlow := r.inboundSlow.Swap(0)
-			core.Log.Warnf("Perf", "10s: outPkts=%d slowOut=%d maxProc=%s | inPkts=%d slowIn=%d maxIn=%s",
-				totalPkts, slowProcPkts, maxProcStall,
-				inCount, inSlow, maxInbound)
+			// Only log at Warn level when there are anomalies (slow packets).
+			if slowProcPkts > 0 || inSlow > 0 {
+				core.Log.Warnf("Perf", "10s: outPkts=%d slowOut=%d maxProc=%s | inPkts=%d slowIn=%d maxIn=%s",
+					totalPkts, slowProcPkts, maxProcStall,
+					inCount, inSlow, maxInbound)
+			} else {
+				core.Log.Debugf("Perf", "10s: outPkts=%d | inPkts=%d maxIn=%s",
+					totalPkts, inCount, maxInbound)
+			}
 			maxProcStall = 0
 			totalPkts = 0
 			slowProcPkts = 0
@@ -374,6 +379,15 @@ func (r *TUNRouter) handleTCPProxyResponse(pkt []byte, m pktMeta) {
 		r.flows.DeleteTCP(dstIP, m.dstP)
 	}
 
+	// Track server-side FIN for faster cleanup.
+	if m.flags&tcpFIN != 0 {
+		fin := atomic.OrInt32(&entry.FinSeen, 0x2)
+		// Both FINs seen — schedule entry for short-lived cleanup (2s grace).
+		if fin|0x2 == 0x3 {
+			atomic.StoreInt64(&entry.LastActivity, r.flows.NowSec()-298)
+		}
+	}
+
 	tcpCkOff := m.tpOff + 16
 
 	// Restore original source port.
@@ -424,6 +438,15 @@ func (r *TUNRouter) handleTCPExisting(pkt []byte, m pktMeta) {
 	// RST: clean up.
 	if m.flags&tcpRST != 0 {
 		r.flows.DeleteTCP(dstIP, m.srcP)
+	}
+
+	// Track client-side FIN for faster cleanup.
+	if m.flags&tcpFIN != 0 {
+		fin := atomic.OrInt32(&entry.FinSeen, 0x1)
+		// Both FINs seen — schedule entry for short-lived cleanup (2s grace).
+		if fin|0x1 == 0x3 {
+			atomic.StoreInt64(&entry.LastActivity, r.flows.NowSec()-298)
+		}
 	}
 
 	// Hairpin: swap IPs, rewrite dst port to proxy port.
@@ -577,14 +600,6 @@ const (
 )
 
 func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunnelID string, proxyPort uint16, action flowAction, rulePrio core.RulePriority) {
-	resolveStart := time.Now()
-	defer func() {
-		if elapsed := time.Since(resolveStart); elapsed > time.Millisecond {
-			core.Log.Warnf("Perf", "resolveFlow took %s (port=%d udp=%v dst=%d.%d.%d.%d)",
-				elapsed, srcPort, isUDP, dstIP[0], dstIP[1], dstIP[2], dstIP[3])
-		}
-	}()
-
 	f := r.ipFilter.Load() // may be nil
 
 	// Early drop: if a local/private IP reached TUN, there is no direct route
@@ -619,11 +634,7 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	}
 
 	// Look up PID by source port.
-	pidStart := time.Now()
 	pid, err := r.procID.FindPIDByPort(srcPort, isUDP)
-	if pidElapsed := time.Since(pidStart); pidElapsed > time.Millisecond {
-		core.Log.Warnf("Perf", "FindPIDByPort took %s (port=%d udp=%v)", pidElapsed, srcPort, isUDP)
-	}
 	if err != nil {
 		return "", 0, flowPass, 0
 	}
@@ -634,15 +645,11 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 		return "", 0, flowDrop, 0
 	}
 
-	// Get exe path.
-	exePath, ok := r.matcher.GetExePath(pid)
+	// Get exe path with pre-cached lowercase variants (zero alloc on cache hit).
+	exePath, exeLower, baseLower, ok := r.matcher.GetExePathLower(pid)
 	if !ok {
 		return "", 0, flowPass, 0
 	}
-
-	// Pre-lowercase once for DisallowedApps + rule matching.
-	exeLower := strings.ToLower(exePath)
-	baseLower := filepath.Base(exeLower)
 
 	// Check global DisallowedApps — always bypass VPN.
 	if f != nil && f.IsDisallowedApp(exeLower, baseLower) {
@@ -894,8 +901,14 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 	if elapsedNs > 500_000 { // >500µs
 		r.inboundSlow.Add(1)
 	}
-	if elapsedNs > r.maxInboundRawNs.Load() {
-		r.maxInboundRawNs.CompareAndSwap(r.maxInboundRawNs.Load(), elapsedNs)
+	for {
+		old := r.maxInboundRawNs.Load()
+		if elapsedNs <= old {
+			break
+		}
+		if r.maxInboundRawNs.CompareAndSwap(old, elapsedNs) {
+			break
+		}
 	}
 	return true
 }

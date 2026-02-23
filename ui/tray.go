@@ -50,8 +50,9 @@ func setupTray(app *application.App, mainWindow *application.WebviewWindow, bind
 
 	// Exit — close GUI and signal VPN service to shut down.
 	menu.Add("Выйти").OnClick(func(_ *application.Context) {
-		ctx := context.Background()
-		_, _ = binding.client.Service.Shutdown(ctx, &emptypb.Empty{})
+		// Cancel all streaming goroutines first so they don't block shutdown.
+		binding.Shutdown()
+		_, _ = binding.client.Service.Shutdown(context.Background(), &emptypb.Empty{})
 		app.Quit()
 	})
 
@@ -62,10 +63,8 @@ func setupTray(app *application.App, mainWindow *application.WebviewWindow, bind
 }
 
 func updateTrayState(app *application.App, systray *application.SystemTray, binding *BindingService) {
-	ctx := context.Background()
-
 	// Subscribe to stats stream to update tray icon.
-	stream, err := binding.client.Service.StreamStats(ctx, &vpnapi.StatsStreamRequest{
+	stream, err := binding.client.Service.StreamStats(binding.ctx, &vpnapi.StatsStreamRequest{
 		IntervalMs: 2000,
 	})
 	if err != nil {

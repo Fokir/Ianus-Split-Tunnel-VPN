@@ -9,8 +9,17 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"sync"
 	"time"
 )
+
+// socks5ReadBufPool reuses 64KB buffers for SOCKS5 UDP Read operations.
+var socks5ReadBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 65535)
+		return &b
+	},
+}
 
 // SOCKS5 protocol constants.
 const (
@@ -261,7 +270,9 @@ func (c *udpAssociateConn) Write(b []byte) (int, error) {
 
 // Read receives a datagram from the SOCKS5 UDP relay, stripping the header.
 func (c *udpAssociateConn) Read(b []byte) (int, error) {
-	buf := make([]byte, 65535)
+	bp := socks5ReadBufPool.Get().(*[]byte)
+	defer socks5ReadBufPool.Put(bp)
+	buf := *bp
 	n, err := c.udpConn.Read(buf)
 	if err != nil {
 		return 0, err

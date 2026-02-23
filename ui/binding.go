@@ -26,13 +26,21 @@ import (
 // Each public method becomes callable from JavaScript.
 type BindingService struct {
 	client          *ipc.Client
+	ctx             context.Context    // cancelled on GUI shutdown
+	cancel          context.CancelFunc // cancels all streaming goroutines
 	logStreamOnce   sync.Once
 	statsStreamOnce sync.Once
 }
 
 // NewBindingService creates a BindingService wrapping the IPC client.
 func NewBindingService(client *ipc.Client) *BindingService {
-	return &BindingService{client: client}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &BindingService{client: client, ctx: ctx, cancel: cancel}
+}
+
+// Shutdown cancels all background streaming goroutines.
+func (b *BindingService) Shutdown() {
+	b.cancel()
 }
 
 // ─── Service status ─────────────────────────────────────────────────
@@ -541,9 +549,8 @@ func (b *BindingService) StartLogStream() {
 
 func (b *BindingService) runLogStream() {
 	app := application.Get()
-	ctx := context.Background()
 
-	stream, err := b.client.Service.StreamLogs(ctx, &vpnapi.LogStreamRequest{
+	stream, err := b.client.Service.StreamLogs(b.ctx, &vpnapi.LogStreamRequest{
 		MinLevel:  vpnapi.LogLevel_LOG_LEVEL_DEBUG,
 		TailLines: 1000,
 	})
@@ -585,9 +592,8 @@ func (b *BindingService) StartStatsStream() {
 
 func (b *BindingService) runStatsStream() {
 	app := application.Get()
-	ctx := context.Background()
 
-	stream, err := b.client.Service.StreamStats(ctx, &vpnapi.StatsStreamRequest{
+	stream, err := b.client.Service.StreamStats(b.ctx, &vpnapi.StatsStreamRequest{
 		IntervalMs: 2000,
 	})
 	if err != nil {
@@ -788,16 +794,21 @@ func (b *BindingService) StartUpdateNotifier() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			result, err := b.CheckUpdate()
-			if err != nil || !result.Available {
-				continue
+		for {
+			select {
+			case <-b.ctx.Done():
+				return
+			case <-ticker.C:
+				result, err := b.CheckUpdate()
+				if err != nil || !result.Available {
+					continue
+				}
+				app.Event.Emit("update-available", map[string]interface{}{
+					"version":      result.Version,
+					"releaseNotes": result.ReleaseNotes,
+					"assetSize":    result.AssetSize,
+				})
 			}
-			app.Event.Emit("update-available", map[string]interface{}{
-				"version":      result.Version,
-				"releaseNotes": result.ReleaseNotes,
-				"assetSize":    result.AssetSize,
-			})
 		}
 	}()
 }

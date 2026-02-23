@@ -64,6 +64,10 @@ type DNSResolver struct {
 	domainMatcher atomic.Pointer[DomainMatcher]
 	domainTable   *DomainTable
 
+	// Goroutine limiters to prevent resource exhaustion under DNS flood.
+	udpSem chan struct{} // limits concurrent UDP handlers
+	tcpSem chan struct{} // limits concurrent TCP handlers
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -82,6 +86,8 @@ func NewDNSResolver(
 		config:    config,
 		registry:  registry,
 		providers: providers,
+		udpSem:    make(chan struct{}, 200),
+		tcpSem:    make(chan struct{}, 100),
 	}
 
 	// Initialize DNS cache if configured.
@@ -178,7 +184,16 @@ func (r *DNSResolver) udpLoop(ctx context.Context) {
 		query := make([]byte, n)
 		copy(query, buf[:n])
 
-		go r.handleUDPQuery(ctx, query, clientAddr)
+		// Limit concurrent handlers to prevent goroutine exhaustion.
+		select {
+		case r.udpSem <- struct{}{}:
+			go func() {
+				defer func() { <-r.udpSem }()
+				r.handleUDPQuery(ctx, query, clientAddr)
+			}()
+		default:
+			// Semaphore full — drop query silently (client will retry).
+		}
 	}
 }
 
@@ -370,7 +385,16 @@ func (r *DNSResolver) tcpLoop(ctx context.Context) {
 			}
 		}
 
-		go r.handleTCPQuery(ctx, conn)
+		// Limit concurrent handlers.
+		select {
+		case r.tcpSem <- struct{}{}:
+			go func() {
+				defer func() { <-r.tcpSem }()
+				r.handleTCPQuery(ctx, conn)
+			}()
+		default:
+			conn.Close() // reject when overloaded
+		}
 	}
 }
 

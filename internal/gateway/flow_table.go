@@ -31,11 +31,12 @@ func makeNATKey(ip netip.Addr, port uint16) natKey {
 
 // NATEntry maps a redirected TCP connection back to its original destination.
 type NATEntry struct {
-	LastActivity    int64 // atomic; Unix seconds
+	LastActivity    int64  // atomic; Unix seconds
 	OriginalDstIP   netip.Addr
 	OriginalDstPort uint16
 	TunnelID        string
 	ProxyPort       uint16
+	FinSeen         int32  // atomic; bitmask: 0x1=client FIN, 0x2=server FIN
 }
 
 // UDPNATEntry maps a redirected UDP flow back to its original destination.
@@ -137,6 +138,9 @@ type FlowTable struct {
 
 	// Cached Unix timestamp (seconds), updated every 250ms.
 	nowSec atomic.Int64
+
+	// wg tracks background goroutines (cleanup loops, timestamp updater).
+	wg sync.WaitGroup
 }
 
 // NewFlowTable creates an initialized flow table.
@@ -163,7 +167,9 @@ func NewFlowTable() *FlowTable {
 
 // StartTimestampUpdater launches a goroutine that updates nowSec every 250ms.
 func (ft *FlowTable) StartTimestampUpdater(ctx context.Context) {
+	ft.wg.Add(1)
 	go func() {
+		defer ft.wg.Done()
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
 		for {
@@ -179,6 +185,10 @@ func (ft *FlowTable) StartTimestampUpdater(ctx context.Context) {
 
 // NowSec returns the cached Unix timestamp.
 func (ft *FlowTable) NowSec() int64 { return ft.nowSec.Load() }
+
+// Wait blocks until all background goroutines (cleanup loops, timestamp updater) exit.
+// The caller must cancel the context passed to Start* methods first.
+func (ft *FlowTable) Wait() { ft.wg.Wait() }
 
 // ---------------------------------------------------------------------------
 // TCP NAT operations
@@ -349,7 +359,9 @@ func (ft *FlowTable) LookupVpnIP(ip [4]byte) (string, bool) {
 
 // StartRawFlowCleanup periodically removes stale raw flow entries (>5 min idle).
 func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
+	ft.wg.Add(1)
 	go func() {
+		defer ft.wg.Done()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -358,7 +370,7 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 				return
 			case <-ticker.C:
 				cleanupStart := time.Now()
-				now := time.Now().Unix()
+				now := ft.NowSec()
 				const timeout int64 = 300 // 5 minutes
 				totalRemoved := 0
 
@@ -466,7 +478,9 @@ func (ft *FlowTable) IsUDPProxySourcePort(port uint16) bool {
 
 // StartTCPCleanup periodically removes stale TCP NAT entries (>5 min idle).
 func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
+	ft.wg.Add(1)
 	go func() {
+		defer ft.wg.Done()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -475,7 +489,7 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 				return
 			case <-ticker.C:
 				cleanupStart := time.Now()
-				now := time.Now().Unix()
+				now := ft.NowSec()
 				const timeout int64 = 300 // 5 minutes
 				totalRemoved := 0
 
@@ -514,7 +528,9 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 // StartUDPCleanup periodically removes stale UDP NAT entries
 // (>2 min for normal, >10 sec for DNS port 53).
 func (ft *FlowTable) StartUDPCleanup(ctx context.Context) {
+	ft.wg.Add(1)
 	go func() {
+		defer ft.wg.Done()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -523,7 +539,7 @@ func (ft *FlowTable) StartUDPCleanup(ctx context.Context) {
 				return
 			case <-ticker.C:
 				cleanupStart := time.Now()
-				now := time.Now().Unix()
+				now := ft.NowSec()
 				totalRemoved := 0
 
 				for i := range ft.udp {
