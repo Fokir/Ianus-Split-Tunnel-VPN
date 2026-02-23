@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import * as api from '../api.js';
+  import ErrorAlert from '../ErrorAlert.svelte';
 
   let subscriptions = [];
   let loading = true;
@@ -135,9 +136,7 @@
 
   <!-- Error -->
   {#if error}
-    <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
-      {error}
-    </div>
+    <ErrorAlert message={error} />
   {/if}
 
   <!-- Loading -->
@@ -239,9 +238,7 @@
 
       <div class="px-5 py-4 space-y-3">
         {#if addModalError}
-          <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
-            {addModalError}
-          </div>
+          <ErrorAlert message={addModalError} />
         {/if}
         <div>
           <label for="sub-name" class="block text-xs font-medium text-zinc-400 mb-1">Name</label>

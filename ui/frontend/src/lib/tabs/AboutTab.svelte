@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { Events } from '@wailsio/runtime';
   import * as api from '../api.js';
+  import ErrorAlert from '../ErrorAlert.svelte';
 
   let version = '';
   let uptime = '';
@@ -148,9 +149,7 @@
   {/if}
 
   {#if updateError}
-    <div class="px-3 py-2 text-xs rounded-lg {updateInfo ? 'bg-red-900/20 border border-red-800/40 text-red-300' : 'bg-zinc-800/40 border border-zinc-700/40 text-zinc-400'}">
-      {updateError}
-    </div>
+    <ErrorAlert message={updateError} className="px-3 py-2 text-xs rounded-lg {updateInfo ? 'bg-red-900/20 border border-red-800/40 text-red-300' : 'bg-zinc-800/40 border border-zinc-700/40 text-zinc-400'}" />
   {/if}
 
   <!-- Developer -->

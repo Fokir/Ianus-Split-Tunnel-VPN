@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import * as api from '../api.js';
+  import ErrorAlert from '../ErrorAlert.svelte';
 
   let rules = [];
   let tunnels = [];
@@ -452,9 +453,7 @@
   </div>
 
   {#if error}
-    <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
-      {error}
-    </div>
+    <ErrorAlert message={error} />
   {/if}
 
   {#if loading}
@@ -583,9 +582,7 @@
     </div>
 
     {#if ipsError}
-      <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
-        {ipsError}
-      </div>
+      <ErrorAlert message={ipsError} />
     {/if}
 
     {#if disallowedIps.length === 0}
@@ -665,9 +662,7 @@
     </div>
 
     {#if appsError}
-      <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
-        {appsError}
-      </div>
+      <ErrorAlert message={appsError} />
     {/if}
 
     {#if disallowedApps.length === 0}

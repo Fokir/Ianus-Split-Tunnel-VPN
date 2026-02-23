@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import * as api from '../api.js';
+  import ErrorAlert from '../ErrorAlert.svelte';
 
   let config = null;
   let autostart = null;
@@ -137,9 +138,7 @@
   </div>
 
   {#if error}
-    <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
-      {error}
-    </div>
+    <ErrorAlert message={error} />
   {/if}
 
   {#if loading}

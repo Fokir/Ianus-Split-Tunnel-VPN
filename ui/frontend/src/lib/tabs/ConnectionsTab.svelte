@@ -1,6 +1,7 @@
 <script>
   import { onMount, tick } from 'svelte';
   import * as api from '../api.js';
+  import ErrorAlert from '../ErrorAlert.svelte';
 
   let tunnels = [];
   let loading = true;
@@ -374,9 +375,7 @@
 
   <!-- Error -->
   {#if error}
-    <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
-      {error}
-    </div>
+    <ErrorAlert message={error} />
   {/if}
 
   <!-- Loading -->
@@ -485,9 +484,7 @@
 
       <div class="px-5 py-4 space-y-3">
         {#if modalError}
-          <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
-            {modalError}
-          </div>
+          <ErrorAlert message={modalError} />
         {/if}
         <!-- Name (common) -->
         <div>
@@ -764,9 +761,7 @@
       </div>
       <div class="px-5 py-4 space-y-3">
         {#if uriError}
-          <div class="px-3 py-2 text-sm bg-red-900/30 border border-red-800/50 rounded-lg text-red-300">
-            {uriError}
-          </div>
+          <ErrorAlert message={uriError} />
         {/if}
         <div>
           <label for="vless-uri" class="block text-xs font-medium text-zinc-400 mb-1">Ссылка vless://</label>
