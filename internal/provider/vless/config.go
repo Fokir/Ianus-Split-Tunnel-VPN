@@ -41,6 +41,10 @@ type Config struct {
 
 	// XHTTP holds XHTTP/SplitHTTP-specific settings (when Network == "xhttp" or "splithttp").
 	XHTTP XHTTPConfig `yaml:"xhttp"`
+
+	// InterfaceName is the network interface name for socket binding (IP_UNICAST_IF).
+	// Runtime-only, not persisted in YAML. Set by SocketBindProvider.SetInterfaceName.
+	InterfaceName string `yaml:"-"`
 }
 
 // RealityConfig holds REALITY TLS settings.
@@ -191,6 +195,15 @@ func buildXrayJSON(cfg Config) ([]byte, error) {
 			xhttpSettings[k] = v
 		}
 		stream["xhttpSettings"] = xhttpSettings
+	}
+
+	// Socket binding: when InterfaceName is set, xray-core will use
+	// IP_UNICAST_IF to bind outgoing connections to the specified NIC,
+	// eliminating the need for /32 bypass routes.
+	if cfg.InterfaceName != "" {
+		stream["sockopt"] = map[string]any{
+			"interface": cfg.InterfaceName,
+		}
 	}
 
 	outbound["streamSettings"] = stream

@@ -339,10 +339,6 @@ func (cm *ConfigManager) Load() error {
 	cm.config = cfg
 	cm.mu.Unlock()
 
-	if cm.bus != nil {
-		cm.bus.Publish(Event{Type: EventConfigReloaded})
-	}
-
 	return nil
 }
 
@@ -434,6 +430,15 @@ func (cm *ConfigManager) SetFromGUI(cfg Config) {
 	if cm.bus != nil {
 		cm.bus.Publish(Event{Type: EventConfigReloaded})
 	}
+}
+
+// SetQuiet replaces the in-memory config without publishing EventConfigReloaded.
+// Use for internal bookkeeping writes (e.g. persisting active tunnels list)
+// that should not trigger a full config reload cycle.
+func (cm *ConfigManager) SetQuiet(cfg Config) {
+	cm.mu.Lock()
+	cm.config = cfg
+	cm.mu.Unlock()
 }
 
 // GetSubscriptions returns subscription configurations.

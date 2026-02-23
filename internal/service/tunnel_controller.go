@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -148,6 +149,18 @@ func (tc *TunnelControllerImpl) ConnectTunnel(ctx context.Context, tunnelID stri
 	}
 
 	tc.deps.Registry.SetState(tunnelID, core.TunnelStateConnecting, nil)
+
+	// For socket-bound providers (e.g. VLESS), bind protocol traffic to the
+	// real NIC via IP_UNICAST_IF instead of using /32 bypass routes.
+	if sbp, ok := inst.provider.(provider.SocketBindProvider); ok {
+		iface, err := net.InterfaceByIndex(int(tc.deps.RealNICIndex))
+		if err != nil {
+			core.Log.Warnf("Core", "Failed to resolve real NIC index %d: %v", tc.deps.RealNICIndex, err)
+		} else {
+			sbp.SetInterfaceName(iface.Name)
+			core.Log.Infof("Core", "Socket-binding tunnel %q to interface %q", tunnelID, iface.Name)
+		}
+	}
 
 	if err := inst.provider.Connect(tc.deps.Context); err != nil {
 		tc.deps.Registry.SetState(tunnelID, core.TunnelStateError, err)
@@ -514,10 +527,30 @@ func (tc *TunnelControllerImpl) registerRawForwarder(tunnelID string, prov provi
 }
 
 func (tc *TunnelControllerImpl) addBypassRoutes(prov provider.TunnelProvider) {
+	// Socket-bound providers use IP_UNICAST_IF to bind protocol traffic to the
+	// real NIC directly, so they don't need /32 bypass routes or WFP permits.
+	if _, ok := prov.(provider.SocketBindProvider); ok {
+		return
+	}
+
 	if ep, ok := prov.(provider.EndpointProvider); ok {
+		var wfpPrefixes []netip.Prefix
 		for _, addr := range ep.GetServerEndpoints() {
-			if err := tc.deps.RouteMgr.AddBypassRoute(addr.Addr()); err != nil {
+			ip := addr.Addr()
+			if err := tc.deps.RouteMgr.AddBypassRoute(ip); err != nil {
 				core.Log.Warnf("Core", "Failed to add bypass route for %s: %v", addr, err)
+			}
+			if ip.Is4() {
+				wfpPrefixes = append(wfpPrefixes, netip.PrefixFrom(ip, 32))
+			}
+		}
+		// Create WFP PERMIT rules for VPN endpoint IPs. Without these,
+		// WFP-blocked processes cannot reach the endpoint on the real NIC
+		// (the /32 bypass route is more specific than TUN's /1 routes,
+		// so traffic goes via real NIC where per-process BLOCK applies).
+		if len(wfpPrefixes) > 0 && tc.deps.WFPMgr != nil {
+			if err := tc.deps.WFPMgr.AddBypassPrefixes(wfpPrefixes); err != nil {
+				core.Log.Warnf("WFP", "Failed to add bypass permits for VPN endpoints: %v", err)
 			}
 		}
 	}
@@ -744,7 +777,7 @@ func (tc *TunnelControllerImpl) saveActiveTunnels() {
 
 	cfg := tc.deps.Cfg.Get()
 	cfg.GUI.ActiveTunnels = active
-	tc.deps.Cfg.SetFromGUI(cfg)
+	tc.deps.Cfg.SetQuiet(cfg)
 	if err := tc.deps.Cfg.Save(); err != nil {
 		core.Log.Warnf("Core", "Failed to save active tunnels: %v", err)
 	}

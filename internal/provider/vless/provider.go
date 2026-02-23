@@ -201,6 +201,14 @@ func (p *Provider) GetServerEndpoints() []netip.AddrPort {
 	return nil
 }
 
+// SetInterfaceName sets the network interface name for socket binding (IP_UNICAST_IF).
+// Must be called before Connect. Implements provider.SocketBindProvider.
+func (p *Provider) SetInterfaceName(name string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.config.InterfaceName = name
+}
+
 // packetConnWrapper adapts a net.PacketConn to a connected net.Conn by adding
 // a fixed remote address for Read/Write.
 type packetConnWrapper struct {
