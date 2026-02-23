@@ -14,8 +14,14 @@ const (
 	minTCPHdr  = 20
 	minUDPHdr  = 8
 
-	protoTCP byte = 6
-	protoUDP byte = 17
+	protoICMP byte = 1
+	protoTCP  byte = 6
+	protoUDP  byte = 17
+
+	minICMPHdr = 8
+
+	icmpEchoReply   byte = 0
+	icmpEchoRequest byte = 8
 
 	tcpFIN byte = 0x01
 	tcpSYN byte = 0x02

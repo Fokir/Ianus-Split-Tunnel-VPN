@@ -283,6 +283,17 @@ func (r *TUNRouter) processPacket(pkt []byte) {
 			tpOff: tpOff,
 		}
 		r.handleUDP(pkt, m)
+
+	case protoICMP:
+		if len(pkt) < tpOff+minICMPHdr {
+			return
+		}
+		m := pktMeta{
+			srcIP: [4]byte(pkt[12:16]),
+			dstIP: [4]byte(pkt[16:20]),
+			tpOff: tpOff,
+		}
+		r.handleICMP(pkt, m)
 	}
 }
 
@@ -588,6 +599,116 @@ func (r *TUNRouter) handleUDPProxyResponse(pkt []byte, m pktMeta) {
 }
 
 // ---------------------------------------------------------------------------
+// ICMP handling
+// ---------------------------------------------------------------------------
+
+func (r *TUNRouter) handleICMP(pkt []byte, m pktMeta) {
+	// Only handle Echo Request (type 8). Other ICMP types are ignored.
+	if pkt[m.tpOff] != icmpEchoRequest {
+		return
+	}
+
+	// Extract ICMP Identifier (bytes 4-5 of ICMP header) as pseudo-port for flow tracking.
+	icmpID := binary.BigEndian.Uint16(pkt[m.tpOff+4:])
+
+	// Fast path: existing raw flow.
+	if rawEntry, ok := r.flows.GetRawFlow(protoICMP, m.dstIP, icmpID); ok {
+		atomic.StoreInt64(&rawEntry.LastActivity, r.flows.NowSec())
+		if rf, vpnIP, ok := r.getRawForwarder(rawEntry.TunnelID); ok {
+			r.handleRawOutbound(pkt, m, rawEntry.TunnelID, vpnIP, rf, protoICMP, rawEntry.Priority)
+			return
+		}
+		// Forwarder gone — delete stale flow and fall through.
+		r.flows.DeleteRawFlow(protoICMP, m.dstIP, icmpID)
+	}
+
+	// Slow path: resolve tunnel for new ICMP flow.
+	tunnelID, action := r.resolveICMPFlow(m.dstIP)
+
+	switch action {
+	case flowDrop:
+		return
+	case flowPass:
+		return // let OS handle via real NIC
+	case flowRoute:
+		// continue
+	}
+
+	rf, vpnIP, ok := r.getRawForwarder(tunnelID)
+	if !ok {
+		return
+	}
+
+	r.flows.InsertRawFlow(protoICMP, m.dstIP, icmpID, &RawFlowEntry{
+		LastActivity: r.flows.NowSec(),
+		TunnelID:     tunnelID,
+		VpnIP:        vpnIP,
+		Priority:     PrioNormal,
+	})
+	r.handleRawOutbound(pkt, m, tunnelID, vpnIP, rf, protoICMP, PrioNormal)
+}
+
+// resolveICMPFlow determines which tunnel should handle an ICMP packet.
+// Windows has no GetExtendedIcmpTable, so per-process routing is not possible.
+// Instead we use: domain table → DNS fallback tunnel → first available VPN tunnel → pass.
+func (r *TUNRouter) resolveICMPFlow(dstIP [4]byte) (tunnelID string, action flowAction) {
+	f := r.ipFilter.Load()
+
+	// Drop local/private IPs — no direct route through TUN.
+	if f != nil && f.IsLocalBypassIP(dstIP) {
+		return "", flowDrop
+	}
+
+	// Domain-based routing (IP→tunnel from DNS resolution).
+	if r.domainTable != nil {
+		if dEntry, ok := r.domainTable.Lookup(dstIP); ok {
+			switch dEntry.Action {
+			case core.DomainBlock:
+				return "", flowDrop
+			case core.DomainDirect:
+				return "", flowPass
+			case core.DomainRoute:
+				if entry, ok := r.registry.Get(dEntry.TunnelID); ok && entry.State == core.TunnelStateUp {
+					if _, _, ok := r.getRawForwarder(dEntry.TunnelID); ok {
+						return dEntry.TunnelID, flowRoute
+					}
+				}
+			}
+		}
+	}
+
+	// DNS fallback tunnel — the primary VPN tunnel from config.
+	if r.dnsRouter != nil {
+		dnsRoute := r.dnsRouter.ResolveDNSRoute("")
+		if dnsRoute.TunnelID != "" && dnsRoute.TunnelID != DirectTunnelID {
+			if entry, ok := r.registry.Get(dnsRoute.TunnelID); ok && entry.State == core.TunnelStateUp {
+				if _, _, ok := r.getRawForwarder(dnsRoute.TunnelID); ok {
+					if f == nil || !f.ShouldBypassIP(dnsRoute.TunnelID, dstIP) {
+						return dnsRoute.TunnelID, flowRoute
+					}
+				}
+			}
+		}
+	}
+
+	// Any available VPN tunnel with a raw forwarder.
+	for _, entry := range r.registry.All() {
+		if entry.ID == DirectTunnelID || entry.State != core.TunnelStateUp {
+			continue
+		}
+		if f != nil && f.ShouldBypassIP(entry.ID, dstIP) {
+			continue
+		}
+		if _, _, ok := r.getRawForwarder(entry.ID); ok {
+			return entry.ID, flowRoute
+		}
+	}
+
+	// No VPN tunnel available — let OS handle directly.
+	return "", flowPass
+}
+
+// ---------------------------------------------------------------------------
 // Flow resolution: PID → exe path → rule match → tunnel + proxy port
 // ---------------------------------------------------------------------------
 
@@ -865,8 +986,20 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 		transportCkOff = ihl + 6
 		copy(srcIP[:], pkt[12:16])
 		dstPort = binary.BigEndian.Uint16(pkt[ihl+2:])
+	case protoICMP:
+		if len(pkt) < ihl+minICMPHdr {
+			return false
+		}
+		// Only handle Echo Reply (type 0).
+		if pkt[ihl] != icmpEchoReply {
+			return false
+		}
+		// ICMP has no pseudo-header checksum — transportCkOff stays 0.
+		copy(srcIP[:], pkt[12:16])
+		// Use ICMP Identifier as pseudo-port for flow lookup.
+		dstPort = binary.BigEndian.Uint16(pkt[ihl+4:])
 	default:
-		return false // ICMP etc — let gVisor handle
+		return false
 	}
 
 	// Check if this response matches a raw flow entry.
