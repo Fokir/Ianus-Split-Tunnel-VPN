@@ -102,6 +102,35 @@ func main() {
 			fatal("unknown config command: %s", cmdArgs[0])
 		}
 
+	// Tunnel management.
+	case "tunnel":
+		if len(cmdArgs) == 0 {
+			fatal("usage: awg-diag tunnel <connect|disconnect|list|status> [tunnel_id]")
+		}
+		switch cmdArgs[0] {
+		case "connect":
+			tunnelID := ""
+			if len(cmdArgs) > 1 {
+				tunnelID = cmdArgs[1]
+			}
+			runTunnelConnect(tunnelID)
+		case "disconnect":
+			tunnelID := ""
+			if len(cmdArgs) > 1 {
+				tunnelID = cmdArgs[1]
+			}
+			runTunnelDisconnect(tunnelID)
+		case "list":
+			runTunnelList()
+		case "status":
+			if len(cmdArgs) < 2 {
+				fatal("usage: awg-diag tunnel status <tunnel_id>")
+			}
+			runTunnelStatus(cmdArgs[1])
+		default:
+			fatal("unknown tunnel command: %s", cmdArgs[0])
+		}
+
 	// Service management.
 	case "service":
 		if len(cmdArgs) == 0 {
@@ -239,6 +268,12 @@ Config Management:
   config remove-rule --pattern P
   config show-rules
   config list-tunnels
+
+Tunnel Management:
+  tunnel connect [tunnel_id]              Connect tunnel (or all if empty)
+  tunnel disconnect [tunnel_id]           Disconnect tunnel (or all if empty)
+  tunnel list                             List tunnels with live status
+  tunnel status <tunnel_id>               Show specific tunnel status
 
 Service Management:
   service start                     Start VPN service
