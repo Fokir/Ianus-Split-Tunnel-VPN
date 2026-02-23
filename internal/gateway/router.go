@@ -354,6 +354,10 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 	}
 
 	// Proxy fallback path (direct tunnel or no raw forwarder).
+	if tunnelID != DirectTunnelID {
+		core.Log.Debugf("Gateway", "TCP SYN → proxy path: tunnel=%s dst=%d.%d.%d.%d:%d port=%d",
+			tunnelID, m.dstIP[0], m.dstIP[1], m.dstIP[2], m.dstIP[3], m.dstP, proxyPort)
+	}
 	dstIP := netip.AddrFrom4(m.dstIP)
 
 	// Create NAT entry.

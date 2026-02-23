@@ -67,10 +67,3 @@ type TunnelProvider interface {
 type EndpointProvider interface {
 	GetServerEndpoints() []netip.AddrPort
 }
-
-// SocketBindProvider is optionally implemented by providers that can bind
-// their server connection to a specific network interface via socket options
-// (IP_UNICAST_IF) instead of relying on system bypass routes.
-type SocketBindProvider interface {
-	SetInterfaceName(name string)
-}

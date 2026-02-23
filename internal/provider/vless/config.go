@@ -41,10 +41,6 @@ type Config struct {
 
 	// XHTTP holds XHTTP/SplitHTTP-specific settings (when Network == "xhttp" or "splithttp").
 	XHTTP XHTTPConfig `yaml:"xhttp"`
-
-	// InterfaceName is the network interface name for socket binding (IP_UNICAST_IF).
-	// Runtime-only, not persisted in YAML. Set by SocketBindProvider.SetInterfaceName.
-	InterfaceName string `yaml:"-"`
 }
 
 // RealityConfig holds REALITY TLS settings.
@@ -113,7 +109,11 @@ func buildXrayJSON(cfg Config) ([]byte, error) {
 		"id":         cfg.UUID,
 		"encryption": cfg.Encryption,
 	}
-	if cfg.Flow != "" {
+	// xtls-rprx-vision flow only works with raw TCP transport.
+	// Non-TCP transports (xhttp, ws, grpc) frame data in HTTP/gRPC,
+	// which breaks vision's TLS-in-TLS detection causing PR_END_OF_FILE_ERROR.
+	// Standard VLESS clients (v2rayN, nekoray) also strip flow for non-TCP.
+	if cfg.Flow != "" && cfg.Network == "tcp" {
 		user["flow"] = cfg.Flow
 	}
 
@@ -188,22 +188,21 @@ func buildXrayJSON(cfg Config) ([]byte, error) {
 		if cfg.XHTTP.Host != "" {
 			xhttpSettings["host"] = cfg.XHTTP.Host
 		}
-		if cfg.XHTTP.Mode != "" {
-			xhttpSettings["mode"] = cfg.XHTTP.Mode
+		// Force "packet-up" mode for maximum server compatibility.
+		// When mode is "auto" with REALITY, xray selects "stream-one" which
+		// requires bidirectional HTTP/2 streaming support on the server.
+		// Many servers don't support this, causing empty response bodies.
+		// "packet-up" uses separate GET (download) + POST (upload) which
+		// works universally with all XHTTP server implementations.
+		mode := cfg.XHTTP.Mode
+		if mode == "" || mode == "auto" {
+			mode = "packet-up"
 		}
+		xhttpSettings["mode"] = mode
 		for k, v := range cfg.XHTTP.Extra {
 			xhttpSettings[k] = v
 		}
 		stream["xhttpSettings"] = xhttpSettings
-	}
-
-	// Socket binding: when InterfaceName is set, xray-core will use
-	// IP_UNICAST_IF to bind outgoing connections to the specified NIC,
-	// eliminating the need for /32 bypass routes.
-	if cfg.InterfaceName != "" {
-		stream["sockopt"] = map[string]any{
-			"interface": cfg.InterfaceName,
-		}
 	}
 
 	outbound["streamSettings"] = stream
@@ -227,7 +226,7 @@ func buildXrayJSON(cfg Config) ([]byte, error) {
 
 	xrayConfig := map[string]any{
 		"log": map[string]any{
-			"loglevel": "warning",
+			"loglevel": "debug",
 		},
 		"outbounds": []map[string]any{
 			tcpOutbound,
