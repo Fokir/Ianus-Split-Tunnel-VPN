@@ -234,6 +234,7 @@ func (s *Service) SaveConfig(ctx context.Context, req *vpnapi.SaveConfigRequest)
 
 	// Preserve fields not exposed via proto.
 	oldCfg := s.cfg.Get()
+	newCfg.Version = core.CurrentConfigVersion
 	newCfg.GUI = oldCfg.GUI
 	newCfg.Update = oldCfg.Update
 	// Subscriptions are now part of AppConfig proto, but if the client sends
@@ -254,10 +255,15 @@ func (s *Service) SaveConfig(ctx context.Context, req *vpnapi.SaveConfigRequest)
 	}
 
 	// Apply and save config.
-	s.cfg.SetFromGUI(newCfg)
+	// Use SetQuiet to avoid publishing EventConfigReloaded before Save writes
+	// the file — otherwise the main loop's reload handler calls Load() and reads
+	// the stale file, overwriting the new in-memory config.
+	s.cfg.SetQuiet(newCfg)
 	if err := s.cfg.Save(); err != nil {
 		return &vpnapi.SaveConfigResponse{Success: false, Error: err.Error()}, nil
 	}
+	// Now that the file is persisted, notify listeners to reload.
+	s.bus.Publish(core.Event{Type: core.EventConfigReloaded})
 
 	// Restart if needed.
 	restarted := false
@@ -353,7 +359,7 @@ func (s *Service) GetAutostart(_ context.Context, _ *emptypb.Empty) (*vpnapi.Aut
 }
 
 func (s *Service) SetAutostart(_ context.Context, req *vpnapi.SetAutostartRequest) (*vpnapi.SetAutostartResponse, error) {
-	if err := setAutostartEnabled(req.Config.Enabled); err != nil {
+	if err := setAutostartEnabled(req.Config.Enabled, req.Config.GuiExePath); err != nil {
 		return &vpnapi.SetAutostartResponse{Success: false, Error: err.Error()}, nil
 	}
 

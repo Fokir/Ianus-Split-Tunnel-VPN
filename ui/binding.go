@@ -10,7 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"syscall"
 	"sync"
 	"time"
 
@@ -443,11 +443,21 @@ func (b *BindingService) GetAutostart() (*AutostartInfo, error) {
 }
 
 func (b *BindingService) SetAutostart(enabled bool, restoreConnections bool) error {
-	// 1. Tell service to set SCM start type + save restoreConnections config.
+	// Clean up legacy HKCU\Run entries (from older versions).
+	removeLegacyGUIRegistryEntries()
+
+	guiPath, err := guiExePath()
+	if err != nil {
+		return fmt.Errorf("get GUI path: %w", err)
+	}
+
+	// Service handles both SCM start type and GUI scheduled task
+	// (runs as SYSTEM — has permission for schtasks /RL HIGHEST).
 	resp, err := b.client.Service.SetAutostart(context.Background(), &vpnapi.SetAutostartRequest{
 		Config: &vpnapi.AutostartConfig{
 			Enabled:            enabled,
 			RestoreConnections: restoreConnections,
+			GuiExePath:         guiPath,
 		},
 	})
 	if err != nil {
@@ -456,53 +466,7 @@ func (b *BindingService) SetAutostart(enabled bool, restoreConnections bool) err
 	if !resp.Success {
 		return errors.New(resp.Error)
 	}
-
-	// 2. Set GUI autostart locally (runs in user context, correct HKCU/schtasks).
-	if err := setGUIAutostartLocal(enabled); err != nil {
-		return fmt.Errorf("set GUI autostart: %w", err)
-	}
 	return nil
-}
-
-// ─── GUI Autostart (local, user context) ────────────────────────────
-
-const guiTaskName = "AWGSplitTunnelGUI"
-
-// setGUIAutostartLocal creates or removes a scheduled task for GUI autostart.
-// Uses Task Scheduler with HIGHEST run level so the elevated GUI starts
-// without a UAC prompt at user login.
-func setGUIAutostartLocal(enabled bool) error {
-	// Clean up legacy HKCU\Run entries (from older versions).
-	removeLegacyGUIRegistryEntries()
-
-	if enabled {
-		guiPath, err := guiExePath()
-		if err != nil {
-			return err
-		}
-		// Create scheduled task: run at logon, highest privileges, no time limit.
-		out, err := exec.Command("schtasks", "/Create",
-			"/TN", guiTaskName,
-			"/TR", fmt.Sprintf(`"%s" --minimized`, guiPath),
-			"/SC", "ONLOGON",
-			"/RL", "HIGHEST",
-			"/F", // force overwrite if exists
-		).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("schtasks create: %s: %w", strings.TrimSpace(string(out)), err)
-		}
-		return nil
-	}
-
-	// Remove the task (ignore errors if it doesn't exist).
-	_ = exec.Command("schtasks", "/Delete", "/TN", guiTaskName, "/F").Run()
-	return nil
-}
-
-// isGUIAutostartLocal checks if the GUI scheduled task exists.
-func isGUIAutostartLocal() bool {
-	err := exec.Command("schtasks", "/Query", "/TN", guiTaskName).Run()
-	return err == nil
 }
 
 // guiExePath returns the path to the current GUI executable.
@@ -518,9 +482,11 @@ func guiExePath() (string, error) {
 func removeLegacyGUIRegistryEntries() {
 	// Best-effort removal using reg.exe (avoid importing x/sys/windows/registry in GUI).
 	for _, name := range []string{"AWGSplitTunnelGUI", "AWGSplitTunnel"} {
-		_ = exec.Command("reg", "delete",
+		cmd := exec.Command("reg", "delete",
 			`HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`,
-			"/v", name, "/f").Run()
+			"/v", name, "/f")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		_ = cmd.Run()
 	}
 }
 

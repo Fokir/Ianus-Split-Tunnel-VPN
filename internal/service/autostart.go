@@ -38,14 +38,12 @@ func isAutostartEnabled() (bool, error) {
 	return isLegacyTaskEnabled()
 }
 
-// setAutostartEnabled enables or disables the service autostart via SCM.
-// GUI autostart (Task Scheduler) is managed by the GUI process itself,
-// since the service runs as SYSTEM and cannot access the user's HKCU or
-// create per-user scheduled tasks.
+// setAutostartEnabled enables or disables the service autostart via SCM
+// and manages the GUI scheduled task.
 //
-// When enabled:  Service start type → Automatic (starts at boot)
-// When disabled: Service start type → Manual
-func setAutostartEnabled(enabled bool) error {
+// When enabled:  Service start type → Automatic, GUI task created
+// When disabled: Service start type → Manual, GUI task removed
+func setAutostartEnabled(enabled bool, guiExePath string) error {
 	// Remove legacy schtasks/registry entries regardless.
 	removeLegacySchtask()
 	removeLegacyRegistryAutostart()
@@ -57,6 +55,13 @@ func setAutostartEnabled(enabled bool) error {
 		}
 		if err := winsvc.SetStartType(startType); err != nil {
 			return fmt.Errorf("set service start type: %w", err)
+		}
+	}
+
+	// Manage GUI scheduled task (runs as SYSTEM — has permission).
+	if guiExePath != "" {
+		if err := setGUIAutostart(enabled, guiExePath); err != nil {
+			return fmt.Errorf("set GUI autostart: %w", err)
 		}
 	}
 
@@ -111,4 +116,34 @@ func isLegacyTaskEnabled() (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+const guiTaskName = "AWGSplitTunnelGUI"
+
+// setGUIAutostart creates or removes a scheduled task for GUI autostart.
+// Runs from the service (SYSTEM) which has permission to manage tasks.
+func setGUIAutostart(enabled bool, guiExePath string) error {
+	if enabled {
+		out, err := exec.Command("schtasks", "/Create",
+			"/TN", guiTaskName,
+			"/TR", fmt.Sprintf(`"%s" --minimized`, guiExePath),
+			"/SC", "ONLOGON",
+			"/RL", "HIGHEST",
+			"/F",
+		).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("schtasks create: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+		return nil
+	}
+
+	// Remove the task (ignore errors if it doesn't exist).
+	_ = exec.Command("schtasks", "/Delete", "/TN", guiTaskName, "/F").Run()
+	return nil
+}
+
+// isGUIAutostartEnabled checks if the GUI scheduled task exists.
+func isGUIAutostartEnabled() bool {
+	err := exec.Command("schtasks", "/Query", "/TN", guiTaskName).Run()
+	return err == nil
 }
