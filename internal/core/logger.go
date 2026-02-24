@@ -4,11 +4,14 @@ package core
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // LogLevel represents the severity of a log message.
@@ -37,6 +40,7 @@ type Logger struct {
 	components  map[string]LogLevel // lowercase component name → level (immutable after init)
 	levelCache  sync.Map            // tag → LogLevel (lock-free cache)
 	hook        atomic.Pointer[LogHook]
+	logFile     *os.File // file sink (nil if file logging is disabled)
 }
 
 // ParseLevel converts a string level name to LogLevel.
@@ -59,6 +63,7 @@ func ParseLevel(s string) LogLevel {
 }
 
 // NewLogger creates a Logger from config.
+// Automatically sets up file logging to a logs/ directory next to the executable.
 func NewLogger(cfg LogConfig) *Logger {
 	l := &Logger{
 		globalLevel: ParseLevel(cfg.Level),
@@ -67,7 +72,41 @@ func NewLogger(cfg LogConfig) *Logger {
 	for name, level := range cfg.Components {
 		l.components[strings.ToLower(name)] = ParseLevel(level)
 	}
+
+	// Set up file logging next to the executable.
+	if f := openLogFile(); f != nil {
+		l.logFile = f
+		log.SetOutput(io.MultiWriter(os.Stderr, f))
+	}
+
 	return l
+}
+
+// Close flushes and closes the log file (if any).
+func (l *Logger) Close() {
+	if l.logFile != nil {
+		l.logFile.Sync()
+		l.logFile.Close()
+		l.logFile = nil
+	}
+}
+
+// openLogFile creates/opens a date-stamped log file in logs/ next to the executable.
+func openLogFile() *os.File {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	logsDir := filepath.Join(filepath.Dir(exe), "logs")
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		return nil
+	}
+	name := fmt.Sprintf("awg-logs-%s.log", time.Now().Format("2006-01-02"))
+	f, err := os.OpenFile(filepath.Join(logsDir, name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil
+	}
+	return f
 }
 
 // levelFor returns the effective log level for a component tag.

@@ -440,9 +440,11 @@ mainLoop:
 		core.Log.Infof("Core", "Shutdown complete.")
 	case <-time.After(10 * time.Second):
 		core.Log.Errorf("Core", "Shutdown timed out, forcing exit.")
+		core.Log.Close()
 		os.Exit(1)
 	}
 
+	core.Log.Close()
 	return nil
 }
 

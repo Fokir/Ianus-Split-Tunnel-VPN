@@ -163,8 +163,6 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 		return
 	}
 
-	core.Log.Debugf("Proxy", "TCP %s → %s via %s", clientConn.RemoteAddr(), originalDst, tunnelID)
-
 	// Dial through the tunnel.
 	remoteConn, err := prov.DialTCP(ctx, originalDst)
 	if err != nil {
@@ -199,7 +197,13 @@ func forward(dst, src net.Conn, direction, target string, wg *sync.WaitGroup) {
 	n, err := io.CopyBuffer(dst, src, *bp)
 	fwdBufPool.Put(bp)
 
-	core.Log.Debugf("Proxy", "forward %s %s: %d bytes, err=%v", direction, target, n, err)
+	if err != nil {
+		core.Log.Warnf("Proxy", "forward %s %s: %d bytes, err=%v (type=%T)", direction, target, n, err, err)
+	} else if n == 0 {
+		core.Log.Warnf("Proxy", "forward %s %s: 0 bytes (clean EOF — remote closed immediately)", direction, target)
+	} else {
+		core.Log.Debugf("Proxy", "forward %s %s: %d bytes", direction, target, n)
+	}
 
 	// Signal half-close.
 	if tc, ok := dst.(*net.TCPConn); ok {
