@@ -31,7 +31,7 @@ if not exist "%OUT_DIR%" mkdir "%OUT_DIR%"
 
 :: ── Frontend build ──────────────────────────────────────────────────
 echo.
-echo [1/6] Installing frontend dependencies...
+echo [1/7] Installing frontend dependencies...
 pushd ui\frontend
 call npm install --silent
 if %ERRORLEVEL% NEQ 0 (
@@ -40,7 +40,7 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-echo [2/6] Building frontend...
+echo [2/7] Building frontend...
 call npm run build
 if %ERRORLEVEL% NEQ 0 (
     popd
@@ -50,7 +50,7 @@ if %ERRORLEVEL% NEQ 0 (
 popd
 
 :: ── Wails bindings ──────────────────────────────────────────────────
-echo [3/6] Generating Wails bindings...
+echo [3/7] Generating Wails bindings...
 pushd ui
 wails3 generate bindings
 if %ERRORLEVEL% NEQ 0 (
@@ -68,7 +68,7 @@ if exist frontend\bindings (
 )
 
 :: ── Go builds ───────────────────────────────────────────────────────
-echo [4/6] Building Go binaries (%VERSION%)...
+echo [4/7] Building Go binaries (%VERSION%)...
 
 echo   - %APP_NAME%.exe (VPN service)
 go build -ldflags "%LDFLAGS%" -o "%BINARY%" %CMD_DIR%
@@ -87,7 +87,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 :: ── Diagnostic tool build ──────────────────────────────────────────
-echo [5/6] Building diagnostic tool...
+echo [5/7] Building diagnostic tool...
 
 echo   - %APP_NAME%-diag.exe
 go build -ldflags "%LDFLAGS%" -o "%OUT_DIR%\%APP_NAME%-diag.exe" .\cmd\awg-diag\
@@ -97,8 +97,27 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
+:: ── Test runner build ─────────────────────────────────────────────
+echo [6/7] Building test runner...
+
+:: Generate test runner Windows resource (.syso) from manifest if rsrc is available.
+where rsrc >nul 2>nul
+if %ERRORLEVEL% EQU 0 (
+    if exist ".\cmd\awg-test\app.manifest" (
+        rsrc -manifest ".\cmd\awg-test\app.manifest" -o ".\cmd\awg-test\rsrc_windows_amd64.syso"
+    )
+)
+
+echo   - awg-test.exe
+go build -ldflags "%LDFLAGS%" -o "%OUT_DIR%\awg-test.exe" .\cmd\awg-test\
+
+if %ERRORLEVEL% NEQ 0 (
+    echo Test runner build FAILED
+    exit /b 1
+)
+
 :: ── Updater build ───────────────────────────────────────────────────
-echo [6/6] Building updater...
+echo [7/7] Building updater...
 
 :: Generate updater Windows resource (.syso) from manifest if rsrc is available.
 where rsrc >nul 2>nul
@@ -131,4 +150,5 @@ echo Built successfully (%VERSION%):
 echo   %OUT_DIR%\%APP_NAME%.exe            (VPN service)
 echo   %OUT_DIR%\%APP_NAME%-ui.exe         (GUI)
 echo   %OUT_DIR%\%APP_NAME%-diag.exe       (Diagnostic tool)
+echo   %OUT_DIR%\awg-test.exe              (Test runner)
 echo   %OUT_DIR%\%APP_NAME%-updater.exe    (Updater)

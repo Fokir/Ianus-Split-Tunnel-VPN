@@ -11,37 +11,66 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 var diagLog *log.Logger
 
-// initLogger creates the logs/ directory next to the executable,
-// opens a timestamped log file, and returns a MultiWriter logger + file handle.
-func initLogger() (*os.File, error) {
+// lazyLogWriter creates the log file only on the first Write call,
+// so commands that produce no log output (e.g. "version") don't leave empty files.
+type lazyLogWriter struct {
+	mu       sync.Mutex
+	filePath string
+	file     *os.File
+}
+
+func (w *lazyLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.file == nil {
+		// Ensure the logs directory exists.
+		if err := os.MkdirAll(filepath.Dir(w.filePath), 0o755); err != nil {
+			return 0, fmt.Errorf("create logs dir: %w", err)
+		}
+		f, err := os.Create(w.filePath)
+		if err != nil {
+			return 0, fmt.Errorf("create log file: %w", err)
+		}
+		w.file = f
+	}
+	return w.file.Write(p)
+}
+
+func (w *lazyLogWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.file != nil {
+		return w.file.Close()
+	}
+	return nil
+}
+
+// initLogger sets up the diagLog logger with a lazy file writer.
+// The log file is only created when actual output is written.
+func initLogger() (*lazyLogWriter, error) {
 	exeDir := exeDirectory()
 	logsDir := filepath.Join(exeDir, "logs")
-	if err := os.MkdirAll(logsDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create logs dir: %w", err)
-	}
-
 	name := time.Now().Format("02-01-2006-15-04-05") + ".log"
 	path := filepath.Join(logsDir, name)
 
-	f, err := os.Create(path)
-	if err != nil {
-		return nil, fmt.Errorf("create log file: %w", err)
-	}
+	lw := &lazyLogWriter{filePath: path}
 
 	// When --json is enabled, only write logs to file to keep stdout clean for JSON.
 	var w io.Writer
 	if jsonOutput {
-		w = f
+		w = lw
 	} else {
-		w = io.MultiWriter(os.Stdout, f)
+		w = io.MultiWriter(os.Stdout, lw)
 	}
 	diagLog = log.New(w, "", log.LstdFlags)
-	return f, nil
+	return lw, nil
 }
 
 // exeDirectory returns the directory containing the running executable.

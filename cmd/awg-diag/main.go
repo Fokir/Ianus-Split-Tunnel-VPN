@@ -28,14 +28,14 @@ func main() {
 	args := os.Args[1:]
 	args = parseGlobalFlags(args)
 
-	// Initialize logger (writes to stdout + logs/timestamp.log).
-	logFile, err := initLogger()
+	// Initialize logger (log file is created lazily on first write).
+	lw, err := initLogger()
 	if err != nil {
 		// Fallback: log to stdout only.
 		diagLog = log.New(os.Stdout, "", log.LstdFlags)
 		fmt.Fprintf(os.Stderr, "Warning: could not init file logger: %v\n", err)
 	} else {
-		defer logFile.Close()
+		defer lw.Close()
 	}
 
 	if len(args) == 0 {
@@ -197,6 +197,10 @@ func main() {
 			fatal("unknown sandbox command: %s", cmdArgs[0])
 		}
 
+	// Test runner.
+	case "test":
+		runTest(cmdArgs)
+
 	case "version":
 		fmt.Printf("awg-diag %s (commit: %s, built: %s)\n", version, commit, buildDate)
 
@@ -289,6 +293,10 @@ Sandbox:
   sandbox prepare [--tunnel T]      Prepare Windows Sandbox files
   sandbox run [--tunnel T]          Prepare and launch sandbox
   sandbox logs                      Show sandbox results
+
+Test Runner:
+  test [--only <suites>]            Run integration tests
+                                    Suites: service,connectivity,dns,tunnels,exclusions
 
 Global Flags:
   --config <path>      Path to config.yaml (default: config.yaml next to exe)
