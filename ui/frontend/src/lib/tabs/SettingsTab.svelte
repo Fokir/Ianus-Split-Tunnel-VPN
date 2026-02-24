@@ -36,6 +36,7 @@
 
       // Ensure nested objects exist (field names must match proto JSON: snake_case)
       if (!config.dns) config.dns = {};
+      if (!config.dns.tunnel_ids) config.dns.tunnel_ids = [];
       if (!config.dns.servers || config.dns.servers.length === 0) {
         config.dns.servers = ['1.1.1.1', '8.8.8.8', '8.8.4.4', '9.9.9.9'];
       }
@@ -60,11 +61,15 @@
       // Save config (with restart if connected)
       await api.saveConfig(config, true);
 
-      // Save autostart separately (both enabled and restoreConnections)
-      await api.setAutostart(autostart.enabled, autostart.restoreConnections);
-
       // Persist auto-update preference
       localStorage.setItem('autoUpdateEnabled', autoUpdateEnabled);
+
+      // Autostart is separate — don't let its failure mask config save.
+      try {
+        await api.setAutostart(autostart.enabled, autostart.restoreConnections);
+      } catch (e) {
+        error = 'Настройки сохранены, но автозапуск не удалось обновить: ' + e.message;
+      }
 
       dirty = false;
     } catch (e) {
@@ -217,18 +222,31 @@
       <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">DNS</h3>
       <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4 space-y-3">
         <div>
-          <label for="dns-tunnel" class="block text-xs font-medium text-zinc-400 mb-1">Туннель для DNS</label>
-          <select
-            id="dns-tunnel"
-            bind:value={config.dns.tunnel_id}
-            on:change={markDirty}
-            class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
-          >
-            <option value="">По умолчанию</option>
+          <!-- svelte-ignore a11y-label-has-associated-control -->
+          <label class="block text-xs font-medium text-zinc-400 mb-2">Туннели для DNS</label>
+          <div class="space-y-1">
             {#each tunnels as t}
-              <option value={t.id}>{t.name || t.id}</option>
+              <label class="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-zinc-800/60 cursor-pointer transition-colors">
+                <input
+                  type="checkbox"
+                  checked={config.dns.tunnel_ids?.includes(t.id)}
+                  on:change={(e) => {
+                    if (e.target.checked) {
+                      config.dns.tunnel_ids = [...(config.dns.tunnel_ids || []), t.id];
+                    } else {
+                      config.dns.tunnel_ids = (config.dns.tunnel_ids || []).filter(id => id !== t.id);
+                    }
+                    markDirty();
+                  }}
+                  class="w-4 h-4 rounded border-zinc-600 bg-zinc-900 text-blue-500 focus:ring-blue-500/30 focus:ring-offset-0"
+                />
+                <span class="text-sm text-zinc-200">{t.name || t.id}</span>
+              </label>
             {/each}
-          </select>
+            {#if tunnels.length === 0}
+              <p class="text-xs text-zinc-500 px-3">Нет настроенных туннелей</p>
+            {/if}
+          </div>
         </div>
 
         <div>

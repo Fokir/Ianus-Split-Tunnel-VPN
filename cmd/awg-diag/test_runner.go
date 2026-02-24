@@ -917,7 +917,7 @@ func saveConfigViaIPC(client *ipc.Client, cfg *core.Config) error {
 	// Build DNS config.
 	dnsEnabled := cfg.DNS.Cache.Enabled == nil || *cfg.DNS.Cache.Enabled
 	dnsCfg := &vpnapi.DNSConfig{
-		TunnelId: cfg.DNS.FallbackTunnelID,
+		TunnelIds: cfg.DNS.TunnelIDs,
 		Servers:  cfg.DNS.Servers,
 		Cache: &vpnapi.DNSCacheConfig{
 			Enabled: dnsEnabled,

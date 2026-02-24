@@ -189,8 +189,8 @@ func configToProto(c core.Config) *vpnapi.AppConfig {
 		DomainRules:   domainRules,
 		Subscriptions: subs,
 		Dns: &vpnapi.DNSConfig{
-			TunnelId: c.DNS.FallbackTunnelID,
-			Servers:  c.DNS.Servers,
+			TunnelIds: c.DNS.TunnelIDs,
+			Servers:   c.DNS.Servers,
 			Cache: &vpnapi.DNSCacheConfig{
 				Enabled: c.DNS.Cache.Enabled == nil || *c.DNS.Cache.Enabled,
 				MaxSize: int32(c.DNS.Cache.MaxSize),
@@ -234,8 +234,12 @@ func configFromProto(pc *vpnapi.AppConfig) core.Config {
 	if pc.Dns != nil {
 		enabled := pc.Dns.Cache != nil && pc.Dns.Cache.Enabled
 		cfg.DNS = core.DNSRouteConfig{
-			FallbackTunnelID: pc.Dns.TunnelId,
-			Servers:          pc.Dns.Servers,
+			TunnelIDs: pc.Dns.TunnelIds,
+			Servers:   pc.Dns.Servers,
+		}
+		// Backward compat: if tunnel_ids is empty but deprecated tunnel_id is set, use it.
+		if len(cfg.DNS.TunnelIDs) == 0 && pc.Dns.TunnelId != "" {
+			cfg.DNS.TunnelIDs = []string{pc.Dns.TunnelId}
 		}
 		if pc.Dns.Cache != nil {
 			cfg.DNS.Cache = core.DNSCacheYAMLConfig{

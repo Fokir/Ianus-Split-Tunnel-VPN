@@ -564,8 +564,8 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	// DNS resolver on 10.255.0.1:53 handles VPN routing at the application layer.
 	if m.dstP == 53 && r.dnsRouter != nil {
 		dnsRoute := r.dnsRouter.ResolveDNSRoute(tunnelID)
-		if dnsRoute.TunnelID != "" && dnsRoute.TunnelID != DirectTunnelID {
-			tunnelID = dnsRoute.TunnelID
+		if len(dnsRoute.TunnelIDs) > 0 && dnsRoute.TunnelIDs[0] != DirectTunnelID {
+			tunnelID = dnsRoute.TunnelIDs[0]
 			if port, ok := r.registry.GetUDPProxyPort(tunnelID); ok {
 				udpProxyPort = port
 			}
@@ -741,11 +741,14 @@ func (r *TUNRouter) resolveICMPFlow(dstIP [4]byte) (tunnelID string, action flow
 	// DNS fallback tunnel — the primary VPN tunnel from config.
 	if r.dnsRouter != nil {
 		dnsRoute := r.dnsRouter.ResolveDNSRoute("")
-		if dnsRoute.TunnelID != "" && dnsRoute.TunnelID != DirectTunnelID {
-			if entry, ok := r.registry.Get(dnsRoute.TunnelID); ok && entry.State == core.TunnelStateUp {
-				if _, _, ok := r.getRawForwarder(dnsRoute.TunnelID); ok {
-					if f == nil || !f.ShouldBypassIP(dnsRoute.TunnelID, dstIP) {
-						return dnsRoute.TunnelID, flowRoute
+		for _, tid := range dnsRoute.TunnelIDs {
+			if tid == DirectTunnelID {
+				continue
+			}
+			if entry, ok := r.registry.Get(tid); ok && entry.State == core.TunnelStateUp {
+				if _, _, ok := r.getRawForwarder(tid); ok {
+					if f == nil || !f.ShouldBypassIP(tid, dstIP) {
+						return tid, flowRoute
 					}
 				}
 			}
@@ -782,7 +785,8 @@ const (
 )
 
 // flowFallbackInfo carries context needed for connection-level fallback
-// in the proxy layer. Populated only for flowRoute results from process rules.
+// in the proxy layer. Populated for flowRoute results from process rules
+// and for server endpoint routing (with allow_direct fallback).
 type flowFallbackInfo struct {
 	fallback  core.FallbackPolicy
 	exeLower  string
@@ -851,12 +855,23 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// that tunnel. This allows accessing server admin panels (e.g. :51821 WG UI)
 	// via the VPN tunnel. No loop because encrypted tunnel traffic uses bypass
 	// routes on the real NIC, and selfPID is already excluded above.
+	//
+	// Fallback is set to allow_direct so the proxy can fall back to a direct
+	// connection if the tunnel fails (e.g. application-layer loop when the server
+	// tries to connect to itself on a different port).
 	if epTunnelID, ok := r.getServerEndpointTunnel(dstIP); ok {
 		entry, exists := r.registry.Get(epTunnelID)
 		if exists && entry.State == core.TunnelStateUp {
 			if r.wfp != nil {
 				r.wfp.EnsureBlocked(exePath)
 			}
+			fb = flowFallbackInfo{
+				fallback:  core.PolicyAllowDirect,
+				exeLower:  exeLower,
+				baseLower: baseLower,
+			}
+			core.Log.Debugf("Router", "Server endpoint %d.%d.%d.%d → tunnel %q (process=%s)",
+				dstIP[0], dstIP[1], dstIP[2], dstIP[3], epTunnelID, baseLower)
 			if isUDP {
 				if port, ok := r.registry.GetUDPProxyPort(epTunnelID); ok {
 					return epTunnelID, port, flowRoute, core.PriorityRealtime, fb

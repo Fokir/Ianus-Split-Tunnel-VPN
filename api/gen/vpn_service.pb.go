@@ -621,9 +621,10 @@ func (x *DNSCacheConfig) GetNegTtl() string {
 
 type DNSConfig struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	TunnelId      string                 `protobuf:"bytes,1,opt,name=tunnel_id,json=tunnelId,proto3" json:"tunnel_id,omitempty"` // tunnel for DNS routing
+	TunnelId      string                 `protobuf:"bytes,1,opt,name=tunnel_id,json=tunnelId,proto3" json:"tunnel_id,omitempty"` // deprecated: use tunnel_ids
 	Servers       []string               `protobuf:"bytes,2,rep,name=servers,proto3" json:"servers,omitempty"`
 	Cache         *DNSCacheConfig        `protobuf:"bytes,3,opt,name=cache,proto3" json:"cache,omitempty"`
+	TunnelIds     []string               `protobuf:"bytes,4,rep,name=tunnel_ids,json=tunnelIds,proto3" json:"tunnel_ids,omitempty"` // tunnels for parallel DNS resolution
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -675,6 +676,13 @@ func (x *DNSConfig) GetServers() []string {
 func (x *DNSConfig) GetCache() *DNSCacheConfig {
 	if x != nil {
 		return x.Cache
+	}
+	return nil
+}
+
+func (x *DNSConfig) GetTunnelIds() []string {
+	if x != nil {
+		return x.TunnelIds
 	}
 	return nil
 }
@@ -3187,6 +3195,7 @@ type AutostartConfig struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	Enabled            bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	RestoreConnections bool                   `protobuf:"varint,2,opt,name=restore_connections,json=restoreConnections,proto3" json:"restore_connections,omitempty"` // auto-connect on startup
+	GuiExePath         string                 `protobuf:"bytes,3,opt,name=gui_exe_path,json=guiExePath,proto3" json:"gui_exe_path,omitempty"`                        // path to GUI executable (for scheduled task creation)
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -3233,6 +3242,13 @@ func (x *AutostartConfig) GetRestoreConnections() bool {
 		return x.RestoreConnections
 	}
 	return false
+}
+
+func (x *AutostartConfig) GetGuiExePath() string {
+	if x != nil {
+		return x.GuiExePath
+	}
+	return ""
 }
 
 type SetAutostartRequest struct {
@@ -3373,11 +3389,13 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\bmax_size\x18\x02 \x01(\x05R\amaxSize\x12\x17\n" +
 	"\amin_ttl\x18\x03 \x01(\tR\x06minTtl\x12\x17\n" +
 	"\amax_ttl\x18\x04 \x01(\tR\x06maxTtl\x12\x17\n" +
-	"\aneg_ttl\x18\x05 \x01(\tR\x06negTtl\"t\n" +
+	"\aneg_ttl\x18\x05 \x01(\tR\x06negTtl\"\x93\x01\n" +
 	"\tDNSConfig\x12\x1b\n" +
 	"\ttunnel_id\x18\x01 \x01(\tR\btunnelId\x12\x18\n" +
 	"\aservers\x18\x02 \x03(\tR\aservers\x120\n" +
-	"\x05cache\x18\x03 \x01(\v2\x1a.awg.vpn.v1.DNSCacheConfigR\x05cache\"\xaa\x01\n" +
+	"\x05cache\x18\x03 \x01(\v2\x1a.awg.vpn.v1.DNSCacheConfigR\x05cache\x12\x1d\n" +
+	"\n" +
+	"tunnel_ids\x18\x04 \x03(\tR\ttunnelIds\"\xaa\x01\n" +
 	"\x12GlobalFilterConfig\x12\x1f\n" +
 	"\vallowed_ips\x18\x01 \x03(\tR\n" +
 	"allowedIps\x12%\n" +
@@ -3548,10 +3566,12 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\x04info\x18\x02 \x01(\v2\x16.awg.vpn.v1.UpdateInfoR\x04info\"E\n" +
 	"\x13ApplyUpdateResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\\\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"~\n" +
 	"\x0fAutostartConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12/\n" +
-	"\x13restore_connections\x18\x02 \x01(\bR\x12restoreConnections\"J\n" +
+	"\x13restore_connections\x18\x02 \x01(\bR\x12restoreConnections\x12 \n" +
+	"\fgui_exe_path\x18\x03 \x01(\tR\n" +
+	"guiExePath\"J\n" +
 	"\x13SetAutostartRequest\x123\n" +
 	"\x06config\x18\x01 \x01(\v2\x1b.awg.vpn.v1.AutostartConfigR\x06config\"F\n" +
 	"\x14SetAutostartResponse\x12\x18\n" +

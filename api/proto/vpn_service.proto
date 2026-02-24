@@ -87,9 +87,10 @@ message DNSCacheConfig {
 }
 
 message DNSConfig {
-  string tunnel_id = 1;       // tunnel for DNS routing
+  string tunnel_id = 1;              // deprecated: use tunnel_ids
   repeated string servers = 2;
   DNSCacheConfig cache = 3;
+  repeated string tunnel_ids = 4;    // tunnels for parallel DNS resolution
 }
 
 // ─── Global filter config ───────────────────────────────────────────
@@ -377,6 +378,7 @@ message ApplyUpdateResponse {
 message AutostartConfig {
   bool enabled = 1;
   bool restore_connections = 2;  // auto-connect on startup
+  string gui_exe_path = 3;       // path to GUI executable (for scheduled task creation)
 }
 
 message SetAutostartRequest {

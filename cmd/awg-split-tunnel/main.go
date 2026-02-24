@@ -151,7 +151,7 @@ func runVPN(configPath string) error {
 
 	// === 6. DNS Router ===
 	dnsConfig := gateway.DNSConfig{
-		FallbackTunnelID: cfg.DNS.FallbackTunnelID,
+		TunnelIDs: cfg.DNS.TunnelIDs,
 	}
 	for _, s := range cfg.DNS.Servers {
 		if ip, err := netip.ParseAddr(s); err == nil {
@@ -239,11 +239,11 @@ func runVPN(configPath string) error {
 
 	// === 11a. DNS Resolver (local DNS forwarder through VPN) ===
 	var dnsResolver *gateway.DNSResolver
-	if dnsConfig.FallbackTunnelID != "" && len(dnsConfig.FallbackServers) > 0 {
+	if len(dnsConfig.TunnelIDs) > 0 && len(dnsConfig.FallbackServers) > 0 {
 		resolverCfg := gateway.DNSResolverConfig{
 			ListenAddr:     adapter.IP().String() + ":53",
 			Servers:        dnsConfig.FallbackServers,
-			TunnelID:       dnsConfig.FallbackTunnelID,
+			TunnelIDs:      dnsConfig.TunnelIDs,
 			FallbackDirect: true,
 			Cache:          buildDNSCacheConfig(cfg.DNS.Cache),
 		}
@@ -385,11 +385,10 @@ mainLoop:
 			core.Log.Infof("Core", "SCM stop signal received. Shutting down...")
 			break mainLoop
 		case <-reloadCh:
-			core.Log.Infof("Core", "Config reload signal received. Reloading configuration...")
-			if err := cfgManager.Load(); err != nil {
-				core.Log.Errorf("Core", "Failed to reload config: %v", err)
-				continue
-			}
+			core.Log.Infof("Core", "Config reload signal received. Applying configuration...")
+			// Read directly from in-memory config — it is already updated by the
+			// setter that published EventConfigReloaded.  Re-reading from disk
+			// (Load) would race with Save and could overwrite the new config.
 			newCfg := cfgManager.Get()
 			// TODO: Implement actual diffing and applying changes to tunnels.
 			// For now, a simple re-initialization of IP filter and rules.

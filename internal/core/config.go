@@ -225,10 +225,11 @@ type TunnelConfig struct {
 
 // DNSRouteConfig configures per-process DNS routing.
 type DNSRouteConfig struct {
-	// FallbackTunnelID is the tunnel used for system DNS (svchost.exe) queries.
-	// Empty means use direct (no tunnel).
-	FallbackTunnelID string `yaml:"tunnel_id,omitempty"`
-	// Servers are DNS server addresses for fallback queries.
+	// TunnelIDs are the tunnels used for DNS resolution.
+	// Queries are sent through all tunnels simultaneously, first response wins.
+	// Empty means DNS resolver is disabled.
+	TunnelIDs []string `yaml:"tunnel_ids,omitempty"`
+	// Servers are DNS server addresses for queries.
 	Servers []string `yaml:"servers,omitempty"`
 	// Cache configures DNS response caching.
 	Cache DNSCacheYAMLConfig `yaml:"cache,omitempty"`
@@ -292,6 +293,7 @@ type SubscriptionConfig struct {
 
 // Config is the top-level application configuration.
 type Config struct {
+	Version       int                           `yaml:"version,omitempty"`
 	Global        GlobalFilterConfig            `yaml:"global,omitempty"`
 	Tunnels       []TunnelConfig                `yaml:"tunnels"`
 	Subscriptions map[string]SubscriptionConfig `yaml:"subscriptions,omitempty"`
@@ -333,6 +335,7 @@ func (cm *ConfigManager) Load() error {
 			Log.Infof("Core", "Config %s not found, creating default config", cm.filePath)
 			cm.mu.Lock()
 			cm.config = defaultConfig()
+			cm.config.Version = CurrentConfigVersion
 			cm.mu.Unlock()
 			if saveErr := cm.Save(); saveErr != nil {
 				return fmt.Errorf("[Core] failed to create default config: %w", saveErr)
@@ -342,6 +345,30 @@ func (cm *ConfigManager) Load() error {
 		return fmt.Errorf("[Core] failed to read config %s: %w", cm.filePath, err)
 	}
 
+	// Step 1: Unmarshal into raw map for migration.
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("[Core] failed to parse config for migration: %w", err)
+	}
+
+	// Step 2: Apply pending migrations.
+	finalVersion, migrated, err := MigrateConfig(raw)
+	if err != nil {
+		return fmt.Errorf("[Core] config migration failed: %w", err)
+	}
+	if migrated {
+		Log.Infof("Core", "Config migrated to version %d", finalVersion)
+		// Re-marshal migrated map and persist to disk.
+		data, err = yaml.Marshal(raw)
+		if err != nil {
+			return fmt.Errorf("[Core] failed to marshal migrated config: %w", err)
+		}
+		if err := os.WriteFile(cm.filePath, data, 0644); err != nil {
+			Log.Warnf("Core", "Failed to persist migrated config: %v", err)
+		}
+	}
+
+	// Step 3: Unmarshal final data into Config struct.
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return fmt.Errorf("[Core] failed to parse config: %w", err)

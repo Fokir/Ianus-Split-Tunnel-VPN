@@ -26,8 +26,9 @@ type DNSResolverConfig struct {
 	// Servers are the upstream DNS servers to query through VPN.
 	Servers []netip.Addr
 
-	// TunnelID is the VPN tunnel to route primary DNS through.
-	TunnelID string
+	// TunnelIDs are the VPN tunnels to route DNS through simultaneously.
+	// Queries are sent through all tunnels in parallel, first response wins.
+	TunnelIDs []string
 
 	// Timeout per upstream DNS server (default 3s).
 	Timeout time.Duration
@@ -133,8 +134,8 @@ func (r *DNSResolver) Start(ctx context.Context) error {
 	go r.udpLoop(ctx)
 	go r.tcpLoop(ctx)
 
-	core.Log.Infof("DNS", "Resolver listening on %s (tunnel=%s, servers=%v, fallback_direct=%v)",
-		r.config.ListenAddr, r.config.TunnelID, r.config.Servers, r.config.FallbackDirect)
+	core.Log.Infof("DNS", "Resolver listening on %s (tunnels=%v, servers=%v, fallback_direct=%v)",
+		r.config.ListenAddr, r.config.TunnelIDs, r.config.Servers, r.config.FallbackDirect)
 	return nil
 }
 
@@ -201,10 +202,13 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 	name := extractDNSName(query)
 
 	// Domain-based routing: intercept before cache/forwarding.
-	// DNS forwarding always goes through the default VPN tunnel (tunnelID unchanged).
+	// DNS forwarding goes through all configured tunnels in parallel.
 	// Only the routeTunnelID (for DomainTable) reflects the domain rule's target.
-	tunnelID := r.config.TunnelID
-	routeTunnelID := tunnelID
+	tunnelIDs := r.config.TunnelIDs
+	routeTunnelID := ""
+	if len(tunnelIDs) > 0 {
+		routeTunnelID = tunnelIDs[0]
+	}
 	var domainResult DomainMatchResult
 	if dm := r.domainMatcher.Load(); dm != nil && name != "" {
 		domainResult = dm.Match(name)
@@ -241,13 +245,13 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 		}
 	}
 
-	// Forward DNS query through the default VPN tunnel.
-	resp, server, err := r.forwardUDP(ctx, tunnelID, query)
+	// Forward DNS query through all configured VPN tunnels in parallel.
+	resp, server, usedTunnel, err := r.forwardUDPAll(ctx, tunnelIDs, query)
 	if err == nil {
 		r.cacheStore(query, resp)
 		r.udpConn.WriteToUDP(resp, clientAddr)
 		if name != "" {
-			core.Log.Debugf("DNS", "%s → %s via %s (UDP, route=%s)", name, server, tunnelID, routeTunnelID)
+			core.Log.Debugf("DNS", "%s → %s via %s (UDP, route=%s)", name, server, usedTunnel, routeTunnelID)
 		}
 		if domainResult.Matched && r.domainTable != nil {
 			r.recordDomainIPs(resp, name, routeTunnelID, domainResult.Action)
@@ -268,7 +272,7 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 		}
 	}
 
-	core.Log.Warnf("DNS", "All servers failed for %s (UDP): %v", name, err)
+	core.Log.Warnf("DNS", "All tunnels/servers failed for %s (UDP): %v", name, err)
 	// Send SERVFAIL response.
 	if sf := makeServFail(query); sf != nil {
 		r.udpConn.WriteToUDP(sf, clientAddr)
@@ -326,6 +330,52 @@ func (r *DNSResolver) forwardUDP(ctx context.Context, tunnelID string, query []b
 	}
 
 	return nil, netip.Addr{}, fmt.Errorf("all %d servers unreachable via %s: %w", len(servers), tunnelID, lastErr)
+}
+
+// forwardUDPAll fans out DNS queries across multiple tunnels simultaneously.
+// Each tunnel independently fans out across all configured DNS servers.
+// Returns the first successful response.
+func (r *DNSResolver) forwardUDPAll(ctx context.Context, tunnelIDs []string, query []byte) ([]byte, netip.Addr, string, error) {
+	if len(tunnelIDs) == 0 {
+		return nil, netip.Addr{}, "", fmt.Errorf("no DNS tunnels configured")
+	}
+
+	// Single tunnel — no extra parallelism layer.
+	if len(tunnelIDs) == 1 {
+		resp, server, err := r.forwardUDP(ctx, tunnelIDs[0], query)
+		return resp, server, tunnelIDs[0], err
+	}
+
+	type result struct {
+		resp     []byte
+		server   netip.Addr
+		tunnelID string
+		err      error
+	}
+
+	fanCtx, fanCancel := context.WithCancel(ctx)
+	defer fanCancel()
+
+	ch := make(chan result, len(tunnelIDs))
+	for _, tid := range tunnelIDs {
+		go func(tunnelID string) {
+			resp, server, err := r.forwardUDP(fanCtx, tunnelID, query)
+			ch <- result{resp, server, tunnelID, err}
+		}(tid)
+	}
+
+	var lastErr error
+	for range tunnelIDs {
+		res := <-ch
+		if res.err != nil {
+			lastErr = res.err
+			continue
+		}
+		fanCancel() // cancel remaining tunnel goroutines
+		return res.resp, res.server, res.tunnelID, nil
+	}
+
+	return nil, netip.Addr{}, "", fmt.Errorf("all %d tunnels failed: %w", len(tunnelIDs), lastErr)
 }
 
 // forwardUDPSingle sends a DNS query to a single server via the given provider.
@@ -420,10 +470,13 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 	name := extractDNSName(query)
 
 	// Domain-based routing: intercept before cache/forwarding.
-	// DNS forwarding always goes through the default VPN tunnel (tunnelID unchanged).
+	// DNS forwarding goes through all configured tunnels in parallel.
 	// Only the routeTunnelID (for DomainTable) reflects the domain rule's target.
-	tunnelID := r.config.TunnelID
-	routeTunnelID := tunnelID
+	tunnelIDs := r.config.TunnelIDs
+	routeTunnelID := ""
+	if len(tunnelIDs) > 0 {
+		routeTunnelID = tunnelIDs[0]
+	}
 	var domainResult DomainMatchResult
 	if dm := r.domainMatcher.Load(); dm != nil && name != "" {
 		domainResult = dm.Match(name)
@@ -465,14 +518,15 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 		}
 	}
 
-	// Forward DNS query through the default VPN tunnel.
-	resp, server, err := r.forwardTCP(ctx, tunnelID, query)
+	// Forward DNS query through all configured VPN tunnels in parallel.
+	resp, server, usedTunnel, err := r.forwardTCPAll(ctx, tunnelIDs, query)
 	if err != nil && r.config.FallbackDirect {
 		resp, server, err = r.forwardTCP(ctx, DirectTunnelID, query)
+		usedTunnel = DirectTunnelID
 	}
 
 	if err != nil {
-		core.Log.Warnf("DNS", "All servers failed for %s (TCP): %v", name, err)
+		core.Log.Warnf("DNS", "All tunnels/servers failed for %s (TCP): %v", name, err)
 		resp = makeServFail(query)
 		if resp == nil {
 			return
@@ -480,7 +534,7 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 	} else {
 		r.cacheStore(query, resp)
 		if name != "" {
-			core.Log.Debugf("DNS", "%s → %s via %s (TCP, route=%s)", name, server, tunnelID, routeTunnelID)
+			core.Log.Debugf("DNS", "%s → %s via %s (TCP, route=%s)", name, server, usedTunnel, routeTunnelID)
 		}
 		if domainResult.Matched && r.domainTable != nil {
 			r.recordDomainIPs(resp, name, routeTunnelID, domainResult.Action)
@@ -545,6 +599,52 @@ func (r *DNSResolver) forwardTCP(ctx context.Context, tunnelID string, query []b
 	}
 
 	return nil, netip.Addr{}, fmt.Errorf("all %d servers unreachable via %s (TCP): %w", len(servers), tunnelID, lastErr)
+}
+
+// forwardTCPAll fans out DNS queries across multiple tunnels simultaneously via TCP.
+// Each tunnel independently fans out across all configured DNS servers.
+// Returns the first successful response.
+func (r *DNSResolver) forwardTCPAll(ctx context.Context, tunnelIDs []string, query []byte) ([]byte, netip.Addr, string, error) {
+	if len(tunnelIDs) == 0 {
+		return nil, netip.Addr{}, "", fmt.Errorf("no DNS tunnels configured")
+	}
+
+	// Single tunnel — no extra parallelism layer.
+	if len(tunnelIDs) == 1 {
+		resp, server, err := r.forwardTCP(ctx, tunnelIDs[0], query)
+		return resp, server, tunnelIDs[0], err
+	}
+
+	type result struct {
+		resp     []byte
+		server   netip.Addr
+		tunnelID string
+		err      error
+	}
+
+	fanCtx, fanCancel := context.WithCancel(ctx)
+	defer fanCancel()
+
+	ch := make(chan result, len(tunnelIDs))
+	for _, tid := range tunnelIDs {
+		go func(tunnelID string) {
+			resp, server, err := r.forwardTCP(fanCtx, tunnelID, query)
+			ch <- result{resp, server, tunnelID, err}
+		}(tid)
+	}
+
+	var lastErr error
+	for range tunnelIDs {
+		res := <-ch
+		if res.err != nil {
+			lastErr = res.err
+			continue
+		}
+		fanCancel() // cancel remaining tunnel goroutines
+		return res.resp, res.server, res.tunnelID, nil
+	}
+
+	return nil, netip.Addr{}, "", fmt.Errorf("all %d tunnels failed (TCP): %w", len(tunnelIDs), lastErr)
 }
 
 // forwardTCPSingle sends a DNS query to a single server via TCP through the given provider.
