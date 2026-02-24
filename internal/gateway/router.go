@@ -57,6 +57,11 @@ type TUNRouter struct {
 	// Domain-based routing: resolved IP→tunnel.
 	domainTable *DomainTable
 
+	// Server endpoint routing: VPN server IP → owning tunnel ID.
+	// Traffic to a server IP is routed through its tunnel (e.g. admin panels).
+	serverEPMu sync.RWMutex
+	serverEPs  map[[4]byte]string
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -85,6 +90,7 @@ func NewTUNRouter(
 		selfPID:   uint32(os.Getpid()),
 		rawFwders: make(map[string]provider.RawForwarder),
 		vpnIPs:    make(map[string][4]byte),
+		serverEPs: make(map[[4]byte]string),
 		done:      make(chan struct{}),
 	}
 }
@@ -92,6 +98,40 @@ func NewTUNRouter(
 // SetIPFilter atomically sets the IP/app filter. Safe for concurrent use.
 func (r *TUNRouter) SetIPFilter(filter *IPFilter) {
 	r.ipFilter.Store(filter)
+}
+
+// AddServerEndpoint registers a VPN server IP → tunnel mapping.
+// Traffic to this IP will be routed through the owning tunnel, allowing
+// access to server admin panels and services via the VPN tunnel.
+func (r *TUNRouter) AddServerEndpoint(ip netip.Addr, tunnelID string) {
+	if !ip.Is4() {
+		return
+	}
+	key := ip.As4()
+	r.serverEPMu.Lock()
+	r.serverEPs[key] = tunnelID
+	r.serverEPMu.Unlock()
+	core.Log.Infof("Router", "Server endpoint %s → tunnel %q", ip, tunnelID)
+}
+
+// RemoveServerEndpoint unregisters a VPN server IP mapping.
+func (r *TUNRouter) RemoveServerEndpoint(ip netip.Addr) {
+	if !ip.Is4() {
+		return
+	}
+	key := ip.As4()
+	r.serverEPMu.Lock()
+	delete(r.serverEPs, key)
+	r.serverEPMu.Unlock()
+	core.Log.Infof("Router", "Removed server endpoint: %s", ip)
+}
+
+// getServerEndpointTunnel returns the tunnel ID that owns the given server IP.
+func (r *TUNRouter) getServerEndpointTunnel(dstIP [4]byte) (string, bool) {
+	r.serverEPMu.RLock()
+	tid, ok := r.serverEPs[dstIP]
+	r.serverEPMu.RUnlock()
+	return tid, ok
 }
 
 // SetBytesReporter sets a callback invoked on every packet to report
@@ -663,6 +703,15 @@ func (r *TUNRouter) resolveICMPFlow(dstIP [4]byte) (tunnelID string, action flow
 		return "", flowDrop
 	}
 
+	// Server endpoint routing: route through the tunnel that owns this IP.
+	if epTunnelID, ok := r.getServerEndpointTunnel(dstIP); ok {
+		if entry, exists := r.registry.Get(epTunnelID); exists && entry.State == core.TunnelStateUp {
+			if _, _, ok := r.getRawForwarder(epTunnelID); ok {
+				return epTunnelID, flowRoute
+			}
+		}
+	}
+
 	// Domain-based routing (IP→tunnel from DNS resolution).
 	if r.domainTable != nil {
 		if dEntry, ok := r.domainTable.Lookup(dstIP); ok {
@@ -779,6 +828,26 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// Check global DisallowedApps — always bypass VPN.
 	if f != nil && f.IsDisallowedApp(exeLower, baseLower) {
 		return "", 0, flowPass, 0
+	}
+
+	// Server endpoint routing: if destination is a VPN server IP, route through
+	// that tunnel. This allows accessing server admin panels (e.g. :51821 WG UI)
+	// via the VPN tunnel. No loop because encrypted tunnel traffic uses bypass
+	// routes on the real NIC, and selfPID is already excluded above.
+	if epTunnelID, ok := r.getServerEndpointTunnel(dstIP); ok {
+		entry, exists := r.registry.Get(epTunnelID)
+		if exists && entry.State == core.TunnelStateUp {
+			if r.wfp != nil {
+				r.wfp.EnsureBlocked(exePath)
+			}
+			if isUDP {
+				if port, ok := r.registry.GetUDPProxyPort(epTunnelID); ok {
+					return epTunnelID, port, flowRoute, core.PriorityRealtime
+				}
+			}
+			return epTunnelID, entry.ProxyPort, flowRoute, core.PriorityRealtime
+		}
+		// Tunnel not up — fall through to normal rules.
 	}
 
 	// Match rules using pre-lowered strings with failover support.

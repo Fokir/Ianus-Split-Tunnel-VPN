@@ -16,6 +16,7 @@ import (
 	"awg-split-tunnel/internal/gateway"
 	"awg-split-tunnel/internal/provider"
 	"awg-split-tunnel/internal/provider/amneziawg"
+	"awg-split-tunnel/internal/provider/direct"
 	"awg-split-tunnel/internal/provider/httpproxy"
 	"awg-split-tunnel/internal/provider/socks5"
 	"awg-split-tunnel/internal/provider/vless"
@@ -88,7 +89,10 @@ func NewTunnelController(ctx context.Context, deps ControllerDeps, initialPort u
 		return p, ok
 	}
 
-	// Initialize the Direct tunnel.
+	// Initialize the Direct tunnel. Set registry state to Up directly
+	// (without ConnectTunnel) so DNS resolver fallback works immediately.
+	// ConnectTunnel has side effects (saveActiveTunnels) that would overwrite
+	// the active_tunnels config with only ["__direct__"] at this early stage.
 	directCfg := core.TunnelConfig{
 		ID:       gateway.DirectTunnelID,
 		Protocol: "direct",
@@ -96,6 +100,9 @@ func NewTunnelController(ctx context.Context, deps ControllerDeps, initialPort u
 	}
 	if err := tc.AddTunnel(ctx, directCfg, nil); err != nil {
 		core.Log.Errorf("Core", "Failed to add direct tunnel during controller init: %v", err)
+	} else {
+		// Direct provider is always ready — just mark it Up in the registry.
+		tc.deps.Registry.SetState(gateway.DirectTunnelID, core.TunnelStateUp, nil)
 	}
 
 	return tc
@@ -162,7 +169,7 @@ func (tc *TunnelControllerImpl) ConnectTunnel(ctx context.Context, tunnelID stri
 
 	tc.deps.Registry.SetState(tunnelID, core.TunnelStateUp, nil)
 	tc.registerRawForwarder(tunnelID, inst.provider)
-	tc.addBypassRoutes(inst.provider)
+	tc.addBypassRoutes(tunnelID, inst.provider)
 
 	// Mark tunnel as active in rule engine and persist.
 	if tc.deps.Rules != nil {
@@ -305,9 +312,15 @@ func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelCo
 	}
 
 	// Create provider.
-	prov, err := tc.createProvider(cfg)
-	if err != nil {
-		return err
+	var prov provider.TunnelProvider
+	if cfg.Protocol == "direct" {
+		prov = direct.New(tc.deps.RealNICIndex, tc.deps.RealNICLocalIP)
+	} else {
+		var err error
+		prov, err = tc.createProvider(cfg)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Register in registry.
@@ -342,8 +355,8 @@ func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelCo
 	}
 	tc.mu.Unlock()
 
-	// Persist new tunnel to config file (skip subscription-sourced tunnels).
-	if _, isSub := cfg.Settings["_subscription"]; !isSub {
+	// Persist new tunnel to config file (skip subscription-sourced and direct tunnels).
+	if _, isSub := cfg.Settings["_subscription"]; !isSub && cfg.Protocol != "direct" {
 		tc.persistTunnelConfig(cfg)
 	}
 
@@ -519,12 +532,23 @@ func (tc *TunnelControllerImpl) registerRawForwarder(tunnelID string, prov provi
 	}
 }
 
-func (tc *TunnelControllerImpl) addBypassRoutes(prov provider.TunnelProvider) {
+func (tc *TunnelControllerImpl) addBypassRoutes(tunnelID string, prov provider.TunnelProvider) {
 	if ep, ok := prov.(provider.EndpointProvider); ok {
 		for _, addr := range ep.GetServerEndpoints() {
-			if err := tc.deps.RouteMgr.AddBypassRoute(addr.Addr()); err != nil {
-				core.Log.Warnf("Core", "Failed to add bypass route for %s: %v", addr, err)
+			ip := addr.Addr()
+			if err := tc.deps.RouteMgr.AddBypassRoute(ip); err != nil {
+				core.Log.Warnf("Core", "Failed to add bypass route for %s: %v", ip, err)
 			}
+			// WFP permit: allow WFP-blocked processes (browsers) to reach
+			// server IPs via the bypass route. Without this, the /32 bypass
+			// route + per-process WFP BLOCK = ERR_NETWORK_ACCESS_DENIED.
+			prefix := netip.PrefixFrom(ip, 32)
+			if err := tc.deps.WFPMgr.AddBypassPrefixes([]netip.Prefix{prefix}); err != nil {
+				core.Log.Warnf("Core", "Failed to add WFP permit for %s: %v", ip, err)
+			}
+			// Register in TUN router as fallback: if traffic still reaches
+			// TUN, route through the owning tunnel.
+			tc.deps.TUNRouter.AddServerEndpoint(ip, tunnelID)
 		}
 	}
 }
@@ -649,6 +673,11 @@ func (tc *TunnelControllerImpl) persistTunnelConfig(tunnelCfg core.TunnelConfig)
 		return
 	}
 	cfg := tc.deps.Cfg.Get()
+	for _, existing := range cfg.Tunnels {
+		if existing.ID == tunnelCfg.ID {
+			return // already in config
+		}
+	}
 	cfg.Tunnels = append(cfg.Tunnels, tunnelCfg)
 	tc.deps.Cfg.SetFromGUI(cfg)
 	if err := tc.deps.Cfg.Save(); err != nil {
