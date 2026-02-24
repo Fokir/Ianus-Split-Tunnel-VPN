@@ -94,7 +94,9 @@ type XHTTPConfig struct {
 }
 
 // buildXrayJSON builds the xray-core JSON config from Config.
-func buildXrayJSON(cfg Config) ([]byte, error) {
+// socksPort is the local port for the socks5 inbound that routes traffic
+// through xray's outbound pipeline (same approach as V2RayN/V2RayA).
+func buildXrayJSON(cfg Config, socksPort int) ([]byte, error) {
 	if cfg.Encryption == "" {
 		cfg.Encryption = "none"
 	}
@@ -109,11 +111,7 @@ func buildXrayJSON(cfg Config) ([]byte, error) {
 		"id":         cfg.UUID,
 		"encryption": cfg.Encryption,
 	}
-	// xtls-rprx-vision flow only works with raw TCP transport.
-	// Non-TCP transports (xhttp, ws, grpc) frame data in HTTP/gRPC,
-	// which breaks vision's TLS-in-TLS detection causing PR_END_OF_FILE_ERROR.
-	// Standard VLESS clients (v2rayN, nekoray) also strip flow for non-TCP.
-	if cfg.Flow != "" && cfg.Network == "tcp" {
+	if cfg.Flow != "" {
 		user["flow"] = cfg.Flow
 	}
 
@@ -188,17 +186,19 @@ func buildXrayJSON(cfg Config) ([]byte, error) {
 		if cfg.XHTTP.Host != "" {
 			xhttpSettings["host"] = cfg.XHTTP.Host
 		}
-		// Force "packet-up" mode for maximum server compatibility.
-		// When mode is "auto" with REALITY, xray selects "stream-one" which
-		// requires bidirectional HTTP/2 streaming support on the server.
-		// Many servers don't support this, causing empty response bodies.
-		// "packet-up" uses separate GET (download) + POST (upload) which
-		// works universally with all XHTTP server implementations.
-		mode := cfg.XHTTP.Mode
-		if mode == "" || mode == "auto" {
-			mode = "packet-up"
+		// Let xray choose the mode ("auto" → server-negotiated).
+		// Previously we forced "packet-up" but both packet-up and stream-one
+		// return 0 bytes, suggesting a server-side or protocol-level issue.
+		if cfg.XHTTP.Mode != "" {
+			xhttpSettings["mode"] = cfg.XHTTP.Mode
 		}
-		xhttpSettings["mode"] = mode
+		// Disable XMUX multiplexing for maximum compatibility with older servers.
+		xhttpSettings["xmux"] = map[string]any{
+			"maxConcurrency": 1,
+			"maxConnections":  0,
+			"cMaxReuseTimes":  0,
+			"hMaxRequestTimes": 0,
+		}
 		for k, v := range cfg.XHTTP.Extra {
 			xhttpSettings[k] = v
 		}
@@ -226,7 +226,19 @@ func buildXrayJSON(cfg Config) ([]byte, error) {
 
 	xrayConfig := map[string]any{
 		"log": map[string]any{
-			"loglevel": "debug",
+			"loglevel": "warning",
+		},
+		"inbounds": []map[string]any{
+			{
+				"tag":      "socks-in",
+				"port":     socksPort,
+				"protocol": "socks",
+				"settings": map[string]any{
+					"auth": "noauth",
+					"udp":  true,
+				},
+				"listen": "127.0.0.1",
+			},
 		},
 		"outbounds": []map[string]any{
 			tcpOutbound,
