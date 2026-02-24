@@ -748,11 +748,12 @@ func (x *GlobalFilterConfig) GetDisableLocal() bool {
 }
 
 type LogConfig struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Level         string                 `protobuf:"bytes,1,opt,name=level,proto3" json:"level,omitempty"`                                                                                     // "debug", "info", "warn", "error", "off"
-	Components    map[string]string      `protobuf:"bytes,2,rep,name=components,proto3" json:"components,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // per-component overrides
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Level              string                 `protobuf:"bytes,1,opt,name=level,proto3" json:"level,omitempty"`                                                                                     // "debug", "info", "warn", "error", "off"
+	Components         map[string]string      `protobuf:"bytes,2,rep,name=components,proto3" json:"components,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // per-component overrides
+	FileLoggingEnabled bool                   `protobuf:"varint,3,opt,name=file_logging_enabled,json=fileLoggingEnabled,proto3" json:"file_logging_enabled,omitempty"`                              // write logs to file (default: true)
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *LogConfig) Reset() {
@@ -797,6 +798,13 @@ func (x *LogConfig) GetComponents() map[string]string {
 		return x.Components
 	}
 	return nil
+}
+
+func (x *LogConfig) GetFileLoggingEnabled() bool {
+	if x != nil {
+		return x.FileLoggingEnabled
+	}
+	return false
 }
 
 type SubscriptionConfig struct {
@@ -3375,12 +3383,13 @@ const file_vpn_service_proto_rawDesc = "" +
 	"allowedIps\x12%\n" +
 	"\x0edisallowed_ips\x18\x02 \x03(\tR\rdisallowedIps\x12'\n" +
 	"\x0fdisallowed_apps\x18\x03 \x03(\tR\x0edisallowedApps\x12#\n" +
-	"\rdisable_local\x18\x04 \x01(\bR\fdisableLocal\"\xa7\x01\n" +
+	"\rdisable_local\x18\x04 \x01(\bR\fdisableLocal\"\xd9\x01\n" +
 	"\tLogConfig\x12\x14\n" +
 	"\x05level\x18\x01 \x01(\tR\x05level\x12E\n" +
 	"\n" +
 	"components\x18\x02 \x03(\v2%.awg.vpn.v1.LogConfig.ComponentsEntryR\n" +
-	"components\x1a=\n" +
+	"components\x120\n" +
+	"\x14file_logging_enabled\x18\x03 \x01(\bR\x12fileLoggingEnabled\x1a=\n" +
 	"\x0fComponentsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9c\x01\n" +

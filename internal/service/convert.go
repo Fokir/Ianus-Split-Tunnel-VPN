@@ -200,8 +200,9 @@ func configToProto(c core.Config) *vpnapi.AppConfig {
 			},
 		},
 		Logging: &vpnapi.LogConfig{
-			Level:      c.Logging.Level,
-			Components: c.Logging.Components,
+			Level:              c.Logging.Level,
+			Components:         c.Logging.Components,
+			FileLoggingEnabled: c.Logging.FileEnabled != nil && *c.Logging.FileEnabled,
 		},
 	}
 }
@@ -248,9 +249,11 @@ func configFromProto(pc *vpnapi.AppConfig) core.Config {
 	}
 
 	if pc.Logging != nil {
+		fileEnabled := pc.Logging.FileLoggingEnabled
 		cfg.Logging = core.LogConfig{
-			Level:      pc.Logging.Level,
-			Components: pc.Logging.Components,
+			Level:       pc.Logging.Level,
+			Components:  pc.Logging.Components,
+			FileEnabled: &fileEnabled,
 		}
 	}
 

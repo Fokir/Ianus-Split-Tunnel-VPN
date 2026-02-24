@@ -106,6 +106,7 @@ message GlobalFilterConfig {
 message LogConfig {
   string level = 1;           // "debug", "info", "warn", "error", "off"
   map<string, string> components = 2;  // per-component overrides
+  bool file_logging_enabled = 3;      // write logs to file (default: true)
 }
 
 // ─── Subscription config ───────────────────────────────────────────

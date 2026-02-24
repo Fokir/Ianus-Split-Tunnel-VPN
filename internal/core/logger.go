@@ -27,8 +27,9 @@ const (
 
 // LogConfig holds logging configuration from YAML.
 type LogConfig struct {
-	Level      string            `yaml:"level,omitempty"`
-	Components map[string]string `yaml:"components,omitempty"`
+	Level       string            `yaml:"level,omitempty"`
+	Components  map[string]string `yaml:"components,omitempty"`
+	FileEnabled *bool             `yaml:"file_enabled,omitempty"` // write logs to file (nil = true)
 }
 
 // LogHook is a callback invoked for every log message that passes level filtering.
@@ -73,10 +74,12 @@ func NewLogger(cfg LogConfig) *Logger {
 		l.components[strings.ToLower(name)] = ParseLevel(level)
 	}
 
-	// Set up file logging next to the executable.
-	if f := openLogFile(); f != nil {
-		l.logFile = f
-		log.SetOutput(io.MultiWriter(os.Stderr, f))
+	// Set up file logging next to the executable (disabled by default).
+	if cfg.FileEnabled != nil && *cfg.FileEnabled {
+		if f := openLogFile(); f != nil {
+			l.logFile = f
+			log.SetOutput(io.MultiWriter(os.Stderr, f))
+		}
 	}
 
 	return l

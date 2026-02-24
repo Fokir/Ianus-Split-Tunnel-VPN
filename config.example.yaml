@@ -111,6 +111,7 @@ dns:
 # Fatalf always prints regardless of level.
 logging:
   level: info
+  file_enabled: false  # Write logs to logs/ directory (default: false)
   # Per-component overrides (lowercase component name):
   #   core, gateway, route, wfp, dns, proxy, rule, awg, direct
   # components:
