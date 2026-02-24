@@ -72,6 +72,9 @@ type TunnelControllerImpl struct {
 
 	// For proxy provider lookups.
 	providerLookup func(tunnelID string) (provider.TunnelProvider, bool)
+
+	// Connection-level fallback dialer shared by all proxies.
+	fallbackDialer *proxy.FallbackDialer
 }
 
 // NewTunnelController creates a new TunnelControllerImpl.
@@ -88,6 +91,12 @@ func NewTunnelController(ctx context.Context, deps ControllerDeps, initialPort u
 		p, ok := deps.Providers[tunnelID]
 		return p, ok
 	}
+
+	// Create connection-level fallback dialer for all proxies.
+	tc.fallbackDialer = proxy.NewFallbackDialer(
+		proxy.ProviderLookup(tc.providerLookup),
+		deps.Rules,
+	)
 
 	// Initialize the Direct tunnel. Set registry state to Up directly
 	// (without ConnectTunnel) so DNS resolver fallback works immediately.
@@ -333,12 +342,12 @@ func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelCo
 	tc.deps.Flows.RegisterUDPProxyPort(udpProxyPort)
 
 	// Start proxies.
-	tp := proxy.NewTunnelProxy(proxyPort, tc.deps.Flows.LookupNAT, tc.providerLookup)
+	tp := proxy.NewTunnelProxy(proxyPort, tc.deps.Flows.LookupNAT, tc.providerLookup, tc.fallbackDialer)
 	if err := tp.Start(tc.deps.Context); err != nil {
 		return fmt.Errorf("start TCP proxy for %q: %w", cfg.ID, err)
 	}
 
-	up := proxy.NewUDPProxy(udpProxyPort, tc.deps.Flows.LookupUDPNAT, tc.providerLookup)
+	up := proxy.NewUDPProxy(udpProxyPort, tc.deps.Flows.LookupUDPNAT, tc.providerLookup, tc.fallbackDialer)
 	if err := up.Start(tc.deps.Context); err != nil {
 		tp.Stop()
 		return fmt.Errorf("start UDP proxy for %q: %w", cfg.ID, err)

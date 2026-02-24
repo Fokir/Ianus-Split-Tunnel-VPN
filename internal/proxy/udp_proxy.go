@@ -35,9 +35,9 @@ func makeUDPSessionKey(addr *net.UDPAddr) udpSessionKey {
 	return k
 }
 
-// UDPNATLookup resolves a hairpinned client address to its original destination
-// and tunnel ID via the UDP NAT table.
-type UDPNATLookup func(addrKey string) (originalDst string, tunnelID string, ok bool)
+// UDPNATLookup resolves a hairpinned client address to its original destination,
+// tunnel ID, and fallback context via the UDP NAT table.
+type UDPNATLookup func(addrKey string) (core.NATInfo, bool)
 
 // UDPSession tracks a single client-to-tunnel UDP association.
 type UDPSession struct {
@@ -55,6 +55,7 @@ type UDPProxy struct {
 	conn           *net.UDPConn
 	natLookup      UDPNATLookup
 	providerLookup ProviderLookup
+	fallback       *FallbackDialer
 
 	sessionsMu sync.RWMutex
 	sessions   map[udpSessionKey]*UDPSession
@@ -73,11 +74,13 @@ func (up *UDPProxy) Port() uint16 {
 }
 
 // NewUDPProxy creates a UDP proxy that listens on the given port.
-func NewUDPProxy(port uint16, natLookup UDPNATLookup, providerLookup ProviderLookup) *UDPProxy {
+// If fallback is non-nil, connection-level fallback is enabled for UDP sessions.
+func NewUDPProxy(port uint16, natLookup UDPNATLookup, providerLookup ProviderLookup, fallback *FallbackDialer) *UDPProxy {
 	return &UDPProxy{
 		port:           port,
 		natLookup:      natLookup,
 		providerLookup: providerLookup,
+		fallback:       fallback,
 		sessions:       make(map[udpSessionKey]*UDPSession),
 	}
 }
@@ -173,21 +176,29 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 
 	// Slow path: create new session (string allocation acceptable here).
 	addrStr := clientAddr.String()
-	originalDst, tunnelID, ok := up.natLookup(addrStr)
+	info, ok := up.natLookup(addrStr)
 	if !ok {
 		core.Log.Warnf("Proxy", "UDP no NAT entry for %s, dropping", addrStr)
 		return
 	}
 
-	prov, ok := up.providerLookup(tunnelID)
-	if !ok {
-		core.Log.Errorf("Proxy", "UDP no provider for tunnel %q, dropping", tunnelID)
-		return
+	// Dial through the tunnel, with connection-level fallback if available.
+	var tunnelConn net.Conn
+	var err error
+
+	if up.fallback != nil {
+		tunnelConn, _, err = up.fallback.DialUDPWithFallback(ctx, info)
+	} else {
+		prov, provOK := up.providerLookup(info.TunnelID)
+		if !provOK {
+			core.Log.Errorf("Proxy", "UDP no provider for tunnel %q, dropping", info.TunnelID)
+			return
+		}
+		tunnelConn, err = prov.DialUDP(ctx, info.OriginalDst)
 	}
 
-	tunnelConn, err := prov.DialUDP(ctx, originalDst)
 	if err != nil {
-		core.Log.Errorf("Proxy", "UDP failed to dial %s via %s: %v", originalDst, tunnelID, err)
+		core.Log.Errorf("Proxy", "UDP failed to dial %s via %s: %v", info.OriginalDst, info.TunnelID, err)
 		return
 	}
 

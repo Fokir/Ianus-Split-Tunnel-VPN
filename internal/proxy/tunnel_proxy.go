@@ -28,9 +28,9 @@ var fwdBufPool = sync.Pool{
 }
 
 // NATLookup is a function that resolves a client connection to its original
-// destination and tunnel ID via the NAT table.
+// destination, tunnel ID, and fallback context via the NAT table.
 // addrKey is the string form of the remote address (e.g. "1.2.3.4:5678").
-type NATLookup func(addrKey string) (originalDst string, tunnelID string, ok bool)
+type NATLookup func(addrKey string) (core.NATInfo, bool)
 
 // ProviderLookup is a function that returns the TunnelProvider for a given tunnel ID.
 type ProviderLookup func(tunnelID string) (provider.TunnelProvider, bool)
@@ -43,6 +43,7 @@ type TunnelProxy struct {
 	listener       net.Listener
 	natLookup      NATLookup
 	providerLookup ProviderLookup
+	fallback       *FallbackDialer
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -57,11 +58,14 @@ func (tp *TunnelProxy) Port() uint16 {
 }
 
 // NewTunnelProxy creates a proxy that listens on the given port.
-func NewTunnelProxy(port uint16, natLookup NATLookup, providerLookup ProviderLookup) *TunnelProxy {
+// If fallback is non-nil, connection-level fallback is enabled: failed dials
+// are retried through alternative tunnels according to the rule's fallback policy.
+func NewTunnelProxy(port uint16, natLookup NATLookup, providerLookup ProviderLookup, fallback *FallbackDialer) *TunnelProxy {
 	return &TunnelProxy{
 		port:           port,
 		natLookup:      natLookup,
 		providerLookup: providerLookup,
+		fallback:       fallback,
 		conns:          make(map[net.Conn]struct{}),
 	}
 }
@@ -149,24 +153,30 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 	tp.trackConn(clientConn)
 	defer tp.untrackConn(clientConn)
 
-	// Look up original destination from NAT table.
-	originalDst, tunnelID, ok := tp.natLookup(clientConn.RemoteAddr().String())
+	// Look up original destination and fallback context from NAT table.
+	info, ok := tp.natLookup(clientConn.RemoteAddr().String())
 	if !ok {
 		core.Log.Warnf("Proxy", "No NAT entry for %s, closing", clientConn.RemoteAddr())
 		return
 	}
 
-	// Get the tunnel provider.
-	prov, ok := tp.providerLookup(tunnelID)
-	if !ok {
-		core.Log.Errorf("Proxy", "No provider for tunnel %q, closing", tunnelID)
-		return
+	// Dial through the tunnel, with connection-level fallback if available.
+	var remoteConn net.Conn
+	var err error
+
+	if tp.fallback != nil {
+		remoteConn, _, err = tp.fallback.DialTCPWithFallback(ctx, info)
+	} else {
+		prov, provOK := tp.providerLookup(info.TunnelID)
+		if !provOK {
+			core.Log.Errorf("Proxy", "No provider for tunnel %q, closing", info.TunnelID)
+			return
+		}
+		remoteConn, err = prov.DialTCP(ctx, info.OriginalDst)
 	}
 
-	// Dial through the tunnel.
-	remoteConn, err := prov.DialTCP(ctx, originalDst)
 	if err != nil {
-		core.Log.Errorf("Proxy", "Failed to dial %s via %s: %v", originalDst, tunnelID, err)
+		core.Log.Errorf("Proxy", "Failed to dial %s via %s: %v", info.OriginalDst, info.TunnelID, err)
 		return
 	}
 	defer remoteConn.Close()
@@ -181,11 +191,40 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 	tp.trackConn(remoteConn)
 	defer tp.untrackConn(remoteConn)
 
+	// Early EOF detection: after a successful dial, the server may still block
+	// the connection once it sees the destination (e.g. VLESS/Xray blackhole).
+	// DetectEarlyEOF buffers the client's initial data, sends it, and checks
+	// if the tunnel responds or immediately closes (0 bytes + EOF).
+	if tp.fallback != nil {
+		result := tp.fallback.DetectEarlyEOF(ctx, clientConn, remoteConn, info)
+		if result.Failed {
+			return
+		}
+		if result.RemoteConn != remoteConn {
+			// Fallback produced a new connection — swap it in.
+			// The old remoteConn is already closed by DetectEarlyEOF.
+			remoteConn = result.RemoteConn
+			defer remoteConn.Close()
+
+			// Tune the new connection if it's a raw TCP conn.
+			if tc, ok := remoteConn.(*net.TCPConn); ok {
+				tc.SetNoDelay(true)
+				tc.SetReadBuffer(sockBufSize)
+				tc.SetWriteBuffer(sockBufSize)
+			}
+
+			tp.trackConn(remoteConn)
+			defer tp.untrackConn(remoteConn)
+		}
+		// If result.RemoteConn == remoteConn (possibly wrapped as prefixConn),
+		// the initial exchange already happened — proceed to forwarding.
+	}
+
 	// Bidirectional forwarding.
 	var fwg sync.WaitGroup
 	fwg.Add(2)
-	go forward(clientConn, remoteConn, "tunnel→client", originalDst, &fwg)
-	go forward(remoteConn, clientConn, "client→tunnel", originalDst, &fwg)
+	go forward(clientConn, remoteConn, "tunnel→client", info.OriginalDst, &fwg)
+	go forward(remoteConn, clientConn, "client→tunnel", info.OriginalDst, &fwg)
 	fwg.Wait()
 }
 

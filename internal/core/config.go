@@ -74,6 +74,18 @@ func (p FallbackPolicy) String() string {
 	}
 }
 
+// NATInfo carries NAT lookup results including fallback context for
+// connection-level fallback. Used by proxy layer to retry failed dials
+// through alternative tunnels according to the rule's fallback policy.
+type NATInfo struct {
+	OriginalDst string
+	TunnelID    string
+	Fallback    FallbackPolicy
+	ExeLower    string  // pre-lowered exe path for failover re-matching
+	BaseLower   string  // pre-lowered exe basename for failover re-matching
+	RuleIdx     int     // index of matched rule in RuleEngine, for failover chain
+}
+
 func ParseFallbackPolicy(s string) (FallbackPolicy, error) {
 	switch s {
 	case "allow_direct", "allow", "direct":

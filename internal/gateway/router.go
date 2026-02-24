@@ -359,7 +359,7 @@ func (r *TUNRouter) handleTCP(pkt []byte, m pktMeta) {
 }
 
 func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
-	tunnelID, proxyPort, action, rulePrio := r.resolveFlow(m.srcP, false, m.dstIP)
+	tunnelID, proxyPort, action, rulePrio, fb := r.resolveFlow(m.srcP, false, m.dstIP)
 
 	switch action {
 	case flowDrop:
@@ -400,13 +400,17 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 	}
 	dstIP := netip.AddrFrom4(m.dstIP)
 
-	// Create NAT entry.
+	// Create NAT entry with fallback context for connection-level fallback.
 	r.flows.InsertTCP(dstIP, m.srcP, &NATEntry{
 		LastActivity:    r.flows.NowSec(),
 		OriginalDstIP:   dstIP,
 		OriginalDstPort: m.dstP,
 		TunnelID:        tunnelID,
 		ProxyPort:       proxyPort,
+		Fallback:        fb.fallback,
+		ExeLower:        fb.exeLower,
+		BaseLower:       fb.baseLower,
+		RuleIdx:         fb.ruleIdx,
 	})
 
 	// Hairpin: swap IPs, rewrite dst port to proxy port.
@@ -553,7 +557,7 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	}
 
 	// Slow path: new UDP flow.
-	tunnelID, udpProxyPort, action, rulePrio := r.resolveFlow(m.srcP, true, m.dstIP)
+	tunnelID, udpProxyPort, action, rulePrio, fb := r.resolveFlow(m.srcP, true, m.dstIP)
 
 	// DNS routing: for matched processes, route DNS through the same tunnel.
 	// For unmatched processes (flowPass), DNS goes to DirectTunnelID — the local
@@ -604,13 +608,17 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 		return
 	}
 
-	// Create NAT entry.
+	// Create NAT entry with fallback context for connection-level fallback.
 	r.flows.InsertUDP(dstIP, m.srcP, &UDPNATEntry{
 		LastActivity:    r.flows.NowSec(),
 		OriginalDstIP:   dstIP,
 		OriginalDstPort: m.dstP,
 		TunnelID:        tunnelID,
 		UDPProxyPort:    udpProxyPort,
+		Fallback:        fb.fallback,
+		ExeLower:        fb.exeLower,
+		BaseLower:       fb.baseLower,
+		RuleIdx:         fb.ruleIdx,
 	})
 
 	// Hairpin.
@@ -773,7 +781,16 @@ const (
 	flowDrop                    // drop the packet
 )
 
-func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunnelID string, proxyPort uint16, action flowAction, rulePrio core.RulePriority) {
+// flowFallbackInfo carries context needed for connection-level fallback
+// in the proxy layer. Populated only for flowRoute results from process rules.
+type flowFallbackInfo struct {
+	fallback  core.FallbackPolicy
+	exeLower  string
+	baseLower string
+	ruleIdx   int
+}
+
+func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunnelID string, proxyPort uint16, action flowAction, rulePrio core.RulePriority, fb flowFallbackInfo) {
 	f := r.ipFilter.Load() // may be nil
 
 	// Early drop: if a local/private IP reached TUN, there is no direct route
@@ -781,7 +798,7 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// The __direct__ proxy (bound to the physical NIC via IP_UNICAST_IF) cannot
 	// deliver these packets either — drop them to avoid futile proxy timeouts.
 	if f != nil && f.IsLocalBypassIP(dstIP) {
-		return "", 0, flowDrop, 0
+		return "", 0, flowDrop, 0, fb
 	}
 
 	// Domain-based routing: IP→tunnel from DNS resolution.
@@ -790,17 +807,17 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 		if dEntry, ok := r.domainTable.Lookup(dstIP); ok {
 			switch dEntry.Action {
 			case core.DomainBlock:
-				return "", 0, flowDrop, 0
+				return "", 0, flowDrop, 0, fb
 			case core.DomainDirect:
-				return "", 0, flowPass, 0
+				return "", 0, flowPass, 0, fb
 			case core.DomainRoute:
 				if entry, ok := r.registry.Get(dEntry.TunnelID); ok && entry.State == core.TunnelStateUp {
 					if isUDP {
 						if port, ok := r.registry.GetUDPProxyPort(dEntry.TunnelID); ok {
-							return dEntry.TunnelID, port, flowRoute, core.PriorityAuto
+							return dEntry.TunnelID, port, flowRoute, core.PriorityAuto, fb
 						}
 					}
-					return dEntry.TunnelID, entry.ProxyPort, flowRoute, core.PriorityAuto
+					return dEntry.TunnelID, entry.ProxyPort, flowRoute, core.PriorityAuto, fb
 				}
 				// Tunnel down — fall through to process rules.
 			}
@@ -810,24 +827,24 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// Look up PID by source port.
 	pid, err := r.procID.FindPIDByPort(srcPort, isUDP)
 	if err != nil {
-		return "", 0, flowPass, 0
+		return "", 0, flowPass, 0, fb
 	}
 
 	// Self-process loop prevention: our own outbound traffic (e.g. direct proxy)
 	// must not re-enter the proxy path, or it creates an infinite loop.
 	if pid == r.selfPID {
-		return "", 0, flowDrop, 0
+		return "", 0, flowDrop, 0, fb
 	}
 
 	// Get exe path with pre-cached lowercase variants (zero alloc on cache hit).
 	exePath, exeLower, baseLower, ok := r.matcher.GetExePathLower(pid)
 	if !ok {
-		return "", 0, flowPass, 0
+		return "", 0, flowPass, 0, fb
 	}
 
 	// Check global DisallowedApps — always bypass VPN.
 	if f != nil && f.IsDisallowedApp(exeLower, baseLower) {
-		return "", 0, flowPass, 0
+		return "", 0, flowPass, 0, fb
 	}
 
 	// Server endpoint routing: if destination is a VPN server IP, route through
@@ -842,24 +859,23 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 			}
 			if isUDP {
 				if port, ok := r.registry.GetUDPProxyPort(epTunnelID); ok {
-					return epTunnelID, port, flowRoute, core.PriorityRealtime
+					return epTunnelID, port, flowRoute, core.PriorityRealtime, fb
 				}
 			}
-			return epTunnelID, entry.ProxyPort, flowRoute, core.PriorityRealtime
+			return epTunnelID, entry.ProxyPort, flowRoute, core.PriorityRealtime, fb
 		}
 		// Tunnel not up — fall through to normal rules.
 	}
 
-	// Match rules using pre-lowered strings with failover support.
-	// First attempt uses the fast MatchPreLowered; failover (cold path)
-	// switches to MatchPreLoweredFrom to resume from the next rule index.
-	result := r.rules.MatchPreLowered(exeLower, baseLower)
+	// Match rules using MatchPreLoweredFrom to get the rule index for
+	// connection-level fallback in the proxy layer.
+	result, currentRuleIdx := r.rules.MatchPreLoweredFrom(exeLower, baseLower, 0)
 	if !result.Matched {
-		return "", 0, flowPass, 0
+		return "", 0, flowPass, 0, fb
 	}
 
 	inFailover := false
-	matchIdx := 0 // only used after first failover
+	matchIdx := currentRuleIdx + 1
 
 	// Safety bound: at most len(rules) iterations to prevent infinite loops.
 	maxIter := len(r.rules.GetRules())
@@ -871,19 +887,20 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 			result, idx = r.rules.MatchPreLoweredFrom(exeLower, baseLower, matchIdx)
 			if !result.Matched {
 				// Failover exhausted — VPN-or-nothing: drop.
-				return "", 0, flowDrop, 0
+				return "", 0, flowDrop, 0, fb
 			}
+			currentRuleIdx = idx
 			matchIdx = idx + 1
 		}
 
 		// Drop policy always drops immediately.
 		if result.Fallback == core.PolicyDrop {
-			return "", 0, flowDrop, 0
+			return "", 0, flowDrop, 0, fb
 		}
 
 		// Check per-tunnel DisallowedApps.
 		if f != nil && f.IsTunnelDisallowedApp(result.TunnelID, exeLower, baseLower) {
-			return "", 0, flowPass, 0
+			return "", 0, flowPass, 0, fb
 		}
 
 		// Check tunnel availability.
@@ -893,27 +910,20 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 		if tunnelDown {
 			switch result.Fallback {
 			case core.PolicyFailover:
-				// Set up index for next iteration: if this is the first
-				// failover, we need the index of the current match.
-				if !inFailover {
-					// Find the current match index so we can resume after it.
-					_, idx := r.rules.MatchPreLoweredFrom(exeLower, baseLower, 0)
-					matchIdx = idx + 1
-					inFailover = true
-				}
+				inFailover = true
 				continue
 			case core.PolicyBlock:
-				return "", 0, flowDrop, 0
+				return "", 0, flowDrop, 0, fb
 			case core.PolicyAllowDirect:
-				return "", 0, flowPass, 0
+				return "", 0, flowPass, 0, fb
 			default:
-				return "", 0, flowPass, 0
+				return "", 0, flowPass, 0, fb
 			}
 		}
 
 		// Tunnel is up — check IP-based filtering (DisallowedIPs / AllowedIPs).
 		if f != nil && f.ShouldBypassIP(result.TunnelID, dstIP) {
-			return "", 0, flowPass, 0
+			return "", 0, flowPass, 0, fb
 		}
 
 		// Lazy WFP rule: block this process on real NIC.
@@ -925,19 +935,27 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 			}
 		}
 
+		// Populate fallback info for connection-level fallback in proxy layer.
+		fb = flowFallbackInfo{
+			fallback:  result.Fallback,
+			exeLower:  exeLower,
+			baseLower: baseLower,
+			ruleIdx:   currentRuleIdx,
+		}
+
 		if isUDP {
 			udpPort, ok := r.registry.GetUDPProxyPort(result.TunnelID)
 			if !ok {
-				return "", 0, flowPass, 0
+				return "", 0, flowPass, 0, fb
 			}
-			return result.TunnelID, udpPort, flowRoute, result.Priority
+			return result.TunnelID, udpPort, flowRoute, result.Priority, fb
 		}
 
-		return result.TunnelID, entry.ProxyPort, flowRoute, result.Priority
+		return result.TunnelID, entry.ProxyPort, flowRoute, result.Priority, fb
 	}
 
 	// Safety: loop bound reached — drop to be safe.
-	return "", 0, flowDrop, 0
+	return "", 0, flowDrop, 0, fb
 }
 
 // ---------------------------------------------------------------------------

@@ -37,6 +37,12 @@ type NATEntry struct {
 	TunnelID        string
 	ProxyPort       uint16
 	FinSeen         int32  // atomic; bitmask: 0x1=client FIN, 0x2=server FIN
+
+	// Connection-level fallback context (populated by resolveFlow).
+	Fallback  core.FallbackPolicy
+	ExeLower  string // pre-lowered exe path for failover re-matching
+	BaseLower string // pre-lowered exe basename
+	RuleIdx   int    // index of matched rule in RuleEngine
 }
 
 // UDPNATEntry maps a redirected UDP flow back to its original destination.
@@ -46,6 +52,12 @@ type UDPNATEntry struct {
 	OriginalDstPort uint16
 	TunnelID        string
 	UDPProxyPort    uint16
+
+	// Connection-level fallback context (populated by resolveFlow).
+	Fallback  core.FallbackPolicy
+	ExeLower  string
+	BaseLower string
+	RuleIdx   int
 }
 
 // ---------------------------------------------------------------------------
@@ -222,12 +234,12 @@ func (ft *FlowTable) DeleteTCP(dstIP netip.Addr, srcPort uint16) {
 	shard.mu.Unlock()
 }
 
-// LookupNAT returns the original destination for a NAT'd TCP connection.
+// LookupNAT returns the original destination and fallback context for a NAT'd TCP connection.
 // Compatible with proxy.NATLookup callback signature.
-func (ft *FlowTable) LookupNAT(addrKey string) (originalDst string, tunnelID string, ok bool) {
+func (ft *FlowTable) LookupNAT(addrKey string) (core.NATInfo, bool) {
 	ap, err := netip.ParseAddrPort(addrKey)
 	if err != nil {
-		return "", "", false
+		return core.NATInfo{}, false
 	}
 	nk := makeNATKey(ap.Addr(), ap.Port())
 	shard := &ft.tcp[natShardIndex(nk)]
@@ -236,11 +248,18 @@ func (ft *FlowTable) LookupNAT(addrKey string) (originalDst string, tunnelID str
 	entry, exists := shard.m[nk]
 	shard.mu.RUnlock()
 	if !exists || entry == nil {
-		return "", "", false
+		return core.NATInfo{}, false
 	}
 
 	dst := netip.AddrPortFrom(entry.OriginalDstIP, entry.OriginalDstPort)
-	return dst.String(), entry.TunnelID, true
+	return core.NATInfo{
+		OriginalDst: dst.String(),
+		TunnelID:    entry.TunnelID,
+		Fallback:    entry.Fallback,
+		ExeLower:    entry.ExeLower,
+		BaseLower:   entry.BaseLower,
+		RuleIdx:     entry.RuleIdx,
+	}, true
 }
 
 // ---------------------------------------------------------------------------
@@ -266,12 +285,12 @@ func (ft *FlowTable) GetUDP(dstIP netip.Addr, srcPort uint16) (*UDPNATEntry, boo
 	return entry, ok
 }
 
-// LookupUDPNAT returns the original destination for a NAT'd UDP flow.
+// LookupUDPNAT returns the original destination and fallback context for a NAT'd UDP flow.
 // Compatible with proxy.UDPNATLookup callback signature.
-func (ft *FlowTable) LookupUDPNAT(addrKey string) (originalDst string, tunnelID string, ok bool) {
+func (ft *FlowTable) LookupUDPNAT(addrKey string) (core.NATInfo, bool) {
 	ap, err := netip.ParseAddrPort(addrKey)
 	if err != nil {
-		return "", "", false
+		return core.NATInfo{}, false
 	}
 	nk := makeNATKey(ap.Addr(), ap.Port())
 	shard := &ft.udp[natShardIndex(nk)]
@@ -280,11 +299,18 @@ func (ft *FlowTable) LookupUDPNAT(addrKey string) (originalDst string, tunnelID 
 	entry, exists := shard.m[nk]
 	shard.mu.RUnlock()
 	if !exists {
-		return "", "", false
+		return core.NATInfo{}, false
 	}
 
 	dst := netip.AddrPortFrom(entry.OriginalDstIP, entry.OriginalDstPort)
-	return dst.String(), entry.TunnelID, true
+	return core.NATInfo{
+		OriginalDst: dst.String(),
+		TunnelID:    entry.TunnelID,
+		Fallback:    entry.Fallback,
+		ExeLower:    entry.ExeLower,
+		BaseLower:   entry.BaseLower,
+		RuleIdx:     entry.RuleIdx,
+	}, true
 }
 
 // ---------------------------------------------------------------------------
