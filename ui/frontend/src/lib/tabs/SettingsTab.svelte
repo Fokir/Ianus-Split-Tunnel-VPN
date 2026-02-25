@@ -1,9 +1,13 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import * as api from '../api.js';
   import { sortTunnels } from '../utils.js';
   import ErrorAlert from '../ErrorAlert.svelte';
   import { t, locale, availableLocales } from '../i18n';
+  import { tabDirty } from '../stores/dirty.js';
+
+  $: $tabDirty = dirty;
+  onDestroy(() => tabDirty.set(false));
 
   let config = null;
   let autostart = null;
@@ -135,28 +139,27 @@
   }
 </script>
 
-<div class="p-4 space-y-6">
-  <div class="flex items-center justify-between">
-    <h2 class="text-lg font-semibold text-zinc-100">{$t('settings.title')}</h2>
-    {#if dirty}
-      <div class="flex items-center gap-2">
-        <button
-          class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
-          on:click={cancel}
-          disabled={saving}
-        >
-          {$t('settings.cancel')}
-        </button>
-        <button
-          class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40"
-          on:click={save}
-          disabled={saving}
-        >
-          {saving ? $t('settings.saving') : $t('settings.save')}
-        </button>
-      </div>
-    {/if}
+{#if dirty}
+  <div class="sticky top-0 z-10 flex justify-end gap-2 py-2 px-4 bg-zinc-900/95 backdrop-blur-sm border-b border-zinc-700/40">
+    <button
+      class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+      on:click={cancel}
+      disabled={saving}
+    >
+      {$t('settings.cancel')}
+    </button>
+    <button
+      class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40"
+      on:click={save}
+      disabled={saving}
+    >
+      {saving ? $t('settings.saving') : $t('settings.save')}
+    </button>
   </div>
+{/if}
+
+<div class="p-4 space-y-6">
+  <h2 class="text-lg font-semibold text-zinc-100">{$t('settings.title')}</h2>
 
   {#if error}
     <ErrorAlert message={error} />

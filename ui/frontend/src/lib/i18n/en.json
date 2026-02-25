@@ -309,7 +309,11 @@
     "save": "Save",
     "add": "Add",
     "close": "Close",
-    "loading": "Loading..."
+    "loading": "Loading...",
+    "unsavedChanges": "Unsaved changes",
+    "unsavedChangesMessage": "You have unsaved changes. Are you sure you want to leave without saving?",
+    "discard": "Discard",
+    "stay": "Stay"
   },
   "time": {
     "h": "h",

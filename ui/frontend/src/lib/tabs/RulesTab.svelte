@@ -1,10 +1,14 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import * as api from '../api.js';
   import { sortTunnels } from '../utils.js';
   import ErrorAlert from '../ErrorAlert.svelte';
   import ProcessPicker from '../ProcessPicker.svelte';
   import { t } from '../i18n';
+  import { tabDirty } from '../stores/dirty.js';
+
+  $: $tabDirty = dirty || ipsDirty || appsDirty;
+  onDestroy(() => tabDirty.set(false));
 
   let rules = [];
   let tunnels = [];
@@ -484,25 +488,59 @@
   }
 </script>
 
+<!-- ─── Sticky save bar ──────────────────────────────────────────── -->
+{#if dirty || ipsDirty || appsDirty}
+  <div class="sticky top-0 z-10 flex justify-end gap-2 py-2 px-4 bg-zinc-900/95 backdrop-blur-sm border-b border-zinc-700/40">
+    {#if dirty}
+      <button
+        class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+        on:click={cancel}
+      >
+        {$t('rules.cancel')}
+      </button>
+      <button
+        class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+        on:click={save}
+      >
+        {$t('rules.save')}
+      </button>
+    {/if}
+    {#if ipsDirty}
+      <button
+        class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+        on:click={cancelIps}
+      >
+        {$t('rules.cancel')} (IP)
+      </button>
+      <button
+        class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+        on:click={saveIps}
+      >
+        {$t('rules.save')} (IP)
+      </button>
+    {/if}
+    {#if appsDirty}
+      <button
+        class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+        on:click={cancelApps}
+      >
+        {$t('rules.cancel')} (Apps)
+      </button>
+      <button
+        class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+        on:click={saveApps}
+      >
+        {$t('rules.save')} (Apps)
+      </button>
+    {/if}
+  </div>
+{/if}
+
 <!-- ─── Routing Rules Header ─────────────────────────────────────── -->
 <div class="p-4 space-y-4">
   <div class="flex items-center justify-between">
     <h2 class="text-lg font-semibold text-zinc-100">{$t('rules.title')}</h2>
     <div class="flex items-center gap-2">
-      {#if dirty}
-        <button
-          class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
-          on:click={cancel}
-        >
-          {$t('rules.cancel')}
-        </button>
-        <button
-          class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors"
-          on:click={save}
-        >
-          {$t('rules.save')}
-        </button>
-      {/if}
       <button
         class="px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 transition-colors"
         on:click={openQuickWizard}
@@ -641,28 +679,12 @@
         <h2 class="text-lg font-semibold text-zinc-100">{$t('rules.ipExclusions')}</h2>
         <p class="text-xs text-zinc-500 mt-0.5">{$t('rules.ipExclusionsHint')}</p>
       </div>
-      <div class="flex items-center gap-2">
-        {#if ipsDirty}
-          <button
-            class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
-            on:click={cancelIps}
-          >
-            {$t('rules.cancel')}
-          </button>
-          <button
-            class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors"
-            on:click={saveIps}
-          >
-            {$t('rules.save')}
-          </button>
-        {/if}
-        <button
-          class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
-          on:click={addDisallowedIp}
-        >
-          {$t('rules.addBtn')}
-        </button>
-      </div>
+      <button
+        class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
+        on:click={addDisallowedIp}
+      >
+        {$t('rules.addBtn')}
+      </button>
     </div>
 
     {#if ipsError}
@@ -721,28 +743,12 @@
         <h2 class="text-lg font-semibold text-zinc-100">{$t('rules.appExclusions')}</h2>
         <p class="text-xs text-zinc-500 mt-0.5">{$t('rules.appExclusionsHint')}</p>
       </div>
-      <div class="flex items-center gap-2">
-        {#if appsDirty}
-          <button
-            class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
-            on:click={cancelApps}
-          >
-            {$t('rules.cancel')}
-          </button>
-          <button
-            class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors"
-            on:click={saveApps}
-          >
-            {$t('rules.save')}
-          </button>
-        {/if}
-        <button
-          class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
-          on:click={addDisallowedApp}
-        >
-          {$t('rules.addBtn')}
-        </button>
-      </div>
+      <button
+        class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
+        on:click={addDisallowedApp}
+      >
+        {$t('rules.addBtn')}
+      </button>
     </div>
 
     {#if appsError}

@@ -12,6 +12,7 @@
   import StatusBar from './lib/StatusBar.svelte';
   import TitleBar from './lib/TitleBar.svelte';
   import { t } from './lib/i18n';
+  import { tabDirty } from './lib/stores/dirty.js';
 
   const tabDefs = [
     { id: 'connections',    key: 'tabs.connections', icon: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z' },
@@ -24,16 +25,42 @@
   ];
 
   let activeTab = 'connections';
+  let pendingTab = null;
+  let showUnsavedModal = false;
+
+  function switchTab(tabId) {
+    if (tabId === activeTab) return;
+    if ($tabDirty) {
+      pendingTab = tabId;
+      showUnsavedModal = true;
+    } else {
+      activeTab = tabId;
+    }
+  }
+
+  function confirmDiscard() {
+    showUnsavedModal = false;
+    tabDirty.set(false);
+    activeTab = pendingTab;
+    pendingTab = null;
+  }
+
+  function cancelDiscard() {
+    showUnsavedModal = false;
+    pendingTab = null;
+  }
 
   function handleNavigate(event) {
     const path = event.data;
-    if (path === '/settings') activeTab = 'settings';
-    else if (path === '/subscriptions') activeTab = 'subscriptions';
-    else if (path === '/rules') activeTab = 'rules';
-    else if (path === '/domains') activeTab = 'domains';
-    else if (path === '/logs') activeTab = 'logs';
-    else if (path === '/about') activeTab = 'about';
-    else activeTab = 'connections';
+    let target;
+    if (path === '/settings') target = 'settings';
+    else if (path === '/subscriptions') target = 'subscriptions';
+    else if (path === '/rules') target = 'rules';
+    else if (path === '/domains') target = 'domains';
+    else if (path === '/logs') target = 'logs';
+    else if (path === '/about') target = 'about';
+    else target = 'connections';
+    switchTab(target);
   }
 
   onMount(() => {
@@ -63,7 +90,7 @@
                {activeTab === tab.id
                  ? 'text-blue-400'
                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'}"
-        on:click={() => activeTab = tab.id}
+        on:click={() => switchTab(tab.id)}
       >
         <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
           <path d={tab.icon}/>
@@ -97,4 +124,35 @@
 
   <!-- Status bar -->
   <StatusBar />
+
+  <!-- Unsaved changes confirmation modal -->
+  {#if showUnsavedModal}
+    <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+    <div
+      class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
+      on:click|self={cancelDiscard}
+      on:keydown={e => e.key === 'Escape' && cancelDiscard()}
+      role="dialog"
+      tabindex="-1"
+    >
+      <div class="bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-sm mx-4 p-5 space-y-4">
+        <h3 class="text-base font-semibold text-zinc-100">{$t('common.unsavedChanges')}</h3>
+        <p class="text-sm text-zinc-400">{$t('common.unsavedChangesMessage')}</p>
+        <div class="flex justify-end gap-2 pt-2">
+          <button
+            class="px-4 py-2 text-sm rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
+            on:click={cancelDiscard}
+          >
+            {$t('common.stay')}
+          </button>
+          <button
+            class="px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors"
+            on:click={confirmDiscard}
+          >
+            {$t('common.discard')}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
