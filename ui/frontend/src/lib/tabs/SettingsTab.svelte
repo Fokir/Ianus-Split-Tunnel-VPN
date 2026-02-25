@@ -145,11 +145,15 @@
     flushing = true;
     flushSuccess = false;
     try {
+      if (typeof api.flushDNS !== 'function') {
+        throw new Error('flushDNS binding is not available');
+      }
       await api.flushDNS();
       flushSuccess = true;
       setTimeout(() => flushSuccess = false, 3000);
     } catch (e) {
-      error = e.message || 'Failed to flush DNS';
+      console.error('[Settings] FlushDNS error:', e);
+      error = (e && e.message) ? e.message : String(e || 'Failed to flush DNS');
     } finally {
       flushing = false;
     }

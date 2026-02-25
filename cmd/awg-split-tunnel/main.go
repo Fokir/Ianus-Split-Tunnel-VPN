@@ -188,10 +188,11 @@ func runVPN(configPath string) error {
 	// === 8. Direct Provider + proxies ===
 	var nextProxyPort uint16 = 30000
 
-
+	// NIC-bound HTTP client — created early so subscriptions can use it too.
+	nicHTTPClient := gateway.NewNICBoundHTTPClient(realNIC.Index, realNIC.LocalIP)
 
 	// === 8a. Subscriptions: fetch and merge into tunnel list ===
-	subMgr := core.NewSubscriptionManager(cfgManager, bus, nil, vless.ParseURIToTunnelConfig)
+	subMgr := core.NewSubscriptionManager(cfgManager, bus, nicHTTPClient, vless.ParseURIToTunnelConfig)
 	if len(cfg.Subscriptions) > 0 {
 		subTunnels, err := subMgr.RefreshAll(ctx)
 		if err != nil {
@@ -275,7 +276,6 @@ func runVPN(configPath string) error {
 	// === 11c. Domain-based routing ===
 	geositeFilePath := resolveRelativeToExe("geosite.dat")
 	geoipFilePath := resolveRelativeToExe("geoip.dat")
-	nicHTTPClient := gateway.NewNICBoundHTTPClient(realNIC.Index, realNIC.LocalIP)
 	domainTable := gateway.NewDomainTable()
 	domainTable.StartCleanup(ctx)
 	domainMatcher := buildDomainMatcher(cfg.DomainRules, geositeFilePath, nicHTTPClient)
