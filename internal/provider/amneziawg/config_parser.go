@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"strings"
@@ -26,6 +27,22 @@ type ParsedConfig struct {
 	PeerEndpoints []netip.AddrPort
 }
 
+// peerAccumulator buffers UAPI lines for a single [Peer] section
+// so that public_key is always emitted first (required by UAPI protocol).
+type peerAccumulator struct {
+	publicKey string
+	lines     []string
+}
+
+func (pa *peerAccumulator) flush(uapi *strings.Builder) {
+	if pa.publicKey != "" {
+		fmt.Fprintf(uapi, "public_key=%s\n", pa.publicKey)
+	}
+	for _, line := range pa.lines {
+		fmt.Fprint(uapi, line)
+	}
+}
+
 // ParseConfigFile reads an AmneziaWG .conf file and produces a ParsedConfig.
 // Interface Address, DNS, and MTU are extracted for netstack.
 // All other fields are converted to UAPI key=value format.
@@ -40,6 +57,14 @@ func ParseConfigFile(path string) (*ParsedConfig, error) {
 	var uapi strings.Builder
 	section := ""
 	peerSeen := false
+	var currentPeer *peerAccumulator
+
+	flushPeer := func() {
+		if currentPeer != nil {
+			currentPeer.flush(&uapi)
+			currentPeer = nil
+		}
+	}
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -49,10 +74,14 @@ func ParseConfigFile(path string) (*ParsedConfig, error) {
 		}
 
 		if strings.HasPrefix(line, "[") {
+			flushPeer()
 			section = strings.ToLower(strings.Trim(line, "[] "))
-			if section == "peer" && !peerSeen {
-				peerSeen = true
-				fmt.Fprint(&uapi, "replace_peers=true\n")
+			if section == "peer" {
+				if !peerSeen {
+					peerSeen = true
+					fmt.Fprint(&uapi, "replace_peers=true\n")
+				}
+				currentPeer = &peerAccumulator{}
 			}
 			continue
 		}
@@ -70,11 +99,13 @@ func ParseConfigFile(path string) (*ParsedConfig, error) {
 				return nil, fmt.Errorf("[Interface] %s: %w", key, err)
 			}
 		case "peer":
-			if err := parsePeerKey(key, value, result, &uapi); err != nil {
+			if err := parsePeerKey(key, value, result, currentPeer); err != nil {
 				return nil, fmt.Errorf("[Peer] %s: %w", key, err)
 			}
 		}
 	}
+
+	flushPeer()
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -129,34 +160,60 @@ func parseInterfaceKey(key, value string, cfg *ParsedConfig, uapi *strings.Build
 	return nil
 }
 
-func parsePeerKey(key, value string, cfg *ParsedConfig, uapi *strings.Builder) error {
+func parsePeerKey(key, value string, cfg *ParsedConfig, peer *peerAccumulator) error {
 	switch strings.ToLower(key) {
 	case "publickey":
 		h, err := base64ToHex(value)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(uapi, "public_key=%s\n", h)
+		peer.publicKey = h
 	case "presharedkey":
 		h, err := base64ToHex(value)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(uapi, "preshared_key=%s\n", h)
+		peer.lines = append(peer.lines, fmt.Sprintf("preshared_key=%s\n", h))
 	case "endpoint":
-		fmt.Fprintf(uapi, "endpoint=%s\n", value)
+		ep, err := resolveEndpoint(value)
+		if err != nil {
+			return fmt.Errorf("invalid endpoint %q: %w", value, err)
+		}
+		peer.lines = append(peer.lines, fmt.Sprintf("endpoint=%s\n", ep))
 		// Store for static filter bypass.
-		if ap, err := netip.ParseAddrPort(value); err == nil {
+		if ap, err := netip.ParseAddrPort(ep); err == nil {
 			cfg.PeerEndpoints = append(cfg.PeerEndpoints, ap)
 		}
 	case "allowedips":
 		for _, cidr := range splitCSV(value) {
-			fmt.Fprintf(uapi, "allowed_ip=%s\n", cidr)
+			peer.lines = append(peer.lines, fmt.Sprintf("allowed_ip=%s\n", cidr))
 		}
 	case "persistentkeepalive":
-		fmt.Fprintf(uapi, "persistent_keepalive_interval=%s\n", value)
+		peer.lines = append(peer.lines, fmt.Sprintf("persistent_keepalive_interval=%s\n", value))
 	}
 	return nil
+}
+
+// resolveEndpoint resolves a hostname:port endpoint to IP:port.
+// UAPI requires numeric IP addresses; hostnames are not accepted.
+func resolveEndpoint(endpoint string) (string, error) {
+	host, port, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return "", err
+	}
+	// Already an IP — return as-is.
+	if _, err := netip.ParseAddr(host); err == nil {
+		return endpoint, nil
+	}
+	// Resolve hostname to IP.
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		return "", fmt.Errorf("resolve %q: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return "", fmt.Errorf("no addresses for %q", host)
+	}
+	return net.JoinHostPort(ips[0], port), nil
 }
 
 // base64ToHex decodes a base64-encoded key and returns its hex representation.
