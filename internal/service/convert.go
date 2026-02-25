@@ -39,10 +39,7 @@ func tunnelEntryToProto(e *core.TunnelEntry, ctrl TunnelController, geoResolver 
 }
 
 func tunnelConfigToProto(c core.TunnelConfig) *vpnapi.TunnelConfig {
-	settings := make(map[string]string, len(c.Settings))
-	for k, v := range c.Settings {
-		settings[k] = fmt.Sprintf("%v", v)
-	}
+	settings := flattenSettings("", c.Settings)
 	return &vpnapi.TunnelConfig{
 		Id:             c.ID,
 		Protocol:       c.Protocol,
@@ -94,6 +91,33 @@ func unflattenSettings(flat map[string]string) map[string]any {
 			for nk, nv := range nested {
 				m[nk] = nv
 			}
+		}
+	}
+	return result
+}
+
+// flattenSettings converts nested map[string]any into flat dot-notation
+// map[string]string suitable for protobuf transmission.
+// For example: {"reality": {"public_key": "abc"}, "port": 443}
+// becomes:     {"reality.public_key": "abc", "port": "443"}
+func flattenSettings(prefix string, m map[string]any) map[string]string {
+	result := make(map[string]string)
+	for k, v := range m {
+		key := k
+		if prefix != "" {
+			key = prefix + "." + k
+		}
+		switch val := v.(type) {
+		case map[string]any:
+			for fk, fv := range flattenSettings(key, val) {
+				result[fk] = fv
+			}
+		case map[string]string:
+			for sk, sv := range val {
+				result[key+"."+sk] = sv
+			}
+		default:
+			result[key] = fmt.Sprintf("%v", v)
 		}
 	}
 	return result
