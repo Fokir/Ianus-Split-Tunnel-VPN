@@ -3,6 +3,7 @@
   import * as api from '../api.js';
   import { sortTunnels } from '../utils.js';
   import ErrorAlert from '../ErrorAlert.svelte';
+  import ProcessPicker from '../ProcessPicker.svelte';
   import { t } from '../i18n';
 
   let rules = [];
@@ -13,74 +14,57 @@
 
   // Disallowed IPs state
   let config = null;
-  let disallowedIps = [];  // { cidr: string, scope: string }[]  scope = '__global__' | tunnelId
+  let disallowedIps = [];
   let ipsDirty = false;
   let ipsError = '';
 
   // Disallowed Apps state
-  let disallowedApps = [];  // { pattern: string, scope: string }[]
+  let disallowedApps = [];
   let appsDirty = false;
   let appsError = '';
   let showAppProcessPicker = false;
   let appPickerIndex = -1;
-  let appProcesses = [];
-  let appProcessFilter = '';
-  let appProcessLoading = false;
 
-  // Modal state
+  // Rule edit modal
   let showModal = false;
   let editIndex = -1;
   let modalRule = { pattern: '', tunnelId: '', fallback: 'allow_direct', priority: 'auto' };
 
-  // Drag & drop reorder
-  let dragIndex = -1;
-  let dragOverIndex = -1;
-
-  function handleDragStart(e, index) {
-    dragIndex = index;
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', String(index));
-    // Semi-transparent drag image
-    e.currentTarget.closest('tr').style.opacity = '0.4';
-  }
-
-  function handleDragEnd(e) {
-    e.currentTarget.closest('tr').style.opacity = '';
-    dragIndex = -1;
-    dragOverIndex = -1;
-  }
-
-  function handleDragOver(e, index) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    dragOverIndex = index;
-  }
-
-  function handleDragLeave() {
-    dragOverIndex = -1;
-  }
-
-  function handleDrop(e, index) {
-    e.preventDefault();
-    if (dragIndex < 0 || dragIndex === index) {
-      dragIndex = -1;
-      dragOverIndex = -1;
-      return;
-    }
-    const reordered = [...rules];
-    const [moved] = reordered.splice(dragIndex, 1);
-    reordered.splice(index, 0, moved);
-    rules = reordered;
-    dirty = true;
-    dragIndex = -1;
-    dragOverIndex = -1;
-  }
-
-  // Process picker
+  // Process picker (rule modal)
   let showProcessPicker = false;
-  let processes = [];
-  let processFilter = '';
-  let processLoading = false;
+
+  // Drag & drop (grouped)
+  let dragGroupIdx = -1;
+  let dragRuleIdx = -1;
+  let dragOverGroupIdx = -1;
+  let dragOverRuleIdx = -1;
+
+  // ─── Quick Rule Wizard ────────────────────────────────────────────
+  let showQuickWizard = false;
+  let wizardStep = 1;
+  let wizardSelectedProcess = null;
+  let wizardSelectedTunnels = [];
+
+  $: wizardAvailableTunnels = tunnels.filter(t => !wizardSelectedTunnels.some(s => s.id === t.id));
+
+  // ─── Rule Grouping ────────────────────────────────────────────────
+  $: groups = computeGroups(rules);
+
+  function computeGroups(rulesList) {
+    const result = [];
+    let current = null;
+    for (let i = 0; i < rulesList.length; i++) {
+      const rule = rulesList[i];
+      if (!current || current.pattern !== rule.pattern) {
+        current = { pattern: rule.pattern, startIndex: i, rules: [] };
+        result.push(current);
+      }
+      current.rules.push({ ...rule, realIndex: i });
+    }
+    return result;
+  }
+
+  // ─── Lifecycle ────────────────────────────────────────────────────
 
   onMount(async () => {
     await loadData();
@@ -104,15 +88,15 @@
     }
   }
 
+  // ─── Disallowed IPs ──────────────────────────────────────────────
+
   function buildDisallowedIpsList() {
     const list = [];
-    // Global disallowed IPs
     if (config.global && config.global.disallowed_ips) {
       for (const cidr of config.global.disallowed_ips) {
         list.push({ cidr, scope: '__global__' });
       }
     }
-    // Per-tunnel disallowed IPs
     if (config.tunnels) {
       for (const t of config.tunnels) {
         if (t.disallowed_ips) {
@@ -170,10 +154,8 @@
   async function saveIps() {
     ipsError = '';
     try {
-      // Rebuild config disallowed_ips from flat list
       const globalIps = [];
-      const tunnelIpsMap = {};  // tunnelId -> string[]
-
+      const tunnelIpsMap = {};
       for (const entry of disallowedIps) {
         const cidr = entry.cidr.trim();
         if (!cidr) continue;
@@ -184,15 +166,12 @@
           tunnelIpsMap[entry.scope].push(cidr);
         }
       }
-
-      // Update config
       config.global.disallowed_ips = globalIps;
       if (config.tunnels) {
         for (const t of config.tunnels) {
           t.disallowed_ips = tunnelIpsMap[t.id] || [];
         }
       }
-
       await api.saveConfig(config, true);
       ipsDirty = false;
     } catch (e) {
@@ -200,9 +179,7 @@
     }
   }
 
-  function cancelIps() {
-    buildDisallowedIpsList();
-  }
+  function cancelIps() { buildDisallowedIpsList(); }
 
   // ─── Disallowed Apps ─────────────────────────────────────────────
 
@@ -237,16 +214,13 @@
     appsDirty = true;
   }
 
-  function markAppsDirty() {
-    appsDirty = true;
-  }
+  function markAppsDirty() { appsDirty = true; }
 
   async function saveApps() {
     appsError = '';
     try {
       const globalApps = [];
       const tunnelAppsMap = {};
-
       for (const entry of disallowedApps) {
         const pattern = entry.pattern.trim();
         if (!pattern) continue;
@@ -257,14 +231,12 @@
           tunnelAppsMap[entry.scope].push(pattern);
         }
       }
-
       config.global.disallowed_apps = globalApps;
       if (config.tunnels) {
         for (const t of config.tunnels) {
           t.disallowed_apps = tunnelAppsMap[t.id] || [];
         }
       }
-
       await api.saveConfig(config, true);
       appsDirty = false;
     } catch (e) {
@@ -272,33 +244,11 @@
     }
   }
 
-  function cancelApps() {
-    buildDisallowedAppsList();
-  }
+  function cancelApps() { buildDisallowedAppsList(); }
 
-  async function openAppProcessPicker(index) {
+  function openAppProcessPicker(index) {
     appPickerIndex = index;
     showAppProcessPicker = true;
-    appProcessLoading = true;
-    appProcessFilter = '';
-    try {
-      appProcesses = await api.listProcesses('') || [];
-    } catch (e) {
-      appProcesses = [];
-    } finally {
-      appProcessLoading = false;
-    }
-  }
-
-  async function filterAppProcesses() {
-    appProcessLoading = true;
-    try {
-      appProcesses = await api.listProcesses(appProcessFilter) || [];
-    } catch (e) {
-      appProcesses = [];
-    } finally {
-      appProcessLoading = false;
-    }
   }
 
   function selectAppProcess(proc) {
@@ -316,6 +266,8 @@
     appPickerIndex = -1;
   }
 
+  // ─── Rule Edit Modal ─────────────────────────────────────────────
+
   function openAddModal() {
     editIndex = -1;
     modalRule = { pattern: '', tunnelId: '', fallback: 'allow_direct', priority: 'auto' };
@@ -330,7 +282,6 @@
 
   function closeModal() {
     showModal = false;
-    showProcessPicker = false;
   }
 
   function saveModalRule() {
@@ -364,34 +315,140 @@
     dirty = false;
   }
 
-  async function openProcessPicker() {
+  function openProcessPicker() {
     showProcessPicker = true;
-    processLoading = true;
-    processFilter = '';
-    try {
-      processes = await api.listProcesses('') || [];
-    } catch (e) {
-      processes = [];
-    } finally {
-      processLoading = false;
-    }
-  }
-
-  async function filterProcesses() {
-    processLoading = true;
-    try {
-      processes = await api.listProcesses(processFilter) || [];
-    } catch (e) {
-      processes = [];
-    } finally {
-      processLoading = false;
-    }
   }
 
   function selectProcess(proc) {
     modalRule.pattern = proc.name;
     showProcessPicker = false;
   }
+
+  // ─── Drag & Drop (grouped) ───────────────────────────────────────
+
+  function handleGroupDragStart(e, gi, ri) {
+    dragGroupIdx = gi;
+    dragRuleIdx = ri;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', `${gi}:${ri}`);
+    e.currentTarget.closest('tr').style.opacity = '0.4';
+  }
+
+  function handleGroupDragEnd(e) {
+    e.currentTarget.closest('tr').style.opacity = '';
+    dragGroupIdx = -1;
+    dragRuleIdx = -1;
+    dragOverGroupIdx = -1;
+    dragOverRuleIdx = -1;
+  }
+
+  function handleGroupDragOver(e, gi, ri) {
+    if (gi !== dragGroupIdx) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    dragOverGroupIdx = gi;
+    dragOverRuleIdx = ri;
+  }
+
+  function handleGroupDragLeave() {
+    dragOverGroupIdx = -1;
+    dragOverRuleIdx = -1;
+  }
+
+  function handleGroupDrop(e, gi, ri) {
+    e.preventDefault();
+    if (gi !== dragGroupIdx || dragRuleIdx === ri) {
+      dragGroupIdx = -1;
+      dragRuleIdx = -1;
+      dragOverGroupIdx = -1;
+      dragOverRuleIdx = -1;
+      return;
+    }
+    const g = groups[gi];
+    const fromReal = g.startIndex + dragRuleIdx;
+    const toReal = g.startIndex + ri;
+    const reordered = [...rules];
+    const [moved] = reordered.splice(fromReal, 1);
+    reordered.splice(toReal, 0, moved);
+    rules = reordered;
+    dirty = true;
+    dragGroupIdx = -1;
+    dragRuleIdx = -1;
+    dragOverGroupIdx = -1;
+    dragOverRuleIdx = -1;
+  }
+
+  // ─── Quick Rule Wizard ────────────────────────────────────────────
+
+  function openQuickWizard() {
+    showQuickWizard = true;
+    wizardStep = 1;
+    wizardSelectedProcess = null;
+    wizardSelectedTunnels = [];
+  }
+
+  function closeQuickWizard() {
+    showQuickWizard = false;
+    wizardStep = 1;
+    wizardSelectedProcess = null;
+    wizardSelectedTunnels = [];
+  }
+
+  function wizardSelectProcess(proc) {
+    wizardSelectedProcess = proc;
+    wizardStep = 2;
+  }
+
+  function wizardAddTunnel(tunnel) {
+    wizardSelectedTunnels = [...wizardSelectedTunnels, tunnel];
+  }
+
+  function wizardRemoveTunnel(index) {
+    wizardSelectedTunnels = wizardSelectedTunnels.filter((_, i) => i !== index);
+  }
+
+  function wizardMoveTunnel(index, dir) {
+    const newIdx = index + dir;
+    if (newIdx < 0 || newIdx >= wizardSelectedTunnels.length) return;
+    const arr = [...wizardSelectedTunnels];
+    [arr[index], arr[newIdx]] = [arr[newIdx], arr[index]];
+    wizardSelectedTunnels = arr;
+  }
+
+  function wizardConfirm() {
+    const pattern = wizardSelectedProcess.name;
+
+    const newRules = [];
+    for (const tunnel of wizardSelectedTunnels) {
+      newRules.push({
+        pattern,
+        tunnelId: tunnel.id,
+        fallback: 'failover',
+        priority: 'auto',
+      });
+    }
+    // Final direct-access rule
+    newRules.push({
+      pattern,
+      tunnelId: '',
+      fallback: 'allow_direct',
+      priority: 'auto',
+    });
+
+    // Insert after last existing rule with same pattern, or append
+    let insertAt = rules.length;
+    for (let i = rules.length - 1; i >= 0; i--) {
+      if (rules[i].pattern.toLowerCase() === pattern.toLowerCase()) {
+        insertAt = i + 1;
+        break;
+      }
+    }
+    rules = [...rules.slice(0, insertAt), ...newRules, ...rules.slice(insertAt)];
+    dirty = true;
+    closeQuickWizard();
+  }
+
+  // ─── Helpers ──────────────────────────────────────────────────────
 
   function tunnelName(id) {
     if (!id) return $t('rules.notAssigned');
@@ -427,6 +484,7 @@
   }
 </script>
 
+<!-- ─── Routing Rules Header ─────────────────────────────────────── -->
 <div class="p-4 space-y-4">
   <div class="flex items-center justify-between">
     <h2 class="text-lg font-semibold text-zinc-100">{$t('rules.title')}</h2>
@@ -445,6 +503,15 @@
           {$t('rules.save')}
         </button>
       {/if}
+      <button
+        class="px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 transition-colors"
+        on:click={openQuickWizard}
+      >
+        <svg class="w-3.5 h-3.5 inline mr-1 -mt-0.5" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M7 2v11h3v9l7-12h-4l4-8z"/>
+        </svg>
+        {$t('rules.quickRule')}
+      </button>
       <button
         class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
         on:click={openAddModal}
@@ -475,78 +542,86 @@
       <p class="text-xs text-zinc-600 mt-1">{$t('rules.noRulesHint')}</p>
     </div>
   {:else}
-    <!-- Rules table -->
-    <div class="border border-zinc-700/40 rounded-lg overflow-hidden">
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="bg-zinc-800/60 text-zinc-400 text-xs uppercase tracking-wider">
-            <th class="w-8 px-0 py-2.5"></th>
-            <th class="text-left px-4 py-2.5 font-medium">{$t('rules.pattern')}</th>
-            <th class="text-left px-4 py-2.5 font-medium">{$t('rules.tunnel')}</th>
-            <th class="text-left px-4 py-2.5 font-medium">{$t('rules.fallback')}</th>
-            <th class="text-left px-4 py-2.5 font-medium">{$t('rules.priority')}</th>
-            <th class="text-right px-4 py-2.5 font-medium w-24"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each rules as rule, index (rule.pattern + '-' + index)}
-            <tr
-              class="border-t border-zinc-700/30 hover:bg-zinc-800/30 transition-colors {rule.active === false ? 'opacity-50' : ''} {dragOverIndex === index ? 'border-t-2 !border-t-blue-500' : ''}"
-              on:dragover={e => handleDragOver(e, index)}
-              on:dragleave={handleDragLeave}
-              on:drop={e => handleDrop(e, index)}
-            >
-              <!-- Drag handle -->
-              <td class="w-8 px-0 py-2.5 text-center">
-                <!-- svelte-ignore a11y-no-static-element-interactions -->
-                <div
-                  class="inline-flex items-center justify-center w-6 h-6 cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-400 transition-colors"
-                  draggable="true"
-                  on:dragstart={e => handleDragStart(e, index)}
-                  on:dragend={handleDragEnd}
+    <!-- Grouped Rules -->
+    <div class="space-y-3">
+      {#each groups as group, gi (group.pattern + '-' + gi)}
+        <div class="border border-zinc-700/40 rounded-lg overflow-hidden">
+          <!-- Group header -->
+          <div class="bg-zinc-800/60 px-4 py-2 flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-zinc-500 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
+            </svg>
+            <span class="font-mono text-xs text-zinc-200">{group.pattern}</span>
+            <span class="text-[10px] text-zinc-500">
+              {group.rules.length} {group.rules.length === 1 ? $t('rules.oneRule') : $t('rules.nRules')}
+            </span>
+          </div>
+          <!-- Group rules -->
+          <table class="w-full text-sm">
+            <tbody>
+              {#each group.rules as rule, ri (rule.realIndex)}
+                <tr
+                  class="border-t border-zinc-700/30 hover:bg-zinc-800/30 transition-colors {rule.active === false ? 'opacity-50' : ''} {dragOverGroupIdx === gi && dragOverRuleIdx === ri ? 'border-t-2 !border-t-blue-500' : ''}"
+                  on:dragover={e => handleGroupDragOver(e, gi, ri)}
+                  on:dragleave={handleGroupDragLeave}
+                  on:drop={e => handleGroupDrop(e, gi, ri)}
                 >
-                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                    <circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/>
-                    <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
-                    <circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/>
-                  </svg>
-                </div>
-              </td>
-              <td class="px-4 py-2.5 font-mono text-xs {rule.active === false ? 'text-zinc-500' : 'text-zinc-200'}">
-                {rule.pattern}
-                {#if rule.active === false}
-                  <span class="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] rounded bg-zinc-700/50 text-zinc-500 font-sans">offline</span>
-                {/if}
-              </td>
-              <td class="px-4 py-2.5 {rule.active === false ? 'text-zinc-500' : 'text-zinc-300'}">{tunnelName(rule.tunnelId)}</td>
-              <td class="px-4 py-2.5 {rule.active === false ? 'text-zinc-500' : 'text-zinc-400'}">{fallbackLabel(rule.fallback)}</td>
-              <td class="px-4 py-2.5">
-                <span class="inline-block px-1.5 py-0.5 text-xs rounded {priorityColor(rule.priority)}">
-                  {priorityLabel(rule.priority)}
-                </span>
-              </td>
-              <td class="px-4 py-2.5 text-right">
-                <button
-                  class="text-zinc-500 hover:text-zinc-200 transition-colors mr-2"
-                  on:click={() => openEditModal(index)}
-                >
-                  <svg class="w-3.5 h-3.5 inline" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 000-1.42l-2.34-2.34a1.003 1.003 0 00-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/>
-                  </svg>
-                </button>
-                <button
-                  class="text-zinc-500 hover:text-red-400 transition-colors"
-                  on:click={() => removeRule(index)}
-                >
-                  <svg class="w-3.5 h-3.5 inline" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-                  </svg>
-                </button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+                  <!-- Drag handle -->
+                  <td class="w-8 px-0 py-2.5 text-center">
+                    {#if group.rules.length > 1}
+                      <!-- svelte-ignore a11y-no-static-element-interactions -->
+                      <div
+                        class="inline-flex items-center justify-center w-6 h-6 cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-400 transition-colors"
+                        draggable="true"
+                        on:dragstart={e => handleGroupDragStart(e, gi, ri)}
+                        on:dragend={handleGroupDragEnd}
+                      >
+                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                          <circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/>
+                          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+                          <circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/>
+                        </svg>
+                      </div>
+                    {:else}
+                      <div class="w-6 h-6"></div>
+                    {/if}
+                  </td>
+                  <td class="px-4 py-2.5 {rule.active === false ? 'text-zinc-500' : 'text-zinc-300'}">
+                    {tunnelName(rule.tunnelId)}
+                    {#if rule.active === false}
+                      <span class="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] rounded bg-zinc-700/50 text-zinc-500 font-sans">offline</span>
+                    {/if}
+                  </td>
+                  <td class="px-4 py-2.5 {rule.active === false ? 'text-zinc-500' : 'text-zinc-400'}">{fallbackLabel(rule.fallback)}</td>
+                  <td class="px-4 py-2.5">
+                    <span class="inline-block px-1.5 py-0.5 text-xs rounded {priorityColor(rule.priority)}">
+                      {priorityLabel(rule.priority)}
+                    </span>
+                  </td>
+                  <td class="px-4 py-2.5 text-right w-24">
+                    <button
+                      class="text-zinc-500 hover:text-zinc-200 transition-colors mr-2"
+                      on:click={() => openEditModal(rule.realIndex)}
+                    >
+                      <svg class="w-3.5 h-3.5 inline" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 000-1.42l-2.34-2.34a1.003 1.003 0 00-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/>
+                      </svg>
+                    </button>
+                    <button
+                      class="text-zinc-500 hover:text-red-400 transition-colors"
+                      on:click={() => removeRule(rule.realIndex)}
+                    >
+                      <svg class="w-3.5 h-3.5 inline" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                      </svg>
+                    </button>
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/each}
     </div>
   {/if}
 </div>
@@ -722,7 +797,7 @@
   </div>
 {/if}
 
-<!-- App process picker modal -->
+<!-- ─── App process picker modal ─────────────────────────────────── -->
 {#if showAppProcessPicker}
   <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
   <div class="fixed inset-0 bg-black/60 z-40 flex items-center justify-center"
@@ -731,34 +806,12 @@
        role="dialog"
        tabindex="-1"
   >
-    <div class="bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-sm mx-4 p-4 space-y-3">
-      <h3 class="text-sm font-semibold text-zinc-100">{$t('rules.selectProcess')}</h3>
-      <input
-        type="text"
-        bind:value={appProcessFilter}
-        on:input={filterAppProcesses}
-        placeholder={$t('rules.filter')}
-        class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50"
-      />
-      <div class="max-h-60 overflow-y-auto space-y-0.5">
-        {#if appProcessLoading}
-          <div class="text-xs text-zinc-500 py-4 text-center">{$t('rules.loading')}</div>
-        {:else}
-          {#each appProcesses.slice(0, 50) as proc}
-            <button
-              class="w-full text-left px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700/50 rounded-lg truncate transition-colors"
-              on:click={() => selectAppProcess(proc)}
-            >
-              <span class="text-zinc-200">{proc.name}</span>
-              <span class="text-zinc-600 ml-1 text-xs">PID {proc.pid}</span>
-            </button>
-          {/each}
-          {#if appProcesses.length === 0}
-            <div class="text-xs text-zinc-500 py-4 text-center">{$t('rules.processesNotFound')}</div>
-          {/if}
-        {/if}
+    <div class="bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4 p-4 space-y-3 max-h-[70vh] flex flex-col">
+      <h3 class="text-sm font-semibold text-zinc-100 shrink-0">{$t('rules.selectProcess')}</h3>
+      <div class="flex-1 overflow-y-auto min-h-0">
+        <ProcessPicker on:select={e => selectAppProcess(e.detail)} />
       </div>
-      <div class="flex justify-end pt-1">
+      <div class="flex justify-end pt-1 shrink-0">
         <button
           class="px-3 py-1.5 text-xs rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
           on:click={closeAppProcessPicker}
@@ -770,7 +823,7 @@
   </div>
 {/if}
 
-<!-- Rule modal -->
+<!-- ─── Rule edit modal ──────────────────────────────────────────── -->
 {#if showModal}
   <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
   <div class="fixed inset-0 bg-black/60 z-40 flex items-center justify-center"
@@ -811,27 +864,8 @@
 
         <!-- Process picker inline -->
         {#if showProcessPicker}
-          <div class="bg-zinc-900 border border-zinc-700 rounded-lg p-2 max-h-40 overflow-y-auto">
-            <input
-              type="text"
-              bind:value={processFilter}
-              on:input={filterProcesses}
-              placeholder={$t('rules.filter')}
-              class="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600 focus:outline-none mb-1"
-            />
-            {#if processLoading}
-              <div class="text-xs text-zinc-500 py-2 text-center">{$t('rules.loading')}</div>
-            {:else}
-              {#each processes.slice(0, 50) as proc}
-                <button
-                  class="w-full text-left px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800 rounded truncate"
-                  on:click={() => selectProcess(proc)}
-                >
-                  <span class="text-zinc-200">{proc.name}</span>
-                  <span class="text-zinc-600 ml-1">PID {proc.pid}</span>
-                </button>
-              {/each}
-            {/if}
+          <div class="bg-zinc-900 border border-zinc-700 rounded-lg p-2">
+            <ProcessPicker compact on:select={e => selectProcess(e.detail)} />
           </div>
         {/if}
 
@@ -897,6 +931,217 @@
         >
           {editIndex >= 0 ? $t('rules.save') : $t('common.add')}
         </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- ─── Quick Rule Wizard ────────────────────────────────────────── -->
+{#if showQuickWizard}
+  <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+  <div class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
+       on:click|self={closeQuickWizard}
+       on:keydown={e => e.key === 'Escape' && closeQuickWizard()}
+       role="dialog"
+       tabindex="-1"
+  >
+    <div class="bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-lg mx-4 p-5 space-y-4 max-h-[85vh] flex flex-col">
+      <!-- Title -->
+      <h3 class="text-base font-semibold text-zinc-100 shrink-0">{$t('rules.quickRuleTitle')}</h3>
+
+      <!-- Stepper -->
+      <div class="flex items-center justify-center gap-1.5 shrink-0">
+        {#each [{ n: 1, l: 'stepProcess' }, { n: 2, l: 'stepTunnels' }, { n: 3, l: 'stepConfirm' }] as step}
+          <div class="flex items-center gap-1.5">
+            <div class="w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium {
+              wizardStep > step.n ? 'bg-emerald-500/20 text-emerald-400' :
+              wizardStep === step.n ? 'bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/50' :
+              'bg-zinc-700/50 text-zinc-500'
+            }">
+              {#if wizardStep > step.n}
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+              {:else}
+                {step.n}
+              {/if}
+            </div>
+            <span class="text-xs {wizardStep >= step.n ? 'text-zinc-200' : 'text-zinc-500'}">{$t(`rules.${step.l}`)}</span>
+          </div>
+          {#if step.n < 3}
+            <div class="w-6 h-px bg-zinc-700 mx-1"></div>
+          {/if}
+        {/each}
+      </div>
+
+      <!-- Step content -->
+      <div class="flex-1 overflow-y-auto min-h-0">
+        <!-- ── Step 1: Select Process ── -->
+        {#if wizardStep === 1}
+          <ProcessPicker on:select={e => wizardSelectProcess(e.detail)} />
+
+        <!-- ── Step 2: Select Tunnels ── -->
+        {:else if wizardStep === 2}
+          <div class="space-y-4">
+            <p class="text-xs text-zinc-400">{$t('rules.selectTunnelsHint')}</p>
+
+            <!-- Selected tunnels (ordered) -->
+            {#if wizardSelectedTunnels.length > 0}
+              <div>
+                <div class="text-[10px] uppercase tracking-wider text-zinc-500 font-medium mb-1.5">{$t('rules.selectedTunnels')}</div>
+                <div class="space-y-1">
+                  {#each wizardSelectedTunnels as tun, i}
+                    <div class="flex items-center gap-2 px-3 py-2 bg-zinc-700/30 rounded-lg border border-zinc-700/50">
+                      <span class="text-xs font-mono text-zinc-500 w-5 shrink-0">{i + 1}.</span>
+                      <span class="text-sm text-zinc-200 flex-1 truncate">{tun.name || tun.id}</span>
+                      <span class="text-[10px] text-zinc-500">{tun.protocol}</span>
+                      <!-- Move up -->
+                      <button
+                        class="p-1 text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-30"
+                        disabled={i === 0}
+                        on:click={() => wizardMoveTunnel(i, -1)}
+                      >
+                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>
+                      </button>
+                      <!-- Move down -->
+                      <button
+                        class="p-1 text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-30"
+                        disabled={i === wizardSelectedTunnels.length - 1}
+                        on:click={() => wizardMoveTunnel(i, 1)}
+                      >
+                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
+                      </button>
+                      <!-- Remove -->
+                      <button
+                        class="p-1 text-zinc-500 hover:text-red-400 transition-colors"
+                        on:click={() => wizardRemoveTunnel(i)}
+                      >
+                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                        </svg>
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <!-- Available tunnels -->
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-zinc-500 font-medium mb-1.5">{$t('rules.availableTunnels')}</div>
+              {#if wizardAvailableTunnels.length === 0 && wizardSelectedTunnels.length === 0}
+                <div class="text-xs text-zinc-500 py-4 text-center">{$t('rules.noTunnelsAvailable')}</div>
+              {:else if wizardAvailableTunnels.length === 0}
+                <div class="text-xs text-zinc-600 py-2 text-center">-</div>
+              {:else}
+                <div class="space-y-0.5">
+                  {#each wizardAvailableTunnels as tun}
+                    <button
+                      class="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-zinc-700/50 transition-colors text-left"
+                      on:click={() => wizardAddTunnel(tun)}
+                    >
+                      <svg class="w-4 h-4 text-blue-400 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                      </svg>
+                      <span class="text-sm text-zinc-300 flex-1 truncate">{tun.name || tun.id}</span>
+                      <span class="text-[10px] text-zinc-500">{tun.protocol}</span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </div>
+
+        <!-- ── Step 3: Confirm ── -->
+        {:else if wizardStep === 3}
+          <div class="space-y-4">
+            <!-- Selected process -->
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-zinc-500 font-medium mb-1.5">{$t('rules.processLabel')}</div>
+              <div class="flex items-center gap-3 px-3 py-2.5 bg-zinc-700/30 rounded-lg border border-zinc-700/50">
+                <div class="w-8 h-8 shrink-0 flex items-center justify-center rounded bg-zinc-700/50">
+                  {#if wizardSelectedProcess?.icon}
+                    <img src={wizardSelectedProcess.icon} alt="" class="w-7 h-7" />
+                  {:else}
+                    <svg class="w-5 h-5 text-zinc-500" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M20 6H12L10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/>
+                    </svg>
+                  {/if}
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="text-sm font-medium text-zinc-100">{wizardSelectedProcess?.name}</div>
+                  {#if wizardSelectedProcess?.path}
+                    <div class="text-[10px] text-zinc-500 truncate">{wizardSelectedProcess.path}</div>
+                  {/if}
+                </div>
+              </div>
+            </div>
+
+            <!-- Rules preview -->
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-zinc-500 font-medium mb-1.5">{$t('rules.rulesPreview')}</div>
+              <div class="border border-zinc-700/50 rounded-lg overflow-hidden">
+                {#each wizardSelectedTunnels as tun, i}
+                  <div class="flex items-center gap-3 px-3 py-2 {i > 0 ? 'border-t border-zinc-700/30' : ''}">
+                    <span class="text-xs font-mono text-zinc-500 w-5 shrink-0">{i + 1}.</span>
+                    <div class="flex-1 min-w-0">
+                      <span class="text-sm text-zinc-200">{wizardSelectedProcess?.name}</span>
+                      <svg class="w-3.5 h-3.5 inline mx-1.5 text-zinc-600" viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+                      <span class="text-sm text-blue-400">{tun.name || tun.id}</span>
+                    </div>
+                    <span class="text-[10px] text-zinc-500 shrink-0">{$t('rules.fallbackFailover')}</span>
+                  </div>
+                {/each}
+                <!-- Final direct rule -->
+                <div class="flex items-center gap-3 px-3 py-2 border-t border-zinc-700/30 bg-zinc-800/40">
+                  <span class="text-xs font-mono text-zinc-500 w-5 shrink-0">{wizardSelectedTunnels.length + 1}.</span>
+                  <div class="flex-1 min-w-0">
+                    <span class="text-sm text-zinc-200">{wizardSelectedProcess?.name}</span>
+                    <svg class="w-3.5 h-3.5 inline mx-1.5 text-zinc-600" viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+                    <span class="text-sm text-emerald-400">{$t('rules.fallbackDirect')}</span>
+                  </div>
+                  <span class="text-[10px] text-zinc-500 shrink-0">{$t('rules.finalFallback')}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Footer buttons -->
+      <div class="flex justify-between pt-2 shrink-0">
+        <div>
+          {#if wizardStep > 1}
+            <button
+              class="px-4 py-2 text-sm rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
+              on:click={() => { wizardStep -= 1; }}
+            >
+              {$t('rules.back')}
+            </button>
+          {/if}
+        </div>
+        <div class="flex gap-2">
+          <button
+            class="px-4 py-2 text-sm rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
+            on:click={closeQuickWizard}
+          >
+            {$t('rules.cancel')}
+          </button>
+          {#if wizardStep === 2}
+            <button
+              class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40"
+              disabled={wizardSelectedTunnels.length === 0}
+              on:click={() => { wizardStep = 3; }}
+            >
+              {$t('rules.next')}
+            </button>
+          {:else if wizardStep === 3}
+            <button
+              class="px-4 py-2 text-sm rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 transition-colors"
+              on:click={wizardConfirm}
+            >
+              {$t('rules.create')}
+            </button>
+          {/if}
+        </div>
       </div>
     </div>
   </div>

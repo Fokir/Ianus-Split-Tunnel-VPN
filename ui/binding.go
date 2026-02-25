@@ -430,9 +430,11 @@ func (b *BindingService) UpdateGeosite() error {
 // ─── Processes ──────────────────────────────────────────────────────
 
 type ProcessInfo struct {
-	PID  uint32 `json:"pid"`
-	Name string `json:"name"`
-	Path string `json:"path"`
+	PID       uint32 `json:"pid"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	Icon      string `json:"icon"`      // base64 PNG data URL (populated for windowed processes)
+	HasWindow bool   `json:"hasWindow"` // process has a visible window
 }
 
 func (b *BindingService) ListProcesses(nameFilter string) ([]ProcessInfo, error) {
@@ -448,7 +450,7 @@ func (b *BindingService) ListProcesses(nameFilter string) ([]ProcessInfo, error)
 			Path: p.Path,
 		})
 	}
-	return procs, nil
+	return enrichProcessList(procs), nil
 }
 
 // ─── Config ─────────────────────────────────────────────────────────
