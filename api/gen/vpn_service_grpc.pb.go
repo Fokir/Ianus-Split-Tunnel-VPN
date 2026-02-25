@@ -35,6 +35,7 @@ const (
 	VPNService_ListDomainRules_FullMethodName       = "/awg.vpn.v1.VPNService/ListDomainRules"
 	VPNService_SaveDomainRules_FullMethodName       = "/awg.vpn.v1.VPNService/SaveDomainRules"
 	VPNService_ListGeositeCategories_FullMethodName = "/awg.vpn.v1.VPNService/ListGeositeCategories"
+	VPNService_ListGeoIPCategories_FullMethodName   = "/awg.vpn.v1.VPNService/ListGeoIPCategories"
 	VPNService_UpdateGeosite_FullMethodName         = "/awg.vpn.v1.VPNService/UpdateGeosite"
 	VPNService_GetConfig_FullMethodName             = "/awg.vpn.v1.VPNService/GetConfig"
 	VPNService_SaveConfig_FullMethodName            = "/awg.vpn.v1.VPNService/SaveConfig"
@@ -75,6 +76,7 @@ type VPNServiceClient interface {
 	ListDomainRules(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*DomainRuleListResponse, error)
 	SaveDomainRules(ctx context.Context, in *SaveDomainRulesRequest, opts ...grpc.CallOption) (*SaveDomainRulesResponse, error)
 	ListGeositeCategories(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GeositeCategoriesResponse, error)
+	ListGeoIPCategories(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GeositeCategoriesResponse, error)
 	UpdateGeosite(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*UpdateGeositeResponse, error)
 	// -- Config --
 	GetConfig(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*AppConfig, error)
@@ -251,6 +253,16 @@ func (c *vPNServiceClient) ListGeositeCategories(ctx context.Context, in *emptyp
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GeositeCategoriesResponse)
 	err := c.cc.Invoke(ctx, VPNService_ListGeositeCategories_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) ListGeoIPCategories(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GeositeCategoriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GeositeCategoriesResponse)
+	err := c.cc.Invoke(ctx, VPNService_ListGeoIPCategories_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -448,6 +460,7 @@ type VPNServiceServer interface {
 	ListDomainRules(context.Context, *emptypb.Empty) (*DomainRuleListResponse, error)
 	SaveDomainRules(context.Context, *SaveDomainRulesRequest) (*SaveDomainRulesResponse, error)
 	ListGeositeCategories(context.Context, *emptypb.Empty) (*GeositeCategoriesResponse, error)
+	ListGeoIPCategories(context.Context, *emptypb.Empty) (*GeositeCategoriesResponse, error)
 	UpdateGeosite(context.Context, *emptypb.Empty) (*UpdateGeositeResponse, error)
 	// -- Config --
 	GetConfig(context.Context, *emptypb.Empty) (*AppConfig, error)
@@ -524,6 +537,9 @@ func (UnimplementedVPNServiceServer) SaveDomainRules(context.Context, *SaveDomai
 }
 func (UnimplementedVPNServiceServer) ListGeositeCategories(context.Context, *emptypb.Empty) (*GeositeCategoriesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListGeositeCategories not implemented")
+}
+func (UnimplementedVPNServiceServer) ListGeoIPCategories(context.Context, *emptypb.Empty) (*GeositeCategoriesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListGeoIPCategories not implemented")
 }
 func (UnimplementedVPNServiceServer) UpdateGeosite(context.Context, *emptypb.Empty) (*UpdateGeositeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateGeosite not implemented")
@@ -861,6 +877,24 @@ func _VPNService_ListGeositeCategories_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VPNService_ListGeoIPCategories_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).ListGeoIPCategories(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_ListGeoIPCategories_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).ListGeoIPCategories(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _VPNService_UpdateGeosite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -1183,6 +1217,10 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListGeositeCategories",
 			Handler:    _VPNService_ListGeositeCategories_Handler,
+		},
+		{
+			MethodName: "ListGeoIPCategories",
+			Handler:    _VPNService_ListGeoIPCategories_Handler,
 		},
 		{
 			MethodName: "UpdateGeosite",

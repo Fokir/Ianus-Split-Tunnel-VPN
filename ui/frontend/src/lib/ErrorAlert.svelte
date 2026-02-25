@@ -1,4 +1,5 @@
 <script>
+  import { t } from './i18n';
   export let message = '';
   export let className = '';
 
@@ -18,7 +19,7 @@
   <button
     on:click={copyError}
     class="flex-none p-0.5 rounded hover:bg-white/10 transition-colors text-current opacity-40 hover:opacity-100"
-    title="Копировать"
+    title={$t('error.copy')}
   >
     {#if copied}
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5">

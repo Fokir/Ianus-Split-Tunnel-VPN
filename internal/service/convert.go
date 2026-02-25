@@ -204,6 +204,11 @@ func configToProto(c core.Config) *vpnapi.AppConfig {
 			Components:         c.Logging.Components,
 			FileLoggingEnabled: c.Logging.FileEnabled != nil && *c.Logging.FileEnabled,
 		},
+		Reconnect: &vpnapi.ReconnectConfig{
+			Enabled:    c.GUI.Reconnect.Enabled,
+			Interval:   c.GUI.Reconnect.Interval,
+			MaxRetries: int32(c.GUI.Reconnect.MaxRetries),
+		},
 	}
 }
 
@@ -266,6 +271,14 @@ func configFromProto(pc *vpnapi.AppConfig) core.Config {
 		for _, ps := range pc.Subscriptions {
 			name, sub := subscriptionConfigFromProto(ps)
 			cfg.Subscriptions[name] = sub
+		}
+	}
+
+	if pc.Reconnect != nil {
+		cfg.GUI.Reconnect = core.ReconnectConfig{
+			Enabled:    pc.Reconnect.Enabled,
+			Interval:   pc.Reconnect.Interval,
+			MaxRetries: int(pc.Reconnect.MaxRetries),
 		}
 	}
 

@@ -5,6 +5,7 @@ package gateway
 import (
 	"net"
 	"net/netip"
+	"regexp"
 	"strings"
 
 	"awg-split-tunnel/internal/core"
@@ -90,8 +91,9 @@ func (t *PrefixTrie) Len() int {
 
 // appPattern holds a pre-lowercased app pattern for matching.
 type appPattern struct {
-	original string // original pattern (for MatchPreprocessed)
-	lower    string // pre-lowercased
+	original string         // original pattern (for MatchPreprocessed)
+	lower    string         // pre-lowercased
+	regex    *regexp.Regexp // compiled regex for "regex:" patterns (nil otherwise)
 }
 
 // tunnelFilter holds per-tunnel filter data.
@@ -180,7 +182,11 @@ func NewIPFilter(global core.GlobalFilterConfig, tunnels []core.TunnelConfig) *I
 // matches any global DisallowedApps pattern.
 func (f *IPFilter) IsDisallowedApp(exeLower, baseLower string) bool {
 	for _, p := range f.globalDisallowedApps {
-		if process.MatchPreprocessed(exeLower, baseLower, p.original, p.lower) {
+		if p.regex != nil {
+			if p.regex.MatchString(exeLower) {
+				return true
+			}
+		} else if process.MatchPreprocessed(exeLower, baseLower, p.original, p.lower) {
 			return true
 		}
 	}
@@ -195,7 +201,11 @@ func (f *IPFilter) IsTunnelDisallowedApp(tunnelID, exeLower, baseLower string) b
 		return false
 	}
 	for _, p := range tf.disallowedApps {
-		if process.MatchPreprocessed(exeLower, baseLower, p.original, p.lower) {
+		if p.regex != nil {
+			if p.regex.MatchString(exeLower) {
+				return true
+			}
+		} else if process.MatchPreprocessed(exeLower, baseLower, p.original, p.lower) {
 			return true
 		}
 	}
@@ -327,7 +337,7 @@ func GetBypassPrefixes(global core.GlobalFilterConfig) []netip.Prefix {
 	return prefixes
 }
 
-// buildAppPatterns pre-lowercases app patterns.
+// buildAppPatterns pre-lowercases app patterns and compiles regex patterns.
 func buildAppPatterns(patterns []string) []appPattern {
 	if len(patterns) == 0 {
 		return nil
@@ -338,10 +348,18 @@ func buildAppPatterns(patterns []string) []appPattern {
 		if p == "" {
 			continue
 		}
-		result = append(result, appPattern{
+		ap := appPattern{
 			original: p,
 			lower:    strings.ToLower(p),
-		})
+		}
+		if strings.HasPrefix(p, "regex:") {
+			if re, err := regexp.Compile(p[6:]); err == nil {
+				ap.regex = re
+			} else {
+				core.Log.Warnf("Gateway", "Invalid regex in DisallowedApps %q: %v", p, err)
+			}
+		}
+		result = append(result, ap)
 	}
 	return result
 }

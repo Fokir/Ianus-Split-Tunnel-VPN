@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import * as api from '../api.js';
   import ErrorAlert from '../ErrorAlert.svelte';
+  import { t, locale, availableLocales } from '../i18n';
 
   let config = null;
   let autostart = null;
@@ -16,6 +17,18 @@
 
   // Auto-update toggle (persisted in localStorage)
   let autoUpdateEnabled = localStorage.getItem('autoUpdateEnabled') !== 'false';
+
+  // Notification preferences (persisted in localStorage)
+  let notifEnabled = localStorage.getItem('notifEnabled') !== 'false';
+  let notifTunnelErrors = localStorage.getItem('notifTunnelErrors') !== 'false';
+  let notifUpdates = localStorage.getItem('notifUpdates') !== 'false';
+
+  function updateNotifPrefs() {
+    localStorage.setItem('notifEnabled', notifEnabled);
+    localStorage.setItem('notifTunnelErrors', notifTunnelErrors);
+    localStorage.setItem('notifUpdates', notifUpdates);
+    api.setNotificationPreferences(notifEnabled, notifTunnelErrors, notifUpdates);
+  }
 
   onMount(async () => {
     await loadData();
@@ -43,8 +56,9 @@
       if (!config.dns.cache) config.dns.cache = { enabled: true, max_size: 10000, max_ttl: '5m', min_ttl: '30s', neg_ttl: '60s' };
       if (!config.logging) config.logging = { level: 'INFO', file_logging_enabled: false };
       if (config.logging.file_logging_enabled === undefined) config.logging.file_logging_enabled = false;
+      if (!config.reconnect) config.reconnect = { enabled: true, interval: '10s', max_retries: 0 };
     } catch (e) {
-      error = e.message || 'Не удалось загрузить конфигурацию';
+      error = e.message || $t('settings.failedToLoad');
     } finally {
       loading = false;
     }
@@ -68,7 +82,7 @@
       try {
         await api.setAutostart(autostart.enabled, autostart.restoreConnections);
       } catch (e) {
-        error = 'Настройки сохранены, но автозапуск не удалось обновить: ' + e.message;
+        error = $t('settings.autostartFailed') + e.message;
       }
 
       dirty = false;
@@ -122,7 +136,7 @@
 
 <div class="p-4 space-y-6">
   <div class="flex items-center justify-between">
-    <h2 class="text-lg font-semibold text-zinc-100">Настройки</h2>
+    <h2 class="text-lg font-semibold text-zinc-100">{$t('settings.title')}</h2>
     {#if dirty}
       <div class="flex items-center gap-2">
         <button
@@ -130,14 +144,14 @@
           on:click={cancel}
           disabled={saving}
         >
-          Отмена
+          {$t('settings.cancel')}
         </button>
         <button
           class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40"
           on:click={save}
           disabled={saving}
         >
-          {saving ? 'Сохранение...' : 'Сохранить'}
+          {saving ? $t('settings.saving') : $t('settings.save')}
         </button>
       </div>
     {/if}
@@ -155,14 +169,35 @@
       </svg>
     </div>
   {:else if config}
+    <!-- Language -->
+    <section class="space-y-3">
+      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">{$t('settings.language')}</h3>
+      <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4">
+        <div>
+          <label for="lang-select" class="block text-xs font-medium text-zinc-400 mb-1">{$t('settings.langLabel')}</label>
+          <p class="text-xs text-zinc-500 mb-2">{$t('settings.langHint')}</p>
+          <select
+            id="lang-select"
+            value={$locale}
+            on:change={e => locale.set(e.target.value)}
+            class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
+          >
+            {#each availableLocales as loc}
+              <option value={loc.code}>{loc.label}</option>
+            {/each}
+          </select>
+        </div>
+      </div>
+    </section>
+
     <!-- General -->
     <section class="space-y-3">
-      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">Основные</h3>
+      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">{$t('settings.general')}</h3>
       <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4 space-y-3">
         <label class="flex items-center justify-between cursor-pointer">
           <div>
-            <div class="text-sm text-zinc-200">Автозапуск</div>
-            <div class="text-xs text-zinc-500">Запускать при входе в систему</div>
+            <div class="text-sm text-zinc-200">{$t('settings.autostart')}</div>
+            <div class="text-xs text-zinc-500">{$t('settings.autostartHint')}</div>
           </div>
           <input
             type="checkbox"
@@ -177,8 +212,8 @@
         </label>
         <label class="flex items-center justify-between cursor-pointer">
           <div>
-            <div class="text-sm text-zinc-200">Восстанавливать подключения</div>
-            <div class="text-xs text-zinc-500">Автоподключение туннелей при старте</div>
+            <div class="text-sm text-zinc-200">{$t('settings.restoreConnections')}</div>
+            <div class="text-xs text-zinc-500">{$t('settings.restoreConnectionsHint')}</div>
           </div>
           <input
             type="checkbox"
@@ -194,14 +229,121 @@
       </div>
     </section>
 
+    <!-- Reconnect -->
+    <section class="space-y-3">
+      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">{$t('settings.reconnect')}</h3>
+      <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4 space-y-3">
+        <label class="flex items-center justify-between cursor-pointer">
+          <div>
+            <div class="text-sm text-zinc-200">{$t('settings.autoReconnect')}</div>
+            <div class="text-xs text-zinc-500">{$t('settings.autoReconnectHint')}</div>
+          </div>
+          <input
+            type="checkbox"
+            bind:checked={config.reconnect.enabled}
+            on:change={markDirty}
+            class="w-9 h-5 bg-zinc-700 rounded-full appearance-none relative cursor-pointer
+                   checked:bg-blue-600 transition-colors
+                   after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4
+                   after:bg-white after:rounded-full after:transition-transform
+                   checked:after:translate-x-4"
+          />
+        </label>
+        {#if config.reconnect.enabled}
+          <div class="flex items-center gap-3">
+            <div class="flex-1">
+              <label for="reconnect-interval" class="block text-xs text-zinc-500 mb-1">{$t('settings.interval')}</label>
+              <input
+                id="reconnect-interval"
+                type="text"
+                bind:value={config.reconnect.interval}
+                on:input={markDirty}
+                placeholder="5s"
+                class="w-full px-2.5 py-1.5 text-sm bg-zinc-900 border border-zinc-700 rounded-md text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50"
+              />
+            </div>
+            <div class="flex-1">
+              <label for="reconnect-max" class="block text-xs text-zinc-500 mb-1">{$t('settings.maxRetries')}</label>
+              <input
+                id="reconnect-max"
+                type="number"
+                bind:value={config.reconnect.max_retries}
+                on:input={markDirty}
+                min="0"
+                placeholder="0"
+                class="w-full px-2.5 py-1.5 text-sm bg-zinc-900 border border-zinc-700 rounded-md text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50"
+              />
+            </div>
+          </div>
+        {/if}
+      </div>
+    </section>
+
+    <!-- Notifications -->
+    <section class="space-y-3">
+      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">{$t('settings.notifications')}</h3>
+      <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4 space-y-3">
+        <label class="flex items-center justify-between cursor-pointer">
+          <div>
+            <div class="text-sm text-zinc-200">{$t('settings.notificationsToggle')}</div>
+            <div class="text-xs text-zinc-500">{$t('settings.notificationsHint')}</div>
+          </div>
+          <input
+            type="checkbox"
+            bind:checked={notifEnabled}
+            on:change={updateNotifPrefs}
+            class="w-9 h-5 bg-zinc-700 rounded-full appearance-none relative cursor-pointer
+                   checked:bg-blue-600 transition-colors
+                   after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4
+                   after:bg-white after:rounded-full after:transition-transform
+                   checked:after:translate-x-4"
+          />
+        </label>
+        {#if notifEnabled}
+          <label class="flex items-center justify-between cursor-pointer">
+            <div>
+              <div class="text-sm text-zinc-200">{$t('settings.tunnelErrors')}</div>
+              <div class="text-xs text-zinc-500">{$t('settings.tunnelErrorsHint')}</div>
+            </div>
+            <input
+              type="checkbox"
+              bind:checked={notifTunnelErrors}
+              on:change={updateNotifPrefs}
+              class="w-9 h-5 bg-zinc-700 rounded-full appearance-none relative cursor-pointer
+                     checked:bg-blue-600 transition-colors
+                     after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4
+                     after:bg-white after:rounded-full after:transition-transform
+                     checked:after:translate-x-4"
+            />
+          </label>
+          <label class="flex items-center justify-between cursor-pointer">
+            <div>
+              <div class="text-sm text-zinc-200">{$t('settings.updates')}</div>
+              <div class="text-xs text-zinc-500">{$t('settings.updatesHint')}</div>
+            </div>
+            <input
+              type="checkbox"
+              bind:checked={notifUpdates}
+              on:change={updateNotifPrefs}
+              class="w-9 h-5 bg-zinc-700 rounded-full appearance-none relative cursor-pointer
+                     checked:bg-blue-600 transition-colors
+                     after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4
+                     after:bg-white after:rounded-full after:transition-transform
+                     checked:after:translate-x-4"
+            />
+          </label>
+        {/if}
+      </div>
+    </section>
+
     <!-- Updates -->
     <section class="space-y-3">
-      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">Обновления</h3>
+      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">{$t('settings.updatesSection')}</h3>
       <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4">
         <label class="flex items-center justify-between cursor-pointer">
           <div>
-            <div class="text-sm text-zinc-200">Автопроверка обновлений</div>
-            <div class="text-xs text-zinc-500">Периодически проверять новые версии</div>
+            <div class="text-sm text-zinc-200">{$t('settings.autoUpdateCheck')}</div>
+            <div class="text-xs text-zinc-500">{$t('settings.autoUpdateCheckHint')}</div>
           </div>
           <input
             type="checkbox"
@@ -219,11 +361,11 @@
 
     <!-- DNS -->
     <section class="space-y-3">
-      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">DNS</h3>
+      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">{$t('settings.dns')}</h3>
       <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4 space-y-3">
         <div>
           <!-- svelte-ignore a11y-label-has-associated-control -->
-          <label class="block text-xs font-medium text-zinc-400 mb-2">Туннели для DNS</label>
+          <label class="block text-xs font-medium text-zinc-400 mb-2">{$t('settings.dnsTunnels')}</label>
           <div class="space-y-1">
             {#each tunnels as t}
               <label class="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-zinc-800/60 cursor-pointer transition-colors">
@@ -244,14 +386,14 @@
               </label>
             {/each}
             {#if tunnels.length === 0}
-              <p class="text-xs text-zinc-500 px-3">Нет настроенных туннелей</p>
+              <p class="text-xs text-zinc-500 px-3">{$t('settings.noTunnels')}</p>
             {/if}
           </div>
         </div>
 
         <div>
           <!-- svelte-ignore a11y-label-has-associated-control -->
-          <label class="block text-xs font-medium text-zinc-400 mb-2">DNS серверы</label>
+          <label class="block text-xs font-medium text-zinc-400 mb-2">{$t('settings.dnsServers')}</label>
           <div class="space-y-1.5">
             {#each config.dns.servers as server, i}
               <div class="flex gap-1.5">
@@ -277,7 +419,7 @@
             class="mt-2 text-xs text-blue-400 hover:text-blue-300 transition-colors"
             on:click={addDnsServer}
           >
-            + Добавить сервер
+            {$t('settings.addServer')}
           </button>
         </div>
       </div>
@@ -292,14 +434,14 @@
         <svg class="w-3.5 h-3.5 transition-transform {dnsCacheExpanded ? 'rotate-90' : ''}" viewBox="0 0 24 24" fill="currentColor">
           <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
         </svg>
-        DNS Кэш
+        {$t('settings.dnsCache')}
       </button>
       {#if dnsCacheExpanded}
         <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4 space-y-3">
           <label class="flex items-center justify-between cursor-pointer">
             <div>
-              <div class="text-sm text-zinc-200">Включен</div>
-              <div class="text-xs text-zinc-500">Кэшировать DNS ответы для ускорения</div>
+              <div class="text-sm text-zinc-200">{$t('settings.dnsCacheEnabled')}</div>
+              <div class="text-xs text-zinc-500">{$t('settings.dnsCacheHint')}</div>
             </div>
             <input
               type="checkbox"
@@ -314,7 +456,7 @@
           </label>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label for="dns-cache-ttl" class="block text-xs font-medium text-zinc-400 mb-1">Max TTL</label>
+              <label for="dns-cache-ttl" class="block text-xs font-medium text-zinc-400 mb-1">{$t('settings.maxTtl')}</label>
               <input
                 id="dns-cache-ttl"
                 type="text"
@@ -325,7 +467,7 @@
               />
             </div>
             <div>
-              <label for="dns-cache-entries" class="block text-xs font-medium text-zinc-400 mb-1">Max записей</label>
+              <label for="dns-cache-entries" class="block text-xs font-medium text-zinc-400 mb-1">{$t('settings.maxEntries')}</label>
               <input
                 id="dns-cache-entries"
                 type="number"
@@ -341,12 +483,12 @@
 
     <!-- Logging -->
     <section class="space-y-3">
-      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">Логирование</h3>
+      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">{$t('settings.logging')}</h3>
       <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4 space-y-3">
         <label class="flex items-center justify-between cursor-pointer">
           <div>
-            <div class="text-sm text-zinc-200">Запись в файл</div>
-            <div class="text-xs text-zinc-500">Сохранять логи в папку logs/</div>
+            <div class="text-sm text-zinc-200">{$t('settings.fileLogging')}</div>
+            <div class="text-xs text-zinc-500">{$t('settings.fileLoggingHint')}</div>
           </div>
           <input
             type="checkbox"
@@ -360,7 +502,7 @@
           />
         </label>
         <div>
-          <label for="log-level" class="block text-xs font-medium text-zinc-400 mb-1">Уровень логирования</label>
+          <label for="log-level" class="block text-xs font-medium text-zinc-400 mb-1">{$t('settings.logLevel')}</label>
           <select
             id="log-level"
             bind:value={config.logging.level}
@@ -375,5 +517,6 @@
         </div>
       </div>
     </section>
+
   {/if}
 </div>

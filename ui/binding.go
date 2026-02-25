@@ -30,12 +30,18 @@ type BindingService struct {
 	cancel          context.CancelFunc // cancels all streaming goroutines
 	logStreamOnce   sync.Once
 	statsStreamOnce sync.Once
+	notifMgr        *NotificationManager
 }
 
 // NewBindingService creates a BindingService wrapping the IPC client.
 func NewBindingService(client *ipc.Client) *BindingService {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &BindingService{client: client, ctx: ctx, cancel: cancel}
+	return &BindingService{
+		client:   client,
+		ctx:      ctx,
+		cancel:   cancel,
+		notifMgr: NewNotificationManager(),
+	}
 }
 
 // Shutdown cancels all background streaming goroutines.
@@ -369,6 +375,14 @@ func (b *BindingService) ListGeositeCategories() ([]string, error) {
 	return resp.Categories, nil
 }
 
+func (b *BindingService) ListGeoIPCategories() ([]string, error) {
+	resp, err := b.client.Service.ListGeoIPCategories(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Categories, nil
+}
+
 func (b *BindingService) UpdateGeosite() error {
 	resp, err := b.client.Service.UpdateGeosite(context.Background(), &emptypb.Empty{})
 	if err != nil {
@@ -501,6 +515,13 @@ func (b *BindingService) RestoreConnections() error {
 	return nil
 }
 
+// ─── Notifications ──────────────────────────────────────────────────
+
+// SetNotificationPreferences updates notification settings at runtime.
+func (b *BindingService) SetNotificationPreferences(enabled, tunnelErrors, updates bool) {
+	b.notifMgr.SetPreferences(enabled, tunnelErrors, updates)
+}
+
 // ─── Log streaming ──────────────────────────────────────────────────
 
 // StartLogStream begins streaming logs from the VPN service and emitting
@@ -567,6 +588,9 @@ func (b *BindingService) runStatsStream() {
 		return
 	}
 
+	// Track previous tunnel states for transition detection.
+	prevStates := make(map[string]vpnapi.TunnelState)
+
 	for {
 		snap, err := stream.Recv()
 		if err != nil {
@@ -584,6 +608,18 @@ func (b *BindingService) runStatsStream() {
 				"latencyMs":  t.LatencyMs,
 				"jitterMs":   t.JitterMs,
 			})
+
+			// Detect state transitions for notifications.
+			prev, hasPrev := prevStates[t.TunnelId]
+			if hasPrev {
+				if prev == vpnapi.TunnelState_TUNNEL_STATE_UP && t.State == vpnapi.TunnelState_TUNNEL_STATE_ERROR {
+					b.notifMgr.NotifyTunnelError(t.TunnelId, "Connection lost")
+				}
+				if prev == vpnapi.TunnelState_TUNNEL_STATE_ERROR && t.State == vpnapi.TunnelState_TUNNEL_STATE_UP {
+					b.notifMgr.NotifyReconnected(t.TunnelId)
+				}
+			}
+			prevStates[t.TunnelId] = t.State
 		}
 
 		app.Event.Emit("stats-update", map[string]interface{}{
@@ -769,6 +805,7 @@ func (b *BindingService) StartUpdateNotifier() {
 				if err != nil || !result.Available {
 					continue
 				}
+				b.notifMgr.NotifyUpdateAvailable(result.Version)
 				app.Event.Emit("update-available", map[string]interface{}{
 					"version":      result.Version,
 					"releaseNotes": result.ReleaseNotes,

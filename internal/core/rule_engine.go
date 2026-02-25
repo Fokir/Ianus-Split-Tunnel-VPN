@@ -4,6 +4,7 @@ package core
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -22,10 +23,27 @@ type MatchResult struct {
 type RuleEngine struct {
 	mu            sync.RWMutex
 	rules         []Rule
-	rulesLower    []string // pre-lowercased patterns, parallel to rules
-	activeTunnels map[string]bool // set of connected tunnel IDs
+	rulesLower    []string         // pre-lowercased patterns, parallel to rules
+	regexCache    []*regexp.Regexp // compiled regex patterns, parallel to rules (nil for non-regex)
+	activeTunnels map[string]bool  // set of connected tunnel IDs
 	bus           *EventBus
 	matcher       *process.Matcher
+}
+
+// compileRegexPatterns builds a parallel slice of compiled regexps for rules
+// that use the "regex:" prefix. Non-regex rules get nil entries.
+func compileRegexPatterns(rules []Rule) []*regexp.Regexp {
+	result := make([]*regexp.Regexp, len(rules))
+	for i, r := range rules {
+		if strings.HasPrefix(r.Pattern, "regex:") {
+			if re, err := regexp.Compile(r.Pattern[6:]); err == nil {
+				result[i] = re
+			} else {
+				Log.Warnf("Rule", "Invalid regex %q: %v", r.Pattern, err)
+			}
+		}
+	}
+	return result
 }
 
 // NewRuleEngine creates a rule engine with the given initial rules.
@@ -37,6 +55,7 @@ func NewRuleEngine(rules []Rule, bus *EventBus, matcher *process.Matcher) *RuleE
 	return &RuleEngine{
 		rules:         rules,
 		rulesLower:    lower,
+		regexCache:    compileRegexPatterns(rules),
 		activeTunnels: make(map[string]bool),
 		bus:           bus,
 		matcher:       matcher,
@@ -54,7 +73,13 @@ func (re *RuleEngine) Match(exePath string) MatchResult {
 	baseLower := filepath.Base(exeLower)
 
 	for i, rule := range re.rules {
-		if process.MatchPreprocessed(exeLower, baseLower, rule.Pattern, re.rulesLower[i]) {
+		var matched bool
+		if re.regexCache[i] != nil {
+			matched = re.regexCache[i].MatchString(exeLower)
+		} else {
+			matched = process.MatchPreprocessed(exeLower, baseLower, rule.Pattern, re.rulesLower[i])
+		}
+		if matched {
 			if rule.TunnelID != "" && rule.TunnelID != "__direct__" && !re.activeTunnels[rule.TunnelID] {
 				continue // skip rule — its tunnel is not connected
 			}
@@ -78,7 +103,13 @@ func (re *RuleEngine) MatchPreLowered(exeLower, baseLower string) MatchResult {
 	defer re.mu.RUnlock()
 
 	for i, rule := range re.rules {
-		if process.MatchPreprocessed(exeLower, baseLower, rule.Pattern, re.rulesLower[i]) {
+		var matched bool
+		if re.regexCache[i] != nil {
+			matched = re.regexCache[i].MatchString(exeLower)
+		} else {
+			matched = process.MatchPreprocessed(exeLower, baseLower, rule.Pattern, re.rulesLower[i])
+		}
+		if matched {
 			if rule.TunnelID != "" && rule.TunnelID != "__direct__" && !re.activeTunnels[rule.TunnelID] {
 				continue
 			}
@@ -103,7 +134,13 @@ func (re *RuleEngine) MatchPreLoweredFrom(exeLower, baseLower string, startIdx i
 	defer re.mu.RUnlock()
 
 	for i := startIdx; i < len(re.rules); i++ {
-		if process.MatchPreprocessed(exeLower, baseLower, re.rules[i].Pattern, re.rulesLower[i]) {
+		var matched bool
+		if re.regexCache[i] != nil {
+			matched = re.regexCache[i].MatchString(exeLower)
+		} else {
+			matched = process.MatchPreprocessed(exeLower, baseLower, re.rules[i].Pattern, re.rulesLower[i])
+		}
+		if matched {
 			if re.rules[i].TunnelID != "" && re.rules[i].TunnelID != "__direct__" && !re.activeTunnels[re.rules[i].TunnelID] {
 				continue
 			}
@@ -134,11 +171,13 @@ func (re *RuleEngine) SetRules(rules []Rule) {
 	for i, r := range rules {
 		lower[i] = strings.ToLower(r.Pattern)
 	}
+	rxCache := compileRegexPatterns(rules)
 
 	re.mu.Lock()
 	re.rules = make([]Rule, len(rules))
 	copy(re.rules, rules)
 	re.rulesLower = lower
+	re.regexCache = rxCache
 	re.mu.Unlock()
 
 	Log.Infof("Rule", "Updated %d rules", len(rules))
@@ -146,9 +185,18 @@ func (re *RuleEngine) SetRules(rules []Rule) {
 
 // AddRule appends a rule and notifies subscribers.
 func (re *RuleEngine) AddRule(rule Rule) {
+	var compiled *regexp.Regexp
+	if strings.HasPrefix(rule.Pattern, "regex:") {
+		if rx, err := regexp.Compile(rule.Pattern[6:]); err == nil {
+			compiled = rx
+		} else {
+			Log.Warnf("Rule", "Invalid regex %q: %v", rule.Pattern, err)
+		}
+	}
 	re.mu.Lock()
 	re.rules = append(re.rules, rule)
 	re.rulesLower = append(re.rulesLower, strings.ToLower(rule.Pattern))
+	re.regexCache = append(re.regexCache, compiled)
 	re.mu.Unlock()
 
 	Log.Infof("Rule", "Added: %s → %s (fallback=%s)", rule.Pattern, rule.TunnelID, rule.Fallback)
@@ -166,6 +214,7 @@ func (re *RuleEngine) RemoveRule(pattern string) bool {
 		if rule.Pattern == pattern {
 			re.rules = append(re.rules[:i], re.rules[i+1:]...)
 			re.rulesLower = append(re.rulesLower[:i], re.rulesLower[i+1:]...)
+			re.regexCache = append(re.regexCache[:i], re.regexCache[i+1:]...)
 			Log.Infof("Rule", "Removed: %s", pattern)
 			if re.bus != nil {
 				re.bus.Publish(Event{Type: EventRuleRemoved, Payload: RulePayload{Rule: rule}})

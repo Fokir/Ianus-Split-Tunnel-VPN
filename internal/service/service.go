@@ -54,10 +54,12 @@ type Service struct {
 
 	domainReloader  func(rules []core.DomainRule) error
 	geositeFilePath string
+	geoipFilePath   string
 	httpClient      *http.Client
 
 	subMgr         *core.SubscriptionManager
 	updateChecker  *update.Checker
+	reconnectMgr   *ReconnectManager
 
 	mu sync.RWMutex
 }
@@ -78,12 +80,16 @@ type Config struct {
 	DomainReloader func(rules []core.DomainRule) error
 	// GeositeFilePath is the path to geosite.dat for listing categories and updating.
 	GeositeFilePath string
+	// GeoIPFilePath is the path to geoip.dat for listing categories and updating.
+	GeoIPFilePath string
 	// HTTPClient is bound to the real NIC to bypass TUN for outbound HTTP (geosite downloads).
 	HTTPClient *http.Client
 	// SubscriptionManager manages subscription URL fetching and refresh.
 	SubscriptionManager *core.SubscriptionManager
 	// UpdateChecker is an optional auto-update checker instance.
 	UpdateChecker *update.Checker
+	// ReconnectManager handles auto-reconnection on tunnel failures.
+	ReconnectManager *ReconnectManager
 }
 
 // New creates a new Service instance.
@@ -98,6 +104,7 @@ func New(c Config) *Service {
 		startTime:       time.Now(),
 		domainReloader:  c.DomainReloader,
 		geositeFilePath: c.GeositeFilePath,
+		geoipFilePath:   c.GeoIPFilePath,
 		httpClient:      c.HTTPClient,
 	}
 	if c.LogStreamer != nil {
@@ -112,6 +119,7 @@ func New(c Config) *Service {
 	}
 	s.subMgr = c.SubscriptionManager
 	s.updateChecker = c.UpdateChecker
+	s.reconnectMgr = c.ReconnectManager
 	return s
 }
 
@@ -131,10 +139,23 @@ func (s *Service) Start(ctx context.Context) {
 			s.syncSubscriptionTunnels(ctx, payload.Name, payload.Tunnels)
 		})
 	}
+
+	// Start auto-reconnection manager.
+	if s.reconnectMgr != nil {
+		s.reconnectMgr.Start()
+	}
 }
 
 // Stop shuts down background workers.
 func (s *Service) Stop() {
+	if s.reconnectMgr != nil {
+		s.reconnectMgr.Stop()
+	}
 	s.logs.Stop()
 	s.stats.Stop()
+}
+
+// ReconnectManager returns the reconnect manager for external use.
+func (s *Service) ReconnectManager() *ReconnectManager {
+	return s.reconnectMgr
 }

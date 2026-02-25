@@ -195,6 +195,11 @@ type DomainRule struct {
 	Action DomainAction `yaml:"action"`
 }
 
+// DomainMatchFunc matches a domain name against domain rules.
+// Returns the target tunnel ID, action, and whether a match was found.
+// Used by the proxy layer for SNI-based routing without importing gateway.
+type DomainMatchFunc func(domain string) (tunnelID string, action DomainAction, matched bool)
+
 // Rule maps a process pattern to a tunnel with a fallback policy.
 type Rule struct {
 	// Pattern is the matching expression: "firefox.exe", "chrome", "C:\Games\*"
@@ -273,10 +278,18 @@ func (u UpdateConfig) IsEnabled() bool {
 	return *u.Enabled
 }
 
+// ReconnectConfig holds auto-reconnection settings.
+type ReconnectConfig struct {
+	Enabled    bool   `yaml:"enabled,omitempty"`
+	Interval   string `yaml:"interval,omitempty"`    // duration string, e.g. "5s"
+	MaxRetries int    `yaml:"max_retries,omitempty"` // 0 = unlimited
+}
+
 // GUIConfig holds GUI-specific settings.
 type GUIConfig struct {
-	RestoreConnections bool     `yaml:"restore_connections,omitempty"`
-	ActiveTunnels      []string `yaml:"active_tunnels,omitempty"`
+	RestoreConnections bool            `yaml:"restore_connections,omitempty"`
+	ActiveTunnels      []string        `yaml:"active_tunnels,omitempty"`
+	Reconnect          ReconnectConfig `yaml:"reconnect,omitempty"`
 }
 
 // SubscriptionConfig holds configuration for a VLESS subscription URL.

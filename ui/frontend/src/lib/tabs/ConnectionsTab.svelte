@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte';
   import * as api from '../api.js';
   import ErrorAlert from '../ErrorAlert.svelte';
+  import { t } from '../i18n';
 
   let tunnels = [];
   let loading = true;
@@ -69,7 +70,7 @@
     try {
       tunnels = (await api.listTunnels() || []).filter(t => t.id !== '__direct__');
     } catch (e) {
-      error = e.message || 'Не удалось загрузить список туннелей';
+      error = e.message || $t('connections.failedToLoad');
     } finally {
       loading = false;
     }
@@ -141,8 +142,8 @@
 
   async function saveUri() {
     const uri = uriValue.trim();
-    if (!uri) { uriError = 'Вставьте ссылку vless://'; return; }
-    if (!uri.startsWith('vless://')) { uriError = 'Ссылка должна начинаться с vless://'; return; }
+    if (!uri) { uriError = $t('connections.vlessUriEmpty'); return; }
+    if (!uri.startsWith('vless://')) { uriError = $t('connections.vlessUriInvalid'); return; }
     uriSaving = true;
     uriError = '';
     try {
@@ -190,14 +191,14 @@
   }
 
   async function saveModal() {
-    if (!modalName.trim()) { modalError = 'Введите имя туннеля'; return; }
+    if (!modalName.trim()) { modalError = $t('connections.nameRequired'); return; }
     modalSaving = true;
     modalError = '';
 
     let settings = {};
     try {
       if (modalProtocol === 'socks5') {
-        if (!socks5Server) { modalError = 'Укажите адрес сервера'; modalSaving = false; return; }
+        if (!socks5Server) { modalError = $t('connections.serverRequired'); modalSaving = false; return; }
         settings = {
           server: socks5Server,
           port: socks5Port,
@@ -206,7 +207,7 @@
           udp_enabled: socks5UdpEnabled ? 'true' : 'false',
         };
       } else if (modalProtocol === 'httpproxy') {
-        if (!httpServer) { modalError = 'Укажите адрес сервера'; modalSaving = false; return; }
+        if (!httpServer) { modalError = $t('connections.serverRequired'); modalSaving = false; return; }
         settings = {
           server: httpServer,
           port: httpPort,
@@ -216,8 +217,8 @@
           tls_skip_verify: httpTlsSkipVerify ? 'true' : 'false',
         };
       } else if (modalProtocol === 'vless') {
-        if (!vlessAddress) { modalError = 'Укажите адрес сервера'; modalSaving = false; return; }
-        if (!vlessUuid) { modalError = 'Укажите UUID'; modalSaving = false; return; }
+        if (!vlessAddress) { modalError = $t('connections.serverRequired'); modalSaving = false; return; }
+        if (!vlessUuid) { modalError = $t('connections.uuidRequired'); modalSaving = false; return; }
         settings = {
           address: vlessAddress,
           port: vlessPort,
@@ -286,10 +287,10 @@
 
   function stateLabel(state) {
     switch (state) {
-      case 'up': return 'Подключен';
-      case 'connecting': return 'Подключение...';
-      case 'error': return 'Ошибка';
-      case 'down': return 'Отключен';
+      case 'up': return $t('connections.stateUp');
+      case 'connecting': return $t('connections.stateConnecting');
+      case 'error': return $t('connections.stateError');
+      case 'down': return $t('connections.stateDown');
       default: return state;
     }
   }
@@ -307,26 +308,26 @@
 <div class="p-4 space-y-4">
   <!-- Header -->
   <div class="flex items-center justify-between">
-    <h2 class="text-lg font-semibold text-zinc-100">Подключения</h2>
+    <h2 class="text-lg font-semibold text-zinc-100">{$t('connections.title')}</h2>
     <div class="flex items-center gap-2">
       <button
         class="px-3 py-1.5 text-xs font-medium rounded-md bg-green-600/20 text-green-400 hover:bg-green-600/30 transition-colors"
         on:click={connectAllTunnels}
       >
-        Подключить все
+        {$t('connections.connectAll')}
       </button>
       <button
         class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
         on:click={disconnectAllTunnels}
       >
-        Отключить все
+        {$t('connections.disconnectAll')}
       </button>
       <div class="relative">
         <button
           class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
           on:click={() => showAddMenu = !showAddMenu}
         >
-          + Добавить
+          {$t('connections.add')}
         </button>
         {#if showAddMenu}
           <div class="absolute right-0 top-full mt-1 w-52 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl z-10 py-1">
@@ -344,7 +345,7 @@
             </button>
             <button class="w-full px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-700/50 transition-colors"
               on:click={openUriModal}>
-              VLESS (vless:// ссылка)
+              {$t('connections.vlessLink')}
             </button>
             <div class="border-t border-zinc-700 my-1"></div>
             <button class="w-full px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-700/50 transition-colors"
@@ -385,15 +386,15 @@
         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
       </svg>
-      Загрузка...
+      {$t('connections.loading')}
     </div>
   {:else if tunnels.length === 0}
     <div class="flex flex-col items-center justify-center py-16 text-zinc-500">
       <svg class="w-12 h-12 mb-3 text-zinc-600" viewBox="0 0 24 24" fill="currentColor">
         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
       </svg>
-      <p class="text-sm">Нет настроенных туннелей</p>
-      <p class="text-xs text-zinc-600 mt-1">Нажмите «+ Добавить» для создания нового подключения</p>
+      <p class="text-sm">{$t('connections.noTunnels')}</p>
+      <p class="text-xs text-zinc-600 mt-1">{$t('connections.noTunnelsHint')}</p>
     </div>
   {:else}
     <!-- Tunnel list -->
@@ -425,7 +426,7 @@
             {#if tunnel.state === 'up'}
               <button
                 class="p-1.5 rounded-md text-zinc-400 hover:text-yellow-400 hover:bg-zinc-700/50 transition-colors"
-                title="Перезапустить"
+                title={$t('connections.restart')}
                 on:click={() => restart(tunnel.id)}
               >
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -434,7 +435,7 @@
               </button>
               <button
                 class="p-1.5 rounded-md text-zinc-400 hover:text-red-400 hover:bg-zinc-700/50 transition-colors"
-                title="Отключить"
+                title={$t('connections.disconnect')}
                 on:click={() => disconnect(tunnel.id)}
               >
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -444,7 +445,7 @@
             {:else if tunnel.state === 'down' || tunnel.state === 'error'}
               <button
                 class="p-1.5 rounded-md text-zinc-400 hover:text-green-400 hover:bg-zinc-700/50 transition-colors"
-                title="Подключить"
+                title={$t('connections.connect')}
                 on:click={() => connect(tunnel.id)}
               >
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -454,7 +455,7 @@
             {/if}
             <button
               class="p-1.5 rounded-md text-zinc-400 hover:text-red-400 hover:bg-zinc-700/50 transition-colors"
-              title="Удалить"
+              title={$t('connections.remove')}
               on:click={() => remove(tunnel.id)}
             >
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -488,32 +489,32 @@
         {/if}
         <!-- Name (common) -->
         <div>
-          <label for="tunnel-name" class="block text-xs font-medium text-zinc-400 mb-1">Имя</label>
-          <input id="tunnel-name" type="text" bind:value={modalName} placeholder="Мой туннель"
+          <label for="tunnel-name" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.name')}</label>
+          <input id="tunnel-name" type="text" bind:value={modalName} placeholder={$t('connections.namePlaceholder')}
             class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
         </div>
 
         <!-- SOCKS5 form -->
         {#if modalProtocol === 'socks5'}
           <div>
-            <label for="s5-server" class="block text-xs font-medium text-zinc-400 mb-1">Сервер</label>
+            <label for="s5-server" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.server')}</label>
             <input id="s5-server" type="text" bind:value={socks5Server} placeholder="proxy.example.com"
               class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
           </div>
           <div>
-            <label for="s5-port" class="block text-xs font-medium text-zinc-400 mb-1">Порт</label>
+            <label for="s5-port" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.port')}</label>
             <input id="s5-port" type="text" bind:value={socks5Port} placeholder="1080"
               class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
           </div>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label for="s5-user" class="block text-xs font-medium text-zinc-400 mb-1">Логин</label>
-              <input id="s5-user" type="text" bind:value={socks5Username} placeholder="(необязательно)"
+              <label for="s5-user" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.login')}</label>
+              <input id="s5-user" type="text" bind:value={socks5Username} placeholder={$t('connections.loginOptional')}
                 class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
             </div>
             <div>
-              <label for="s5-pass" class="block text-xs font-medium text-zinc-400 mb-1">Пароль</label>
-              <input id="s5-pass" type="password" bind:value={socks5Password} placeholder="(необязательно)"
+              <label for="s5-pass" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.password')}</label>
+              <input id="s5-pass" type="password" bind:value={socks5Password} placeholder={$t('connections.loginOptional')}
                 class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
             </div>
           </div>
@@ -525,24 +526,24 @@
         <!-- HTTP Proxy form -->
         {:else if modalProtocol === 'httpproxy'}
           <div>
-            <label for="http-server" class="block text-xs font-medium text-zinc-400 mb-1">Сервер</label>
+            <label for="http-server" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.server')}</label>
             <input id="http-server" type="text" bind:value={httpServer} placeholder="proxy.corp.com"
               class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
           </div>
           <div>
-            <label for="http-port" class="block text-xs font-medium text-zinc-400 mb-1">Порт</label>
+            <label for="http-port" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.port')}</label>
             <input id="http-port" type="text" bind:value={httpPort} placeholder="8080"
               class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
           </div>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label for="http-user" class="block text-xs font-medium text-zinc-400 mb-1">Логин</label>
-              <input id="http-user" type="text" bind:value={httpUsername} placeholder="(необязательно)"
+              <label for="http-user" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.login')}</label>
+              <input id="http-user" type="text" bind:value={httpUsername} placeholder={$t('connections.loginOptional')}
                 class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
             </div>
             <div>
-              <label for="http-pass" class="block text-xs font-medium text-zinc-400 mb-1">Пароль</label>
-              <input id="http-pass" type="password" bind:value={httpPassword} placeholder="(необязательно)"
+              <label for="http-pass" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.password')}</label>
+              <input id="http-pass" type="password" bind:value={httpPassword} placeholder={$t('connections.loginOptional')}
                 class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
             </div>
           </div>
@@ -553,23 +554,23 @@
           {#if httpTls}
             <label class="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer ml-5">
               <input type="checkbox" bind:checked={httpTlsSkipVerify} class="rounded border-zinc-600 bg-zinc-800 text-blue-500 focus:ring-blue-500" />
-              Не проверять сертификат
+              {$t('connections.noVerifyCert')}
             </label>
           {/if}
           <div class="px-3 py-2 text-xs bg-yellow-900/20 border border-yellow-800/30 rounded-lg text-yellow-400">
-            HTTP Proxy не поддерживает UDP. Игры, VoIP и QUIC могут не работать.
+            {$t('connections.httpNoUdp')}
           </div>
 
         <!-- VLESS form -->
         {:else if modalProtocol === 'vless'}
           <div class="grid grid-cols-3 gap-3">
             <div class="col-span-2">
-              <label for="vless-addr" class="block text-xs font-medium text-zinc-400 mb-1">Адрес</label>
+              <label for="vless-addr" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.address')}</label>
               <input id="vless-addr" type="text" bind:value={vlessAddress} placeholder="server.example.com"
                 class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
             </div>
             <div>
-              <label for="vless-port" class="block text-xs font-medium text-zinc-400 mb-1">Порт</label>
+              <label for="vless-port" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.port')}</label>
               <input id="vless-port" type="text" bind:value={vlessPort} placeholder="443"
                 class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
             </div>
@@ -581,15 +582,15 @@
           </div>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label for="vless-flow" class="block text-xs font-medium text-zinc-400 mb-1">Flow</label>
+              <label for="vless-flow" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.flow')}</label>
               <select id="vless-flow" bind:value={vlessFlow}
                 class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none">
-                <option value="">Нет</option>
+                <option value="">{$t('connections.flowNone')}</option>
                 <option value="xtls-rprx-vision">xtls-rprx-vision</option>
               </select>
             </div>
             <div>
-              <label for="vless-network" class="block text-xs font-medium text-zinc-400 mb-1">Транспорт</label>
+              <label for="vless-network" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.transport')}</label>
               <select id="vless-network" bind:value={vlessNetwork}
                 class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none">
                 <option value="tcp">TCP</option>
@@ -600,12 +601,12 @@
             </div>
           </div>
           <div>
-            <label for="vless-security" class="block text-xs font-medium text-zinc-400 mb-1">Безопасность</label>
+            <label for="vless-security" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.security')}</label>
             <select id="vless-security" bind:value={vlessSecurity}
               class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none">
               <option value="reality">Reality</option>
               <option value="tls">TLS</option>
-              <option value="none">Нет</option>
+              <option value="none">{$t('connections.securityNone')}</option>
             </select>
           </div>
 
@@ -663,7 +664,7 @@
               </div>
               <label class="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer">
                 <input type="checkbox" bind:checked={vlessTlsAllowInsecure} class="rounded border-zinc-600 bg-zinc-800 text-blue-500 focus:ring-blue-500" />
-                Не проверять сертификат
+                {$t('connections.noVerifyCert')}
               </label>
             </div>
           {/if}
@@ -712,7 +713,7 @@
                   class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
               </div>
               <div>
-                <label for="vless-xhm" class="block text-xs font-medium text-zinc-400 mb-1">Режим</label>
+                <label for="vless-xhm" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.mode')}</label>
                 <select id="vless-xhm" bind:value={vlessXhttpMode}
                   class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none">
                   <option value="auto">auto</option>
@@ -732,14 +733,14 @@
           class="px-4 py-2 text-sm rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
           on:click={closeModal}
         >
-          Отмена
+          {$t('connections.cancel')}
         </button>
         <button
           class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-50"
           disabled={modalSaving}
           on:click={saveModal}
         >
-          {modalSaving ? 'Сохранение...' : 'Добавить'}
+          {modalSaving ? $t('connections.saving') : $t('connections.addBtn')}
         </button>
       </div>
     </div>
@@ -754,7 +755,7 @@
     role="presentation">
     <div class="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-lg mx-4">
       <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-700">
-        <h3 class="text-base font-semibold text-zinc-100">VLESS — импорт из ссылки</h3>
+        <h3 class="text-base font-semibold text-zinc-100">{$t('connections.vlessImport')}</h3>
         <button class="text-zinc-400 hover:text-zinc-200" on:click={() => { showUriModal = false; }}>
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
@@ -764,7 +765,7 @@
           <ErrorAlert message={uriError} />
         {/if}
         <div>
-          <label for="vless-uri" class="block text-xs font-medium text-zinc-400 mb-1">Ссылка vless://</label>
+          <label for="vless-uri" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.vlessUriLabel')}</label>
           <textarea
             id="vless-uri"
             bind:value={uriValue}
@@ -773,21 +774,21 @@
             class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 font-mono focus:border-blue-500 focus:outline-none resize-none"
           ></textarea>
         </div>
-        <p class="text-xs text-zinc-500">Имя туннеля будет взято из фрагмента ссылки (#name) или сгенерировано автоматически.</p>
+        <p class="text-xs text-zinc-500">{$t('connections.vlessUriHint')}</p>
       </div>
       <div class="flex justify-end gap-2 px-5 py-4 border-t border-zinc-700">
         <button
           class="px-4 py-2 text-sm rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
           on:click={() => { showUriModal = false; }}
         >
-          Отмена
+          {$t('connections.cancel')}
         </button>
         <button
           class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-50"
           disabled={uriSaving}
           on:click={saveUri}
         >
-          {uriSaving ? 'Импорт...' : 'Импортировать'}
+          {uriSaving ? $t('connections.importing') : $t('connections.import')}
         </button>
       </div>
     </div>

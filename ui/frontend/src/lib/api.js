@@ -68,8 +68,18 @@ export function listGeositeCategories() {
   return BindingService.ListGeositeCategories();
 }
 
+export function listGeoIPCategories() {
+  return BindingService.ListGeoIPCategories();
+}
+
 export function updateGeosite() {
   return BindingService.UpdateGeosite();
+}
+
+// ─── Notifications ──────────────────────────────────────────────────
+
+export function setNotificationPreferences(enabled, tunnelErrors, updates) {
+  return BindingService.SetNotificationPreferences(enabled, tunnelErrors, updates);
 }
 
 // ─── Processes ──────────────────────────────────────────────────────

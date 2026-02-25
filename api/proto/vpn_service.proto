@@ -128,6 +128,12 @@ message SubscriptionStatus {
 
 // ─── Full config ────────────────────────────────────────────────────
 
+message ReconnectConfig {
+  bool enabled = 1;
+  string interval = 2;      // duration string, e.g. "5s"
+  int32 max_retries = 3;    // 0 = unlimited
+}
+
 message AppConfig {
   GlobalFilterConfig global = 1;
   repeated TunnelConfig tunnels = 2;
@@ -136,6 +142,7 @@ message AppConfig {
   LogConfig logging = 5;
   repeated DomainRule domain_rules = 6;
   repeated SubscriptionConfig subscriptions = 7;
+  ReconnectConfig reconnect = 8;
 }
 
 // ─── Stats messages ─────────────────────────────────────────────────
@@ -415,6 +422,7 @@ service VPNService {
   rpc ListDomainRules(google.protobuf.Empty) returns (DomainRuleListResponse);
   rpc SaveDomainRules(SaveDomainRulesRequest) returns (SaveDomainRulesResponse);
   rpc ListGeositeCategories(google.protobuf.Empty) returns (GeositeCategoriesResponse);
+  rpc ListGeoIPCategories(google.protobuf.Empty) returns (GeositeCategoriesResponse);
   rpc UpdateGeosite(google.protobuf.Empty) returns (UpdateGeositeResponse);
 
   // -- Config --

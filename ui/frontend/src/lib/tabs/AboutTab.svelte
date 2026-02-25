@@ -3,6 +3,7 @@
   import { Events } from '@wailsio/runtime';
   import * as api from '../api.js';
   import ErrorAlert from '../ErrorAlert.svelte';
+  import { t } from '../i18n';
 
   let version = '';
   let uptime = '';
@@ -28,10 +29,10 @@
 
     try {
       const status = await api.getStatus();
-      version = status.version || 'неизвестно';
+      version = status.version || $t('about.unknown');
       uptime = formatUptime(status.uptimeSeconds);
     } catch (e) {
-      version = 'н/д';
+      version = $t('about.na');
     }
   });
 
@@ -40,21 +41,21 @@
   });
 
   function formatUptime(seconds) {
-    if (!seconds) return '0с';
+    if (!seconds) return `0${$t('time.s')}`;
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
     const s = seconds % 60;
     const parts = [];
-    if (h > 0) parts.push(`${h}ч`);
-    if (m > 0) parts.push(`${m}м`);
-    parts.push(`${s}с`);
+    if (h > 0) parts.push(`${h}${$t('time.h')}`);
+    if (m > 0) parts.push(`${m}${$t('time.m')}`);
+    parts.push(`${s}${$t('time.s')}`);
     return parts.join(' ');
   }
 
   function formatBytes(bytes) {
     if (!bytes) return '';
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} ${$t('time.kb')}`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} ${$t('time.mb')}`;
   }
 
   async function checkUpdate() {
@@ -66,10 +67,10 @@
         updateInfo = result;
       } else {
         updateInfo = null;
-        updateError = 'Установлена последняя версия';
+        updateError = $t('about.upToDate');
       }
     } catch (e) {
-      updateError = e.message || 'Ошибка проверки обновлений';
+      updateError = e.message || $t('about.checkError');
     } finally {
       checking = false;
     }
@@ -81,7 +82,7 @@
     try {
       await api.applyUpdate();
     } catch (e) {
-      updateError = e.message || 'Ошибка обновления';
+      updateError = e.message || $t('about.updateError');
       updating = false;
     }
   }
@@ -96,13 +97,13 @@
       </svg>
     </div>
     <h1 class="text-xl font-bold text-zinc-100">AWG Split Tunnel</h1>
-    <p class="text-sm text-zinc-500">Многотуннельный VPN-клиент с per-process split tunneling</p>
+    <p class="text-sm text-zinc-500">{$t('about.subtitle')}</p>
   </div>
 
   <!-- Info cards -->
   <div class="space-y-2">
     <div class="flex items-center justify-between px-4 py-3 bg-zinc-800/40 border border-zinc-700/40 rounded-lg">
-      <span class="text-sm text-zinc-400">Версия</span>
+      <span class="text-sm text-zinc-400">{$t('about.version')}</span>
       <div class="flex items-center gap-2">
         <span class="text-sm text-zinc-200 font-mono">{version}</span>
         <button
@@ -110,16 +111,16 @@
           on:click={checkUpdate}
           disabled={checking}
         >
-          {checking ? '...' : 'Проверить'}
+          {checking ? '...' : $t('about.check')}
         </button>
       </div>
     </div>
     <div class="flex items-center justify-between px-4 py-3 bg-zinc-800/40 border border-zinc-700/40 rounded-lg">
-      <span class="text-sm text-zinc-400">Время работы</span>
+      <span class="text-sm text-zinc-400">{$t('about.uptime')}</span>
       <span class="text-sm text-zinc-200 font-mono">{uptime}</span>
     </div>
     <div class="flex items-center justify-between px-4 py-3 bg-zinc-800/40 border border-zinc-700/40 rounded-lg">
-      <span class="text-sm text-zinc-400">Платформа</span>
+      <span class="text-sm text-zinc-400">{$t('about.platform')}</span>
       <span class="text-sm text-zinc-200">Windows</span>
     </div>
   </div>
@@ -129,7 +130,7 @@
     <div class="px-4 py-3 bg-blue-900/20 border border-blue-700/40 rounded-lg space-y-2">
       <div class="flex items-center justify-between">
         <div class="text-sm text-blue-300 font-medium">
-          Доступно обновление: v{updateInfo.version}
+          {$t('about.updateAvailable', { version: updateInfo.version })}
         </div>
         {#if updateInfo.assetSize}
           <span class="text-xs text-zinc-500">{formatBytes(updateInfo.assetSize)}</span>
@@ -143,7 +144,7 @@
         on:click={applyUpdate}
         disabled={updating}
       >
-        {updating ? 'Обновление...' : 'Обновить'}
+        {updating ? $t('about.updating') : $t('about.update')}
       </button>
     </div>
   {/if}
@@ -154,7 +155,7 @@
 
   <!-- Developer -->
   <section class="space-y-2">
-    <h3 class="text-xs font-medium text-zinc-500 uppercase tracking-wider">Разработчик</h3>
+    <h3 class="text-xs font-medium text-zinc-500 uppercase tracking-wider">{$t('about.developer')}</h3>
     <div class="px-4 py-3 bg-zinc-800/40 border border-zinc-700/40 rounded-lg space-y-1">
       <div class="text-sm text-zinc-200">Соколов Андрей</div>
       <div class="text-xs text-zinc-500">
@@ -167,7 +168,7 @@
 
   <!-- License -->
   <section class="space-y-2">
-    <h3 class="text-xs font-medium text-zinc-500 uppercase tracking-wider">Лицензия</h3>
+    <h3 class="text-xs font-medium text-zinc-500 uppercase tracking-wider">{$t('about.license')}</h3>
     <div class="px-4 py-3 bg-zinc-800/40 border border-zinc-700/40 rounded-lg">
       <div class="text-sm text-zinc-200">CC BY-NC-SA 4.0</div>
       <div class="text-xs text-zinc-500 mt-1">

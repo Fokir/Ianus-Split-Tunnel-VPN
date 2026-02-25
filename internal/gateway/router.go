@@ -55,7 +55,8 @@ type TUNRouter struct {
 	bytesReporter func(tunnelID string, tx, rx int64)
 
 	// Domain-based routing: resolved IP→tunnel.
-	domainTable *DomainTable
+	domainTable  *DomainTable
+	geoipMatcher atomic.Pointer[GeoIPMatcher]
 
 	// Server endpoint routing: VPN server IP → owning tunnel ID.
 	// Traffic to a server IP is routed through its tunnel (e.g. admin panels).
@@ -143,6 +144,11 @@ func (r *TUNRouter) SetBytesReporter(fn func(tunnelID string, tx, rx int64)) {
 // SetDomainTable sets the domain table for IP→tunnel routing based on DNS matches.
 func (r *TUNRouter) SetDomainTable(dt *DomainTable) {
 	r.domainTable = dt
+}
+
+// SetGeoIPMatcher atomically swaps the GeoIP matcher for IP-based country routing.
+func (r *TUNRouter) SetGeoIPMatcher(m *GeoIPMatcher) {
+	r.geoipMatcher.Store(m)
 }
 
 // Start begins the packet processing loop.
@@ -822,6 +828,29 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 						}
 					}
 					return dEntry.TunnelID, entry.ProxyPort, flowRoute, core.PriorityAuto, fb
+				}
+				// Tunnel down — fall through to process rules.
+			}
+		}
+	}
+
+	// GeoIP-based routing: country-level IP matching.
+	// Priority between domain table and process rules.
+	if gm := r.geoipMatcher.Load(); gm != nil {
+		if geoTunnelID, geoAction, geoOK := gm.Match(dstIP); geoOK {
+			switch geoAction {
+			case core.DomainBlock:
+				return "", 0, flowDrop, 0, fb
+			case core.DomainDirect:
+				return "", 0, flowPass, 0, fb
+			case core.DomainRoute:
+				if entry, ok := r.registry.Get(geoTunnelID); ok && entry.State == core.TunnelStateUp {
+					if isUDP {
+						if port, ok := r.registry.GetUDPProxyPort(geoTunnelID); ok {
+							return geoTunnelID, port, flowRoute, core.PriorityAuto, fb
+						}
+					}
+					return geoTunnelID, entry.ProxyPort, flowRoute, core.PriorityAuto, fb
 				}
 				// Tunnel down — fall through to process rules.
 			}

@@ -1,5 +1,6 @@
 <script>
   import { Window } from '@wailsio/runtime';
+  import { t } from './i18n';
 
   let hovered = false;
 
@@ -31,14 +32,14 @@
     on:mouseenter={() => hovered = true}
     on:mouseleave={() => hovered = false}
   >
-    <button class="btn minimize" on:click={minimize} title="Свернуть">
+    <button class="btn minimize" on:click={minimize} title={$t('titlebar.minimize')}>
       {#if hovered}
         <svg viewBox="0 0 12 12" fill="none">
           <rect x="2" y="5.25" width="8" height="1.5" rx="0.5" fill="rgba(0,0,0,0.55)"/>
         </svg>
       {/if}
     </button>
-    <button class="btn maximize" on:click={toggleMaximize} title="Развернуть">
+    <button class="btn maximize" on:click={toggleMaximize} title={$t('titlebar.maximize')}>
       {#if hovered}
         <svg viewBox="0 0 12 12" fill="none">
           <path d="M3.5 7.5L3.5 4.5L6.5 4.5" stroke="rgba(0,0,0,0.55)" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -46,7 +47,7 @@
         </svg>
       {/if}
     </button>
-    <button class="btn close" on:click={close} title="Закрыть">
+    <button class="btn close" on:click={close} title={$t('titlebar.close')}>
       {#if hovered}
         <svg viewBox="0 0 12 12" fill="none">
           <path d="M3.5 3.5L8.5 8.5M8.5 3.5L3.5 8.5" stroke="rgba(0,0,0,0.55)" stroke-width="1.2" stroke-linecap="round"/>

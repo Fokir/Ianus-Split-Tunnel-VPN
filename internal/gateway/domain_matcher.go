@@ -198,7 +198,7 @@ func splitPattern(pattern string) (string, string) {
 	if idx := strings.Index(pattern, ":"); idx > 0 {
 		prefix := pattern[:idx]
 		switch prefix {
-		case "domain", "full", "keyword", "geosite":
+		case "domain", "full", "keyword", "geosite", "geoip":
 			return prefix, pattern[idx+1:]
 		}
 	}

@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { Events } from '@wailsio/runtime';
   import * as api from './api.js';
+  import { t } from './i18n';
 
   let tunnels = [];
   let unsubscribe;
@@ -80,17 +81,17 @@
 
   function qualityTooltip(tunnel) {
     const parts = [];
-    parts.push(`Задержка: ${tunnel.latencyMs}мс`);
-    parts.push(`Джиттер: ${tunnel.jitterMs}мс`);
-    parts.push(`Потери: ${formatLoss(tunnel.packetLoss)}`);
+    parts.push(`${$t('statusbar.latency')}: ${tunnel.latencyMs}ms`);
+    parts.push(`${$t('statusbar.jitter')}: ${tunnel.jitterMs}ms`);
+    parts.push(`${$t('statusbar.loss')}: ${formatLoss(tunnel.packetLoss)}`);
     if (tunnel.packetLoss >= 0.10) {
-      parts.push('Высокие потери пакетов — соединение нестабильно');
+      parts.push($t('statusbar.highLoss'));
     } else if (tunnel.jitterMs >= 80) {
-      parts.push('Слишком большой джиттер — возможны разрывы и лаги');
+      parts.push($t('statusbar.highJitter'));
     } else if (tunnel.packetLoss >= 0.03) {
-      parts.push('Повышенные потери — возможны проблемы с подключением');
+      parts.push($t('statusbar.elevatedLoss'));
     } else if (tunnel.jitterMs >= 30) {
-      parts.push('Повышенный джиттер — возможны задержки');
+      parts.push($t('statusbar.elevatedJitter'));
     }
     return parts.join('\n');
   }
@@ -110,7 +111,7 @@
 
 <footer class="flex flex-wrap items-center gap-x-1 gap-y-0.5 px-2 py-1 bg-zinc-800/60 border-t border-zinc-700/40 shrink-0">
   {#if sortedTunnels.length === 0}
-    <span class="text-xs text-zinc-600 px-2">Нет туннелей</span>
+    <span class="text-xs text-zinc-600 px-2">{$t('statusbar.noTunnels')}</span>
   {:else}
     {#each sortedTunnels as tunnel}
       <div class="flex items-center gap-1.5 px-1.5 py-0.5 rounded text-xs min-w-0"

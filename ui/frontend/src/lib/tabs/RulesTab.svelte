@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import * as api from '../api.js';
   import ErrorAlert from '../ErrorAlert.svelte';
+  import { t } from '../i18n';
 
   let rules = [];
   let tunnels = [];
@@ -96,7 +97,7 @@
       buildDisallowedIpsList();
       buildDisallowedAppsList();
     } catch (e) {
-      error = e.message || 'Не удалось загрузить данные';
+      error = e.message || $t('rules.failedToLoad');
     } finally {
       loading = false;
     }
@@ -194,7 +195,7 @@
       await api.saveConfig(config, true);
       ipsDirty = false;
     } catch (e) {
-      ipsError = e.message || 'Не удалось сохранить';
+      ipsError = e.message || $t('rules.failedToSave');
     }
   }
 
@@ -266,7 +267,7 @@
       await api.saveConfig(config, true);
       appsDirty = false;
     } catch (e) {
-      appsError = e.message || 'Не удалось сохранить';
+      appsError = e.message || $t('rules.failedToSave');
     }
   }
 
@@ -392,17 +393,17 @@
   }
 
   function tunnelName(id) {
-    if (!id) return 'Не назначен';
-    const t = tunnels.find(t => t.id === id);
-    return t ? (t.name || t.id) : id;
+    if (!id) return $t('rules.notAssigned');
+    const tun = tunnels.find(tun => tun.id === id);
+    return tun ? (tun.name || tun.id) : id;
   }
 
   function fallbackLabel(fb) {
     switch (fb) {
-      case 'block': return 'Блокировать';
-      case 'drop': return 'Отбросить';
-      case 'failover': return 'Следующее правило';
-      default: return 'Прямой доступ';
+      case 'block': return $t('rules.fallbackBlock');
+      case 'drop': return $t('rules.fallbackDrop');
+      case 'failover': return $t('rules.fallbackFailover');
+      default: return $t('rules.fallbackDirect');
     }
   }
 
@@ -427,27 +428,27 @@
 
 <div class="p-4 space-y-4">
   <div class="flex items-center justify-between">
-    <h2 class="text-lg font-semibold text-zinc-100">Правила маршрутизации</h2>
+    <h2 class="text-lg font-semibold text-zinc-100">{$t('rules.title')}</h2>
     <div class="flex items-center gap-2">
       {#if dirty}
         <button
           class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
           on:click={cancel}
         >
-          Отмена
+          {$t('rules.cancel')}
         </button>
         <button
           class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors"
           on:click={save}
         >
-          Сохранить
+          {$t('rules.save')}
         </button>
       {/if}
       <button
         class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
         on:click={openAddModal}
       >
-        + Добавить правило
+        {$t('rules.addRule')}
       </button>
     </div>
   </div>
@@ -462,15 +463,15 @@
         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
       </svg>
-      Загрузка...
+      {$t('rules.loading')}
     </div>
   {:else if rules.length === 0}
     <div class="flex flex-col items-center justify-center py-16 text-zinc-500">
       <svg class="w-12 h-12 mb-3 text-zinc-600" viewBox="0 0 24 24" fill="currentColor">
         <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
       </svg>
-      <p class="text-sm">Нет правил маршрутизации</p>
-      <p class="text-xs text-zinc-600 mt-1">Весь трафик будет направлен напрямую</p>
+      <p class="text-sm">{$t('rules.noRules')}</p>
+      <p class="text-xs text-zinc-600 mt-1">{$t('rules.noRulesHint')}</p>
     </div>
   {:else}
     <!-- Rules table -->
@@ -479,10 +480,10 @@
         <thead>
           <tr class="bg-zinc-800/60 text-zinc-400 text-xs uppercase tracking-wider">
             <th class="w-8 px-0 py-2.5"></th>
-            <th class="text-left px-4 py-2.5 font-medium">Паттерн</th>
-            <th class="text-left px-4 py-2.5 font-medium">Туннель</th>
-            <th class="text-left px-4 py-2.5 font-medium">Fallback</th>
-            <th class="text-left px-4 py-2.5 font-medium">Приоритет</th>
+            <th class="text-left px-4 py-2.5 font-medium">{$t('rules.pattern')}</th>
+            <th class="text-left px-4 py-2.5 font-medium">{$t('rules.tunnel')}</th>
+            <th class="text-left px-4 py-2.5 font-medium">{$t('rules.fallback')}</th>
+            <th class="text-left px-4 py-2.5 font-medium">{$t('rules.priority')}</th>
             <th class="text-right px-4 py-2.5 font-medium w-24"></th>
           </tr>
         </thead>
@@ -554,8 +555,8 @@
   <div class="p-4 space-y-4">
     <div class="flex items-center justify-between">
       <div>
-        <h2 class="text-lg font-semibold text-zinc-100">Исключения IP</h2>
-        <p class="text-xs text-zinc-500 mt-0.5">Трафик к этим IP пойдёт напрямую, минуя VPN</p>
+        <h2 class="text-lg font-semibold text-zinc-100">{$t('rules.ipExclusions')}</h2>
+        <p class="text-xs text-zinc-500 mt-0.5">{$t('rules.ipExclusionsHint')}</p>
       </div>
       <div class="flex items-center gap-2">
         {#if ipsDirty}
@@ -563,20 +564,20 @@
             class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
             on:click={cancelIps}
           >
-            Отмена
+            {$t('rules.cancel')}
           </button>
           <button
             class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors"
             on:click={saveIps}
           >
-            Сохранить
+            {$t('rules.save')}
           </button>
         {/if}
         <button
           class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
           on:click={addDisallowedIp}
         >
-          + Добавить
+          {$t('rules.addBtn')}
         </button>
       </div>
     </div>
@@ -590,8 +591,8 @@
         <svg class="w-10 h-10 mb-2 text-zinc-600" viewBox="0 0 24 24" fill="currentColor">
           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9A7.902 7.902 0 014 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1A7.902 7.902 0 0120 12c0 4.42-3.58 8-8 8z"/>
         </svg>
-        <p class="text-sm">Нет исключений IP</p>
-        <p class="text-xs text-zinc-600 mt-1">Все IP будут маршрутизироваться через VPN</p>
+        <p class="text-sm">{$t('rules.noIpExclusions')}</p>
+        <p class="text-xs text-zinc-600 mt-1">{$t('rules.noIpExclusionsHint')}</p>
       </div>
     {:else}
       <div class="space-y-2">
@@ -609,7 +610,7 @@
               on:change={() => { ipsDirty = true; }}
               class="w-44 px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
             >
-              <option value="__global__">Глобально</option>
+              <option value="__global__">{$t('rules.global')}</option>
               {#each tunnels as t}
                 <option value={t.id}>{t.name || t.id}</option>
               {/each}
@@ -634,8 +635,8 @@
   <div class="p-4 space-y-4">
     <div class="flex items-center justify-between">
       <div>
-        <h2 class="text-lg font-semibold text-zinc-100">Исключения приложений</h2>
-        <p class="text-xs text-zinc-500 mt-0.5">Трафик этих приложений пойдёт напрямую, минуя VPN</p>
+        <h2 class="text-lg font-semibold text-zinc-100">{$t('rules.appExclusions')}</h2>
+        <p class="text-xs text-zinc-500 mt-0.5">{$t('rules.appExclusionsHint')}</p>
       </div>
       <div class="flex items-center gap-2">
         {#if appsDirty}
@@ -643,20 +644,20 @@
             class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
             on:click={cancelApps}
           >
-            Отмена
+            {$t('rules.cancel')}
           </button>
           <button
             class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors"
             on:click={saveApps}
           >
-            Сохранить
+            {$t('rules.save')}
           </button>
         {/if}
         <button
           class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
           on:click={addDisallowedApp}
         >
-          + Добавить
+          {$t('rules.addBtn')}
         </button>
       </div>
     </div>
@@ -670,8 +671,8 @@
         <svg class="w-10 h-10 mb-2 text-zinc-600" viewBox="0 0 24 24" fill="currentColor">
           <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
         </svg>
-        <p class="text-sm">Нет исключений приложений</p>
-        <p class="text-xs text-zinc-600 mt-1">Все приложения будут маршрутизироваться через VPN</p>
+        <p class="text-sm">{$t('rules.noAppExclusions')}</p>
+        <p class="text-xs text-zinc-600 mt-1">{$t('rules.noAppExclusionsHint')}</p>
       </div>
     {:else}
       <div class="space-y-2">
@@ -687,7 +688,7 @@
               />
               <button
                 class="px-2.5 py-2 text-xs bg-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-600 transition-colors shrink-0"
-                title="Выбрать процесс"
+                title={$t('rules.selectProcess')}
                 on:click={() => openAppProcessPicker(i)}
               >
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -700,7 +701,7 @@
               on:change={markAppsDirty}
               class="w-44 px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
             >
-              <option value="__global__">Глобально</option>
+              <option value="__global__">{$t('rules.global')}</option>
               {#each tunnels as t}
                 <option value={t.id}>{t.name || t.id}</option>
               {/each}
@@ -730,17 +731,17 @@
        tabindex="-1"
   >
     <div class="bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-sm mx-4 p-4 space-y-3">
-      <h3 class="text-sm font-semibold text-zinc-100">Выбрать процесс</h3>
+      <h3 class="text-sm font-semibold text-zinc-100">{$t('rules.selectProcess')}</h3>
       <input
         type="text"
         bind:value={appProcessFilter}
         on:input={filterAppProcesses}
-        placeholder="Фильтр..."
+        placeholder={$t('rules.filter')}
         class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50"
       />
       <div class="max-h-60 overflow-y-auto space-y-0.5">
         {#if appProcessLoading}
-          <div class="text-xs text-zinc-500 py-4 text-center">Загрузка...</div>
+          <div class="text-xs text-zinc-500 py-4 text-center">{$t('rules.loading')}</div>
         {:else}
           {#each appProcesses.slice(0, 50) as proc}
             <button
@@ -752,7 +753,7 @@
             </button>
           {/each}
           {#if appProcesses.length === 0}
-            <div class="text-xs text-zinc-500 py-4 text-center">Процессы не найдены</div>
+            <div class="text-xs text-zinc-500 py-4 text-center">{$t('rules.processesNotFound')}</div>
           {/if}
         {/if}
       </div>
@@ -761,7 +762,7 @@
           class="px-3 py-1.5 text-xs rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
           on:click={closeAppProcessPicker}
         >
-          Закрыть
+          {$t('rules.close')}
         </button>
       </div>
     </div>
@@ -779,24 +780,24 @@
   >
     <div class="bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4 p-5 space-y-4">
       <h3 class="text-base font-semibold text-zinc-100">
-        {editIndex >= 0 ? 'Редактировать правило' : 'Новое правило'}
+        {editIndex >= 0 ? $t('rules.editRule') : $t('rules.newRule')}
       </h3>
 
       <div class="space-y-3">
         <!-- Pattern -->
         <div>
-          <label for="rule-pattern" class="block text-xs font-medium text-zinc-400 mb-1">Паттерн процесса</label>
+          <label for="rule-pattern" class="block text-xs font-medium text-zinc-400 mb-1">{$t('rules.processPattern')}</label>
           <div class="flex gap-2">
             <input
               id="rule-pattern"
               type="text"
               bind:value={modalRule.pattern}
-              placeholder="chrome.exe, firefox*, C:\Program Files\..."
+              placeholder="chrome.exe, firefox*, regex:^.*\\games\\.*$"
               class="flex-1 px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50"
             />
             <button
               class="px-2.5 py-2 text-xs bg-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-600 transition-colors shrink-0"
-              title="Выбрать процесс"
+              title={$t('rules.selectProcess')}
               on:click={openProcessPicker}
             >
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -804,6 +805,7 @@
               </svg>
             </button>
           </div>
+          <p class="text-[10px] text-zinc-500 mt-1">{$t('rules.patternHint')}</p>
         </div>
 
         <!-- Process picker inline -->
@@ -813,11 +815,11 @@
               type="text"
               bind:value={processFilter}
               on:input={filterProcesses}
-              placeholder="Фильтр..."
+              placeholder={$t('rules.filter')}
               class="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600 focus:outline-none mb-1"
             />
             {#if processLoading}
-              <div class="text-xs text-zinc-500 py-2 text-center">Загрузка...</div>
+              <div class="text-xs text-zinc-500 py-2 text-center">{$t('rules.loading')}</div>
             {:else}
               {#each processes.slice(0, 50) as proc}
                 <button
@@ -834,48 +836,48 @@
 
         <!-- Tunnel -->
         <div>
-          <label for="rule-tunnel" class="block text-xs font-medium text-zinc-400 mb-1">Туннель</label>
+          <label for="rule-tunnel" class="block text-xs font-medium text-zinc-400 mb-1">{$t('rules.tunnelLabel')}</label>
           <select
             id="rule-tunnel"
             bind:value={modalRule.tunnelId}
             class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
           >
-            <option value="">Не назначен</option>
+            <option value="">{$t('rules.notAssigned')}</option>
             {#each tunnels as t}
               <option value={t.id}>{t.name || t.id} ({t.protocol})</option>
             {/each}
-            <option value="__block__">Блокировать</option>
-            <option value="__drop__">Отбросить (drop)</option>
+            <option value="__block__">{$t('rules.blockAction')}</option>
+            <option value="__drop__">{$t('rules.dropAction')}</option>
           </select>
         </div>
 
         <!-- Fallback -->
         <div>
-          <label for="rule-fallback" class="block text-xs font-medium text-zinc-400 mb-1">Fallback (если туннель недоступен)</label>
+          <label for="rule-fallback" class="block text-xs font-medium text-zinc-400 mb-1">{$t('rules.fallbackLabel')}</label>
           <select
             id="rule-fallback"
             bind:value={modalRule.fallback}
             class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
           >
-            <option value="allow_direct">Прямой доступ</option>
-            <option value="block">Блокировать</option>
-            <option value="drop">Отбросить</option>
-            <option value="failover">Следующее правило</option>
+            <option value="allow_direct">{$t('rules.fallbackDirect')}</option>
+            <option value="block">{$t('rules.fallbackBlock')}</option>
+            <option value="drop">{$t('rules.fallbackDrop')}</option>
+            <option value="failover">{$t('rules.fallbackFailover')}</option>
           </select>
         </div>
 
         <!-- Priority -->
         <div>
-          <label for="rule-priority" class="block text-xs font-medium text-zinc-400 mb-1">Приоритет QoS</label>
+          <label for="rule-priority" class="block text-xs font-medium text-zinc-400 mb-1">{$t('rules.priorityQos')}</label>
           <select
             id="rule-priority"
             bind:value={modalRule.priority}
             class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
           >
-            <option value="auto">Auto (по характеристикам пакета)</option>
-            <option value="realtime">Realtime (высокий приоритет)</option>
-            <option value="normal">Normal (обычный приоритет)</option>
-            <option value="low">Low (низкий приоритет)</option>
+            <option value="auto">{$t('rules.priorityAuto')}</option>
+            <option value="realtime">{$t('rules.priorityRealtime')}</option>
+            <option value="normal">{$t('rules.priorityNormal')}</option>
+            <option value="low">{$t('rules.priorityLow')}</option>
           </select>
         </div>
       </div>
@@ -885,14 +887,14 @@
           class="px-4 py-2 text-sm rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
           on:click={closeModal}
         >
-          Отмена
+          {$t('rules.cancel')}
         </button>
         <button
           class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40"
           disabled={!modalRule.pattern.trim()}
           on:click={saveModalRule}
         >
-          {editIndex >= 0 ? 'Сохранить' : 'Добавить'}
+          {editIndex >= 0 ? $t('rules.save') : $t('common.add')}
         </button>
       </div>
     </div>

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -272,6 +273,7 @@ func runVPN(configPath string) error {
 
 	// === 11c. Domain-based routing ===
 	geositeFilePath := resolveRelativeToExe("geosite.dat")
+	geoipFilePath := resolveRelativeToExe("geoip.dat")
 	nicHTTPClient := gateway.NewNICBoundHTTPClient(realNIC.Index, realNIC.LocalIP)
 	domainTable := gateway.NewDomainTable()
 	domainTable.StartCleanup(ctx)
@@ -285,12 +287,38 @@ func runVPN(configPath string) error {
 		core.Log.Infof("DNS", "Domain matcher active: %d rules", len(cfg.DomainRules))
 	}
 
+	// GeoIP routing.
+	geoipMatcher := buildGeoIPMatcher(cfg.DomainRules, geoipFilePath, nicHTTPClient)
+	if geoipMatcher != nil && !geoipMatcher.IsEmpty() {
+		tunRouter.SetGeoIPMatcher(geoipMatcher)
+		core.Log.Infof("DNS", "GeoIP matcher active")
+	}
+
+	// Set initial SNI-based domain match function on tunnel proxies.
+	if domainMatcher != nil && !domainMatcher.IsEmpty() {
+		fn := domainMatchFuncFrom(domainMatcher)
+		tunnelCtrl.SetDomainMatchFunc(&fn)
+	}
+
 	domainReloader := func(rules []core.DomainRule) error {
 		m := buildDomainMatcher(rules, geositeFilePath, nicHTTPClient)
 		if dnsResolver != nil {
 			dnsResolver.SetDomainMatcher(m)
 		}
 		domainTable.Flush()
+
+		// Rebuild GeoIP matcher.
+		gm := buildGeoIPMatcher(rules, geoipFilePath, nicHTTPClient)
+		tunRouter.SetGeoIPMatcher(gm)
+
+		// Update SNI-based routing on all proxies.
+		if m != nil && !m.IsEmpty() {
+			fn := domainMatchFuncFrom(m)
+			tunnelCtrl.SetDomainMatchFunc(&fn)
+		} else {
+			tunnelCtrl.SetDomainMatchFunc(nil)
+		}
+
 		core.Log.Infof("DNS", "Domain rules reloaded: %d rules", len(rules))
 		return nil
 	}
@@ -325,6 +353,24 @@ func runVPN(configPath string) error {
 		core.Log.Infof("Update", "Auto-update checker started (interval=%s)", interval)
 	}
 
+	// === 12b. Reconnect Manager ===
+	var reconnectMgr *service.ReconnectManager
+	{
+		rcfg := cfg.GUI.Reconnect
+		// NIC-bound resolver for connectivity checks (bypass TUN).
+		nicResolver := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 3 * time.Second}
+				return d.DialContext(ctx, "udp", "8.8.8.8:53")
+			},
+		}
+		reconnectMgr = service.NewReconnectManager(rcfg, tunnelCtrl, registry, bus, nicResolver)
+		if rcfg.Enabled && cfg.GUI.RestoreConnections {
+			reconnectMgr.LoadIntents(cfg.GUI.ActiveTunnels)
+		}
+	}
+
 	// === 13. Start gRPC IPC server for GUI communication ===
 	svc := service.New(service.Config{
 		ConfigManager:       cfgManager,
@@ -337,9 +383,11 @@ func runVPN(configPath string) error {
 		Version:             version,
 		DomainReloader:      domainReloader,
 		GeositeFilePath:     geositeFilePath,
+		GeoIPFilePath:       geoipFilePath,
 		HTTPClient:          nicHTTPClient,
 		SubscriptionManager: subMgr,
 		UpdateChecker:       updateChecker,
+		ReconnectManager:    reconnectMgr,
 	})
 	svc.Start(ctx)
 
@@ -537,9 +585,15 @@ func buildDomainMatcher(rules []core.DomainRule, geositeFilePath string, httpCli
 
 	for _, r := range rules {
 		prefix, value := splitDomainPattern(r.Pattern)
-		if prefix == "geosite" && value != "" {
-			geositeCategories[value] = r
-		} else {
+		switch prefix {
+		case "geosite":
+			if value != "" {
+				geositeCategories[value] = r
+			}
+		case "geoip":
+			// GeoIP rules are handled separately via buildGeoIPMatcher; skip here.
+			continue
+		default:
 			regularRules = append(regularRules, r)
 		}
 	}
@@ -561,18 +615,53 @@ func buildDomainMatcher(rules []core.DomainRule, geositeFilePath string, httpCli
 	return gateway.NewDomainMatcher(regularRules, geositeEntries)
 }
 
+func buildGeoIPMatcher(rules []core.DomainRule, geoipFilePath string, httpClient *http.Client) *gateway.GeoIPMatcher {
+	geoipCategories := make(map[string]core.DomainRule)
+	for _, r := range rules {
+		prefix, value := splitDomainPattern(r.Pattern)
+		if prefix == "geoip" && value != "" {
+			geoipCategories[value] = r
+		}
+	}
+
+	if len(geoipCategories) == 0 {
+		return nil
+	}
+
+	if err := gateway.EnsureGeoIPFile(geoipFilePath, httpClient); err != nil {
+		core.Log.Warnf("DNS", "Failed to ensure geoip.dat: %v", err)
+		return nil
+	}
+
+	matcher, err := gateway.NewGeoIPMatcher(geoipFilePath, geoipCategories)
+	if err != nil {
+		core.Log.Warnf("DNS", "Failed to build GeoIP matcher: %v", err)
+		return nil
+	}
+	return matcher
+}
+
 func splitDomainPattern(pattern string) (string, string) {
 	for i := 0; i < len(pattern); i++ {
 		if pattern[i] == ':' {
 			prefix := pattern[:i]
 			switch prefix {
-			case "domain", "full", "keyword", "geosite":
+			case "domain", "full", "keyword", "geosite", "geoip":
 				return prefix, pattern[i+1:]
 			}
 			break
 		}
 	}
 	return "domain", pattern
+}
+
+// domainMatchFuncFrom wraps a DomainMatcher into a core.DomainMatchFunc
+// for use in the proxy layer's SNI-based routing.
+func domainMatchFuncFrom(dm *gateway.DomainMatcher) core.DomainMatchFunc {
+	return func(domain string) (string, core.DomainAction, bool) {
+		r := dm.Match(domain)
+		return r.TunnelID, r.Action, r.Matched
+	}
 }
 
 func resolveRelativeToExe(path string) string {

@@ -75,6 +75,10 @@ type TunnelControllerImpl struct {
 
 	// Connection-level fallback dialer shared by all proxies.
 	fallbackDialer *proxy.FallbackDialer
+
+	// domainMatchFn is the current domain match function for SNI-based routing,
+	// stored here so new proxies get it automatically.
+	domainMatchFn *core.DomainMatchFunc
 }
 
 // NewTunnelController creates a new TunnelControllerImpl.
@@ -343,6 +347,9 @@ func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelCo
 
 	// Start proxies.
 	tp := proxy.NewTunnelProxy(proxyPort, tc.deps.Flows.LookupNAT, tc.providerLookup, tc.fallbackDialer)
+	if tc.domainMatchFn != nil {
+		tp.SetDomainMatchFunc(tc.domainMatchFn)
+	}
 	if err := tp.Start(tc.deps.Context); err != nil {
 		return fmt.Errorf("start TCP proxy for %q: %w", cfg.ID, err)
 	}
@@ -582,6 +589,17 @@ func (tc *TunnelControllerImpl) RegisterExistingTunnel(
 		udpProxyPort: udpProxyPort,
 		config:       cfg,
 	}
+}
+
+// SetDomainMatchFunc updates the domain match function used for SNI-based routing.
+// Propagates to all existing tunnel proxies and is stored for future ones.
+func (tc *TunnelControllerImpl) SetDomainMatchFunc(fn *core.DomainMatchFunc) {
+	tc.mu.Lock()
+	tc.domainMatchFn = fn
+	for _, inst := range tc.instances {
+		inst.tcpProxy.SetDomainMatchFunc(fn)
+	}
+	tc.mu.Unlock()
 }
 
 // ─── VLESS settings helper ───────────────────────────────────────────

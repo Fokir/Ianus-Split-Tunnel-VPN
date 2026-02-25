@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/provider"
@@ -45,6 +47,11 @@ type TunnelProxy struct {
 	providerLookup ProviderLookup
 	fallback       *FallbackDialer
 
+	// domainMatchFunc is used for SNI-based routing: when a TLS ClientHello
+	// is detected, the SNI hostname is matched against domain rules to
+	// potentially override the tunnel routing decision.
+	domainMatchFunc atomic.Pointer[core.DomainMatchFunc]
+
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
 
@@ -55,6 +62,12 @@ type TunnelProxy struct {
 // Port returns the proxy listen port.
 func (tp *TunnelProxy) Port() uint16 {
 	return tp.port
+}
+
+// SetDomainMatchFunc sets the domain match function for SNI-based routing.
+// Safe to call concurrently; uses atomic swap.
+func (tp *TunnelProxy) SetDomainMatchFunc(fn *core.DomainMatchFunc) {
+	tp.domainMatchFunc.Store(fn)
 }
 
 // NewTunnelProxy creates a proxy that listens on the given port.
@@ -158,6 +171,36 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 	if !ok {
 		core.Log.Warnf("Proxy", "No NAT entry for %s, closing", clientConn.RemoteAddr())
 		return
+	}
+
+	// SNI-based routing: if a domain match function is set, peek at the
+	// client's initial data to extract the TLS SNI hostname and potentially
+	// override the tunnel routing decision.
+	if matchFn := tp.domainMatchFunc.Load(); matchFn != nil {
+		buf := make([]byte, 1536) // 1 MTU — sufficient for ClientHello
+		clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, _ := clientConn.Read(buf)
+		clientConn.SetReadDeadline(time.Time{})
+		if n > 0 {
+			initialData := buf[:n]
+			if sni := ExtractSNI(initialData); sni != "" {
+				if tid, action, matched := (*matchFn)(sni); matched {
+					switch action {
+					case core.DomainBlock:
+						core.Log.Debugf("Proxy", "SNI %q → block", sni)
+						return
+					case core.DomainDirect:
+						core.Log.Debugf("Proxy", "SNI %q → direct", sni)
+						info.TunnelID = "__direct__"
+					case core.DomainRoute:
+						core.Log.Debugf("Proxy", "SNI %q → tunnel %q", sni, tid)
+						info.TunnelID = tid
+					}
+				}
+			}
+			// Wrap client connection to replay the already-read bytes.
+			clientConn = &prefixConn{Conn: clientConn, prefix: initialData}
+		}
 	}
 
 	// Dial through the tunnel, with connection-level fallback if available.

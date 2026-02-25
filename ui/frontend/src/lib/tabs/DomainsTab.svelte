@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import * as api from '../api.js';
   import ErrorAlert from '../ErrorAlert.svelte';
+  import { t } from '../i18n';
 
   let rules = [];
   let tunnels = [];
@@ -9,8 +10,9 @@
   let error = '';
   let dirty = false;
 
-  // Geosite
+  // Geosite & GeoIP
   let geositeCategories = [];
+  let geoipCategories = [];
   let geositeUpdating = false;
 
   // Modal state
@@ -23,7 +25,8 @@
   let categoryDropdownOpen = false;
   let categoryHighlightIndex = -1;
 
-  $: filteredCategories = geositeCategories.filter(
+  $: activeCategories = modalRule.patternType === 'geoip' ? geoipCategories : geositeCategories;
+  $: filteredCategories = activeCategories.filter(
     cat => cat.toLowerCase().includes(categorySearch.toLowerCase())
   );
 
@@ -78,16 +81,18 @@
     loading = true;
     error = '';
     try {
-      const [r, t, cats] = await Promise.all([
+      const [r, t, cats, gipCats] = await Promise.all([
         api.listDomainRules(),
         api.listTunnels(),
-        api.listGeositeCategories().catch(() => [])
+        api.listGeositeCategories().catch(() => []),
+        api.listGeoIPCategories().catch(() => [])
       ]);
       rules = r || [];
       tunnels = t || [];
       geositeCategories = cats || [];
+      geoipCategories = gipCats || [];
     } catch (e) {
-      error = e.message || 'Не удалось загрузить данные';
+      error = e.message || $t('domains.failedToLoad');
     } finally {
       loading = false;
     }
@@ -97,7 +102,7 @@
     const idx = pattern.indexOf(':');
     if (idx > 0) {
       const prefix = pattern.substring(0, idx);
-      if (['domain', 'full', 'keyword', 'geosite'].includes(prefix)) {
+      if (['domain', 'full', 'keyword', 'geosite', 'geoip'].includes(prefix)) {
         return { type: prefix, value: pattern.substring(idx + 1) };
       }
     }
@@ -126,7 +131,7 @@
       tunnelId: rules[index].tunnelId || '',
       action: rules[index].action || 'route'
     };
-    categorySearch = parsed.type === 'geosite' ? parsed.value : '';
+    categorySearch = (parsed.type === 'geosite' || parsed.type === 'geoip') ? parsed.value : '';
     categoryDropdownOpen = false;
     categoryHighlightIndex = -1;
     showModal = true;
@@ -176,14 +181,19 @@
     dirty = false;
   }
 
-  async function handleUpdateGeosite() {
+  async function handleUpdateGeoData() {
     geositeUpdating = true;
     error = '';
     try {
       await api.updateGeosite();
-      geositeCategories = await api.listGeositeCategories().catch(() => []);
+      const [cats, gipCats] = await Promise.all([
+        api.listGeositeCategories().catch(() => []),
+        api.listGeoIPCategories().catch(() => [])
+      ]);
+      geositeCategories = cats;
+      geoipCategories = gipCats;
     } catch (e) {
-      error = e.message || 'Не удалось обновить geosite';
+      error = e.message || $t('domains.failedToUpdate');
     } finally {
       geositeUpdating = false;
     }
@@ -197,9 +207,9 @@
 
   function actionLabel(action) {
     switch (action) {
-      case 'direct': return 'Напрямую';
-      case 'block': return 'Блокировать';
-      default: return 'Туннель';
+      case 'direct': return $t('domains.actionDirect');
+      case 'block': return $t('domains.actionBlock');
+      default: return $t('domains.actionTunnel');
     }
   }
 
@@ -213,10 +223,11 @@
 
   function patternTypeLabel(type) {
     switch (type) {
-      case 'full': return 'Точный';
-      case 'keyword': return 'Ключевое слово';
-      case 'geosite': return 'Geosite';
-      default: return 'Домен';
+      case 'full': return $t('domains.typeFull');
+      case 'keyword': return $t('domains.typeKeyword');
+      case 'geosite': return $t('domains.typeGeosite');
+      case 'geoip': return $t('domains.typeGeoip');
+      default: return $t('domains.typeDomain');
     }
   }
 
@@ -225,6 +236,7 @@
       case 'full': return 'text-purple-400 bg-purple-400/10';
       case 'keyword': return 'text-yellow-400 bg-yellow-400/10';
       case 'geosite': return 'text-cyan-400 bg-cyan-400/10';
+      case 'geoip': return 'text-orange-400 bg-orange-400/10';
       default: return 'text-zinc-400 bg-zinc-400/10';
     }
   }
@@ -291,39 +303,39 @@
 
 <div class="p-4 space-y-4">
   <div class="flex items-center justify-between">
-    <h2 class="text-lg font-semibold text-zinc-100">Маршрутизация по доменам</h2>
+    <h2 class="text-lg font-semibold text-zinc-100">{$t('domains.title')}</h2>
     <div class="flex items-center gap-2">
       <!-- Geosite update button -->
       <button
         class="px-2.5 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors flex items-center gap-1.5 disabled:opacity-40"
-        on:click={handleUpdateGeosite}
+        on:click={handleUpdateGeoData}
         disabled={geositeUpdating}
-        title="Обновить geosite.dat"
+        title={$t('domains.geoDataTooltip')}
       >
         <svg class="w-3.5 h-3.5 {geositeUpdating ? 'animate-spin' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m0 0a9 9 0 019-9m-9 9a9 9 0 009 9" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        {geositeUpdating ? 'Обновление...' : 'Geosite'}
+        {geositeUpdating ? $t('domains.geoDataUpdating') : $t('domains.geoData')}
       </button>
       {#if dirty}
         <button
           class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
           on:click={cancel}
         >
-          Отмена
+          {$t('domains.cancel')}
         </button>
         <button
           class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors"
           on:click={save}
         >
-          Сохранить
+          {$t('domains.save')}
         </button>
       {/if}
       <button
         class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
         on:click={openAddModal}
       >
-        + Добавить правило
+        {$t('domains.addRule')}
       </button>
     </div>
   </div>
@@ -338,15 +350,15 @@
         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
       </svg>
-      Загрузка...
+      {$t('domains.loading')}
     </div>
   {:else if rules.length === 0}
     <div class="flex flex-col items-center justify-center py-16 text-zinc-500">
       <svg class="w-12 h-12 mb-3 text-zinc-600" viewBox="0 0 24 24" fill="currentColor">
         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
       </svg>
-      <p class="text-sm">Нет доменных правил</p>
-      <p class="text-xs text-zinc-600 mt-1">Добавьте правила для маршрутизации трафика по доменам</p>
+      <p class="text-sm">{$t('domains.noRules')}</p>
+      <p class="text-xs text-zinc-600 mt-1">{$t('domains.noRulesHint')}</p>
     </div>
   {:else}
     <div class="border border-zinc-700/40 rounded-lg overflow-hidden">
@@ -354,10 +366,10 @@
         <thead>
           <tr class="bg-zinc-800/60 text-zinc-400 text-xs uppercase tracking-wider">
             <th class="w-8 px-0 py-2.5"></th>
-            <th class="text-left px-4 py-2.5 font-medium">Паттерн</th>
-            <th class="text-left px-4 py-2.5 font-medium">Тип</th>
-            <th class="text-left px-4 py-2.5 font-medium">Действие</th>
-            <th class="text-left px-4 py-2.5 font-medium">Туннель</th>
+            <th class="text-left px-4 py-2.5 font-medium">{$t('domains.pattern')}</th>
+            <th class="text-left px-4 py-2.5 font-medium">{$t('domains.type')}</th>
+            <th class="text-left px-4 py-2.5 font-medium">{$t('domains.action')}</th>
+            <th class="text-left px-4 py-2.5 font-medium">{$t('domains.tunnel')}</th>
             <th class="text-right px-4 py-2.5 font-medium w-24"></th>
           </tr>
         </thead>
@@ -388,7 +400,7 @@
               <td class="px-4 py-2.5 font-mono text-xs {rule.active === false ? 'text-zinc-500' : 'text-zinc-200'}">
                 {parsed.value}
                 {#if rule.active === false}
-                  <span class="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] rounded bg-zinc-700/50 text-zinc-500 font-sans">не активен</span>
+                  <span class="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] rounded bg-zinc-700/50 text-zinc-500 font-sans">{$t('domains.inactive')}</span>
                 {/if}
               </td>
               <td class="px-4 py-2.5">
@@ -441,32 +453,33 @@
   >
     <div class="bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4 p-5 space-y-4">
       <h3 class="text-base font-semibold text-zinc-100">
-        {editIndex >= 0 ? 'Редактировать правило' : 'Новое доменное правило'}
+        {editIndex >= 0 ? $t('domains.editRule') : $t('domains.newRule')}
       </h3>
 
       <div class="space-y-3">
         <!-- Pattern type -->
         <div>
-          <label for="domain-type" class="block text-xs font-medium text-zinc-400 mb-1">Тип паттерна</label>
+          <label for="domain-type" class="block text-xs font-medium text-zinc-400 mb-1">{$t('domains.patternType')}</label>
           <select
             id="domain-type"
             bind:value={modalRule.patternType}
             on:change={() => { modalRule.patternValue = ''; categorySearch = ''; categoryDropdownOpen = false; }}
             class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
           >
-            <option value="domain">domain: (домен и поддомены)</option>
-            <option value="full">full: (точное совпадение)</option>
-            <option value="keyword">keyword: (подстрока)</option>
-            <option value="geosite">geosite: (категория V2Ray)</option>
+            <option value="domain">{$t('domains.optDomain')}</option>
+            <option value="full">{$t('domains.optFull')}</option>
+            <option value="keyword">{$t('domains.optKeyword')}</option>
+            <option value="geosite">{$t('domains.optGeosite')}</option>
+            <option value="geoip">{$t('domains.optGeoip')}</option>
           </select>
         </div>
 
         <!-- Pattern value -->
         <div>
           <label for="domain-value" class="block text-xs font-medium text-zinc-400 mb-1">
-            {modalRule.patternType === 'geosite' ? 'Категория' : 'Значение'}
+            {(modalRule.patternType === 'geosite' || modalRule.patternType === 'geoip') ? $t('domains.category') : $t('domains.value')}
           </label>
-          {#if modalRule.patternType === 'geosite' && geositeCategories.length > 0}
+          {#if (modalRule.patternType === 'geosite' || modalRule.patternType === 'geoip') && activeCategories.length > 0}
             <!-- Searchable category picker -->
             <div class="relative">
               <div class="relative">
@@ -478,7 +491,7 @@
                   on:focus={handleCategoryFocus}
                   on:blur={handleCategoryBlur}
                   on:keydown={handleCategoryKeydown}
-                  placeholder="Поиск категории..."
+                  placeholder={$t('domains.searchCategory')}
                   autocomplete="off"
                   class="w-full px-3 py-2 pr-8 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50"
                 />
@@ -503,13 +516,13 @@
               {/if}
               {#if categoryDropdownOpen && categorySearch && filteredCategories.length === 0}
                 <div class="absolute z-50 mt-1 w-full bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl">
-                  <div class="px-3 py-2 text-sm text-zinc-500">Категория не найдена</div>
+                  <div class="px-3 py-2 text-sm text-zinc-500">{$t('domains.categoryNotFound')}</div>
                 </div>
               {/if}
             </div>
             {#if modalRule.patternValue && !categoryDropdownOpen}
               <div class="mt-1.5 text-xs text-zinc-500">
-                Выбрано: <span class="text-cyan-400 font-medium">{modalRule.patternValue}</span>
+                {$t('domains.selected')}: <span class="text-cyan-400 font-medium">{modalRule.patternValue}</span>
               </div>
             {/if}
           {:else}
@@ -517,7 +530,7 @@
               id="domain-value"
               type="text"
               bind:value={modalRule.patternValue}
-              placeholder={modalRule.patternType === 'geosite' ? 'ru, google, facebook' : 'vk.com, example.org'}
+              placeholder={modalRule.patternType === 'geosite' ? 'ru, google, facebook' : modalRule.patternType === 'geoip' ? 'ru, us, cn' : 'vk.com, example.org'}
               class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50"
             />
           {/if}
@@ -525,28 +538,28 @@
 
         <!-- Action -->
         <div>
-          <label for="domain-action" class="block text-xs font-medium text-zinc-400 mb-1">Действие</label>
+          <label for="domain-action" class="block text-xs font-medium text-zinc-400 mb-1">{$t('domains.actionLabel')}</label>
           <select
             id="domain-action"
             bind:value={modalRule.action}
             class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
           >
-            <option value="route">Через туннель</option>
-            <option value="direct">Напрямую (мимо VPN)</option>
-            <option value="block">Заблокировать</option>
+            <option value="route">{$t('domains.viaTunnel')}</option>
+            <option value="direct">{$t('domains.direct')}</option>
+            <option value="block">{$t('domains.block')}</option>
           </select>
         </div>
 
         <!-- Tunnel (only for route action) -->
         {#if modalRule.action === 'route'}
           <div>
-            <label for="domain-tunnel" class="block text-xs font-medium text-zinc-400 mb-1">Туннель</label>
+            <label for="domain-tunnel" class="block text-xs font-medium text-zinc-400 mb-1">{$t('domains.tunnel')}</label>
             <select
               id="domain-tunnel"
               bind:value={modalRule.tunnelId}
               class="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
             >
-              <option value="">Выберите туннель...</option>
+              <option value="">{$t('domains.selectTunnel')}</option>
               {#each tunnels as t}
                 <option value={t.id}>{t.name || t.id} ({t.protocol})</option>
               {/each}
@@ -560,14 +573,14 @@
           class="px-4 py-2 text-sm rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
           on:click={closeModal}
         >
-          Отмена
+          {$t('domains.cancel')}
         </button>
         <button
           class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40"
           disabled={!modalRule.patternValue.trim() || (modalRule.action === 'route' && !modalRule.tunnelId)}
           on:click={saveModalRule}
         >
-          {editIndex >= 0 ? 'Сохранить' : 'Добавить'}
+          {editIndex >= 0 ? $t('domains.save') : $t('common.add')}
         </button>
       </div>
     </div>

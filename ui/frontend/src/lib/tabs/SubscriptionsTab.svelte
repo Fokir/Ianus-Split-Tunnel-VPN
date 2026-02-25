@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import * as api from '../api.js';
   import ErrorAlert from '../ErrorAlert.svelte';
+  import { t } from '../i18n';
 
   let subscriptions = [];
   let loading = true;
@@ -31,7 +32,7 @@
     try {
       subscriptions = await api.listSubscriptions() || [];
     } catch (e) {
-      error = e.message || 'Failed to load subscriptions';
+      error = e.message || $t('subscriptions.failedToLoad');
     } finally {
       loading = false;
     }
@@ -53,8 +54,8 @@
   }
 
   async function saveSubscription() {
-    if (!addName.trim()) { addModalError = 'Name is required'; return; }
-    if (!addUrl.trim()) { addModalError = 'URL is required'; return; }
+    if (!addName.trim()) { addModalError = $t('subscriptions.nameRequired'); return; }
+    if (!addUrl.trim()) { addModalError = $t('subscriptions.urlRequired'); return; }
     addSaving = true;
     addModalError = '';
     try {
@@ -114,7 +115,7 @@
 <div class="p-4 space-y-4">
   <!-- Header -->
   <div class="flex items-center justify-between">
-    <h2 class="text-lg font-semibold text-zinc-100">Подписки</h2>
+    <h2 class="text-lg font-semibold text-zinc-100">{$t('subscriptions.title')}</h2>
     <div class="flex items-center gap-2">
       {#if subscriptions.length > 0}
         <button
@@ -122,14 +123,14 @@
           disabled={refreshingAll}
           on:click={refreshAll}
         >
-          {refreshingAll ? 'Обновление...' : 'Обновить все'}
+          {refreshingAll ? $t('subscriptions.refreshing') : $t('subscriptions.refreshAll')}
         </button>
       {/if}
       <button
         class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
         on:click={openAddModal}
       >
-        + Добавить
+        {$t('subscriptions.add')}
       </button>
     </div>
   </div>
@@ -146,15 +147,15 @@
         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
       </svg>
-      Loading...
+      {$t('subscriptions.loading')}
     </div>
   {:else if subscriptions.length === 0}
     <div class="flex flex-col items-center justify-center py-16 text-zinc-500">
       <svg class="w-12 h-12 mb-3 text-zinc-600" viewBox="0 0 24 24" fill="currentColor">
         <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
       </svg>
-      <p class="text-sm">Subscription URL</p>
-      <p class="text-xs text-zinc-600 mt-1">URL (base64-encoded vless:// URI)</p>
+      <p class="text-sm">{$t('subscriptions.emptyTitle')}</p>
+      <p class="text-xs text-zinc-600 mt-1">{$t('subscriptions.emptyHint')}</p>
     </div>
   {:else}
     <!-- Subscription list -->
@@ -166,10 +167,10 @@
               <div class="flex items-center gap-2">
                 <span class="text-sm font-medium text-zinc-200">{sub.name}</span>
                 {#if sub.tunnelCount > 0}
-                  <span class="px-1.5 py-0.5 text-xs rounded bg-green-600/20 text-green-400">{sub.tunnelCount} {sub.tunnelCount === 1 ? 'tunnel' : 'tunnels'}</span>
+                  <span class="px-1.5 py-0.5 text-xs rounded bg-green-600/20 text-green-400">{sub.tunnelCount} {sub.tunnelCount === 1 ? $t('subscriptions.tunnel') : $t('subscriptions.tunnels')}</span>
                 {/if}
                 {#if sub.lastError}
-                  <span class="px-1.5 py-0.5 text-xs rounded bg-red-600/20 text-red-400">Error</span>
+                  <span class="px-1.5 py-0.5 text-xs rounded bg-red-600/20 text-red-400">{$t('subscriptions.error')}</span>
                 {/if}
               </div>
               <div class="text-xs text-zinc-500 mt-0.5 truncate" title={sub.url}>{sub.url}</div>
@@ -190,7 +191,7 @@
               <!-- Refresh button -->
               <button
                 class="p-1.5 rounded-md text-zinc-400 hover:text-green-400 hover:bg-zinc-700/50 transition-colors disabled:opacity-50"
-                title="Refresh"
+                title={$t('subscriptions.refresh')}
                 disabled={refreshingName === sub.name}
                 on:click={() => refreshSub(sub.name)}
               >
@@ -201,7 +202,7 @@
               <!-- Remove button -->
               <button
                 class="p-1.5 rounded-md text-zinc-400 hover:text-red-400 hover:bg-zinc-700/50 transition-colors"
-                title="Remove"
+                title={$t('subscriptions.remove')}
                 on:click={() => removeSub(sub.name)}
               >
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -217,8 +218,7 @@
 
   <!-- Info block -->
   <div class="px-3 py-2 text-xs bg-zinc-800/50 border border-zinc-700/30 rounded-lg text-zinc-500">
-    Subscriptions allow importing VLESS tunnels from remote URLs (base64-encoded lists of vless:// URIs).
-    Supported by panels like 3x-ui, v2board, and others.
+    {$t('subscriptions.info')}
   </div>
 </div>
 
@@ -230,7 +230,7 @@
     role="presentation">
     <div class="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4 max-h-[85vh] overflow-y-auto">
       <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-700">
-        <h3 class="text-base font-semibold text-zinc-100">Add Subscription</h3>
+        <h3 class="text-base font-semibold text-zinc-100">{$t('subscriptions.addTitle')}</h3>
         <button class="text-zinc-400 hover:text-zinc-200" on:click={closeAddModal}>
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
@@ -241,35 +241,35 @@
           <ErrorAlert message={addModalError} />
         {/if}
         <div>
-          <label for="sub-name" class="block text-xs font-medium text-zinc-400 mb-1">Name</label>
+          <label for="sub-name" class="block text-xs font-medium text-zinc-400 mb-1">{$t('subscriptions.nameLabel')}</label>
           <input id="sub-name" type="text" bind:value={addName} placeholder="my-provider"
             class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
         </div>
         <div>
-          <label for="sub-url" class="block text-xs font-medium text-zinc-400 mb-1">URL</label>
+          <label for="sub-url" class="block text-xs font-medium text-zinc-400 mb-1">{$t('subscriptions.urlLabel')}</label>
           <input id="sub-url" type="text" bind:value={addUrl} placeholder="https://panel.example.com/api/v1/client/subscribe?token=..."
             class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 font-mono text-xs focus:border-blue-500 focus:outline-none" />
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label for="sub-interval" class="block text-xs font-medium text-zinc-400 mb-1">Refresh interval</label>
+            <label for="sub-interval" class="block text-xs font-medium text-zinc-400 mb-1">{$t('subscriptions.refreshInterval')}</label>
             <select id="sub-interval" bind:value={addRefreshInterval}
               class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none">
-              <option value="">None</option>
-              <option value="1h">1 hour</option>
-              <option value="6h">6 hours</option>
-              <option value="12h">12 hours</option>
-              <option value="24h">24 hours</option>
+              <option value="">{$t('subscriptions.refreshNone')}</option>
+              <option value="1h">{$t('subscriptions.hour1')}</option>
+              <option value="6h">{$t('subscriptions.hour6')}</option>
+              <option value="12h">{$t('subscriptions.hour12')}</option>
+              <option value="24h">{$t('subscriptions.hour24')}</option>
             </select>
           </div>
           <div>
-            <label for="sub-prefix" class="block text-xs font-medium text-zinc-400 mb-1">Prefix</label>
-            <input id="sub-prefix" type="text" bind:value={addPrefix} placeholder="(auto)"
+            <label for="sub-prefix" class="block text-xs font-medium text-zinc-400 mb-1">{$t('subscriptions.prefix')}</label>
+            <input id="sub-prefix" type="text" bind:value={addPrefix} placeholder={$t('subscriptions.prefixPlaceholder')}
               class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
           </div>
         </div>
         <div>
-          <label for="sub-ua" class="block text-xs font-medium text-zinc-400 mb-1">User-Agent (optional)</label>
+          <label for="sub-ua" class="block text-xs font-medium text-zinc-400 mb-1">{$t('subscriptions.userAgent')}</label>
           <input id="sub-ua" type="text" bind:value={addUserAgent} placeholder="ClashForWindows/0.20.39"
             class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
         </div>
@@ -281,14 +281,14 @@
           class="px-4 py-2 text-sm rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
           on:click={closeAddModal}
         >
-          Cancel
+          {$t('subscriptions.cancel')}
         </button>
         <button
           class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-50"
           disabled={addSaving || !addName.trim() || !addUrl.trim()}
           on:click={saveSubscription}
         >
-          {addSaving ? 'Saving...' : 'Add & Refresh'}
+          {addSaving ? $t('subscriptions.savingBtn') : $t('subscriptions.addRefresh')}
         </button>
       </div>
     </div>

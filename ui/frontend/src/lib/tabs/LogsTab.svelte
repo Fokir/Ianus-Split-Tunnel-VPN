@@ -2,6 +2,7 @@
   import { afterUpdate } from 'svelte';
   import { Clipboard, Dialogs, Call } from '@wailsio/runtime';
   import { logStore } from '../stores/logs.js';
+  import { t } from '../i18n';
 
   let autoScroll = true;
   let logsContainer;
@@ -48,7 +49,7 @@
 
   async function saveLogs() {
     const path = await Dialogs.SaveFile({
-      Title: 'Сохранить логи',
+      Title: $t('logs.saveLogsDialog'),
       Filename: `awg-logs-${new Date().toISOString().slice(0, 10)}.log`,
       Filters: [{ DisplayName: 'Log files', Pattern: '*.log;*.txt' }],
     });
@@ -104,36 +105,36 @@
     <input
       type="text"
       bind:value={tagFilter}
-      placeholder="Фильтр по тегу..."
+      placeholder={$t('logs.filterTag')}
       class="px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-300 placeholder-zinc-600 focus:outline-none w-36"
     />
 
     <div class="flex-1"></div>
 
-    <span class="text-xs text-zinc-500">{filteredLogs.length} записей</span>
+    <span class="text-xs text-zinc-500">{filteredLogs.length} {$t('logs.entries')}</span>
 
     {#if !autoScroll}
       <button
         class="px-2 py-1 text-xs bg-blue-600/20 text-blue-400 rounded hover:bg-blue-600/30 transition-colors"
         on:click={scrollToBottom}
       >
-        Прокрутить вниз
+        {$t('logs.scrollDown')}
       </button>
     {/if}
 
     <button
       class="px-2 py-1 text-xs bg-zinc-700/50 text-zinc-400 rounded hover:bg-zinc-700 transition-colors"
       on:click={saveLogs}
-      title="Сохранить логи в файл"
+      title={$t('logs.saveLogsTitle')}
     >
-      Сохранить
+      {$t('logs.saveLogs')}
     </button>
 
     <button
       class="px-2 py-1 text-xs bg-zinc-700/50 text-zinc-400 rounded hover:bg-zinc-700 transition-colors"
       on:click={clearLogs}
     >
-      Очистить
+      {$t('logs.clear')}
     </button>
   </div>
 
@@ -145,7 +146,7 @@
   >
     {#if filteredLogs.length === 0}
       <div class="flex items-center justify-center h-full text-zinc-600">
-        Нет записей логов
+        {$t('logs.noEntries')}
       </div>
     {:else}
       {#each filteredLogs as entry, i}
@@ -157,7 +158,7 @@
           tabindex="0"
           on:click={() => copyEntry(entry, i)}
           on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') copyEntry(entry, i); }}
-          title="Нажмите чтобы скопировать"
+          title={$t('logs.clickToCopy')}
         >
           <span class="text-zinc-600 shrink-0 w-18 tabular-nums">
             {entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString('ru-RU') : ''}
@@ -172,7 +173,7 @@
           {/if}
           <span class="text-zinc-300 break-all">{entry.message || ''}</span>
           {#if copiedIndex === i}
-            <span class="shrink-0 text-green-400 ml-auto pr-1">Скопировано</span>
+            <span class="shrink-0 text-green-400 ml-auto pr-1">{$t('logs.copied')}</span>
           {/if}
         </div>
       {/each}

@@ -99,6 +99,9 @@ func (s *Service) Connect(ctx context.Context, req *vpnapi.ConnectRequest) (*vpn
 		err = s.ctrl.ConnectAll(ctx)
 	} else {
 		err = s.ctrl.ConnectTunnel(ctx, req.TunnelId)
+		if err == nil && s.reconnectMgr != nil {
+			s.reconnectMgr.SetIntent(req.TunnelId, true)
+		}
 	}
 	if err != nil {
 		return &vpnapi.ConnectResponse{Success: false, Error: err.Error()}, nil
@@ -107,6 +110,18 @@ func (s *Service) Connect(ctx context.Context, req *vpnapi.ConnectRequest) (*vpn
 }
 
 func (s *Service) Disconnect(_ context.Context, req *vpnapi.DisconnectRequest) (*vpnapi.DisconnectResponse, error) {
+	// Clear reconnect intent before disconnecting.
+	if s.reconnectMgr != nil {
+		if req.TunnelId == "" {
+			// Disconnect all — clear all intents.
+			entries := s.registry.All()
+			for _, e := range entries {
+				s.reconnectMgr.SetIntent(e.Config.ID, false)
+			}
+		} else {
+			s.reconnectMgr.SetIntent(req.TunnelId, false)
+		}
+	}
 	var err error
 	if req.TunnelId == "" {
 		err = s.ctrl.DisconnectAll()
@@ -209,10 +224,17 @@ func (s *Service) UpdateGeosite(_ context.Context, _ *emptypb.Empty) (*vpnapi.Up
 	if s.geositeFilePath == "" {
 		return &vpnapi.UpdateGeositeResponse{Success: false, Error: "geosite file path not configured"}, nil
 	}
+	// Download both geosite.dat and geoip.dat.
 	if err := gateway.DownloadGeositeFile(s.geositeFilePath, s.httpClient); err != nil {
 		return &vpnapi.UpdateGeositeResponse{Success: false, Error: err.Error()}, nil
 	}
-	// Rebuild domain matcher with updated geosite data.
+	if s.geoipFilePath != "" {
+		if err := gateway.DownloadGeoIPFile(s.geoipFilePath, s.httpClient); err != nil {
+			core.Log.Warnf("Core", "Failed to download geoip.dat: %v", err)
+			// Non-fatal: geosite was updated successfully.
+		}
+	}
+	// Rebuild domain matcher with updated geo data.
 	if s.domainReloader != nil {
 		rules := s.cfg.GetDomainRules()
 		if err := s.domainReloader(rules); err != nil {
@@ -220,6 +242,17 @@ func (s *Service) UpdateGeosite(_ context.Context, _ *emptypb.Empty) (*vpnapi.Up
 		}
 	}
 	return &vpnapi.UpdateGeositeResponse{Success: true}, nil
+}
+
+func (s *Service) ListGeoIPCategories(_ context.Context, _ *emptypb.Empty) (*vpnapi.GeositeCategoriesResponse, error) {
+	if s.geoipFilePath == "" {
+		return &vpnapi.GeositeCategoriesResponse{}, nil
+	}
+	categories, err := gateway.ListGeoIPCategories(s.geoipFilePath)
+	if err != nil {
+		return &vpnapi.GeositeCategoriesResponse{}, nil
+	}
+	return &vpnapi.GeositeCategoriesResponse{Categories: categories}, nil
 }
 
 // ─── Config ─────────────────────────────────────────────────────────
@@ -235,7 +268,9 @@ func (s *Service) SaveConfig(ctx context.Context, req *vpnapi.SaveConfigRequest)
 	// Preserve fields not exposed via proto.
 	oldCfg := s.cfg.Get()
 	newCfg.Version = core.CurrentConfigVersion
+	reconnectCfg := newCfg.GUI.Reconnect // preserve reconnect from proto before overwriting GUI
 	newCfg.GUI = oldCfg.GUI
+	newCfg.GUI.Reconnect = reconnectCfg // restore reconnect config from proto
 	newCfg.Update = oldCfg.Update
 	// Subscriptions are now part of AppConfig proto, but if the client sends
 	// an empty list we preserve the existing subscriptions (backward compat).
@@ -264,6 +299,11 @@ func (s *Service) SaveConfig(ctx context.Context, req *vpnapi.SaveConfigRequest)
 	}
 	// Now that the file is persisted, notify listeners to reload.
 	s.bus.Publish(core.Event{Type: core.EventConfigReloaded})
+
+	// Update reconnect manager settings at runtime.
+	if s.reconnectMgr != nil {
+		s.reconnectMgr.SetEnabled(newCfg.GUI.Reconnect.Enabled)
+	}
 
 	// Restart if needed.
 	restarted := false

@@ -5,6 +5,7 @@ package process
 import (
 	"context"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -180,6 +181,15 @@ func MatchPattern(exePath string, pattern string) bool {
 		return false
 	}
 
+	// Regex pattern: "regex:<expr>" matches against full lowercase path.
+	if strings.HasPrefix(pattern, "regex:") {
+		re, err := regexp.Compile(pattern[6:])
+		if err != nil {
+			return false
+		}
+		return re.MatchString(strings.ToLower(exePath))
+	}
+
 	// Directory pattern: ends with \* or /*
 	if strings.HasSuffix(pattern, `\*`) || strings.HasSuffix(pattern, `/*`) {
 		dir := pattern[:len(pattern)-2]
@@ -215,6 +225,17 @@ func MatchPattern(exePath string, pattern string) bool {
 func MatchPreprocessed(exeLower, baseLower, pattern, patternLower string) bool {
 	if patternLower == "" || exeLower == "" {
 		return false
+	}
+
+	// Regex pattern: "regex:<expr>" matches against full lowercase path.
+	// Note: In hot paths (RuleEngine), regex is pre-compiled in regexCache
+	// and this branch is never reached. This is a fallback for IPFilter calls.
+	if strings.HasPrefix(pattern, "regex:") {
+		re, err := regexp.Compile(pattern[6:])
+		if err != nil {
+			return false
+		}
+		return re.MatchString(exeLower)
 	}
 
 	// Directory pattern: ends with \* or /*
