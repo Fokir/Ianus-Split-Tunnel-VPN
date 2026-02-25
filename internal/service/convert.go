@@ -8,21 +8,32 @@ import (
 
 	vpnapi "awg-split-tunnel/api/gen"
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/gateway"
 )
 
 // ─── Tunnel conversions ─────────────────────────────────────────────
 
-func tunnelEntryToProto(e *core.TunnelEntry, ctrl TunnelController) *vpnapi.TunnelStatus {
+func tunnelEntryToProto(e *core.TunnelEntry, ctrl TunnelController, geoResolver *gateway.GeoIPResolver) *vpnapi.TunnelStatus {
 	ts := &vpnapi.TunnelStatus{
-		Id:     e.ID,
-		Config: tunnelConfigToProto(e.Config),
-		State:  vpnapi.TunnelState(e.State),
+		Id:        e.ID,
+		Config:    tunnelConfigToProto(e.Config),
+		State:     vpnapi.TunnelState(e.State),
+		SortIndex: int32(e.Config.SortIndex),
 	}
 	if e.Error != nil {
 		ts.Error = e.Error.Error()
 	}
 	if ctrl != nil {
 		ts.AdapterIp = ctrl.GetAdapterIP(e.ID)
+		// Resolve external IP and country code from server endpoints.
+		endpoints := ctrl.GetServerEndpoints(e.ID)
+		if len(endpoints) > 0 {
+			addr := endpoints[0].Addr()
+			ts.ExternalIp = addr.String()
+			if geoResolver != nil {
+				ts.CountryCode = geoResolver.Lookup(addr)
+			}
+		}
 	}
 	return ts
 }
@@ -40,6 +51,7 @@ func tunnelConfigToProto(c core.TunnelConfig) *vpnapi.TunnelConfig {
 		AllowedIps:     c.AllowedIPs,
 		DisallowedIps:  c.DisallowedIPs,
 		DisallowedApps: c.DisallowedApps,
+		SortIndex:      int32(c.SortIndex),
 	}
 }
 
@@ -49,6 +61,7 @@ func tunnelConfigFromProto(pc *vpnapi.TunnelConfig) core.TunnelConfig {
 		ID:             pc.Id,
 		Protocol:       pc.Protocol,
 		Name:           pc.Name,
+		SortIndex:      int(pc.SortIndex),
 		Settings:       settings,
 		AllowedIPs:     pc.AllowedIps,
 		DisallowedIPs:  pc.DisallowedIps,

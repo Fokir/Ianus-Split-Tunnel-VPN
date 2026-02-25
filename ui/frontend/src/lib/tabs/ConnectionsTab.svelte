@@ -1,6 +1,8 @@
 <script>
-  import { onMount, tick } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
+  import { Events } from '@wailsio/runtime';
   import * as api from '../api.js';
+  import { countryFlagUrl, formatSpeed, formatBytes } from '../utils.js';
   import ErrorAlert from '../ErrorAlert.svelte';
   import { t } from '../i18n';
 
@@ -8,6 +10,10 @@
   let loading = true;
   let error = '';
   let showAddMenu = false;
+
+  // Stats map: tunnelId → { speedTx, speedRx, bytesTx, bytesRx, ... }
+  let statsMap = {};
+  let statsUnsub;
 
   // Modal state
   let showModal = false;
@@ -60,15 +66,95 @@
   let vlessXhttpHost = '';
   let vlessXhttpMode = 'auto';
 
+  // Delete confirmation
+  let confirmRemoveId = '';
+
+  // Drag & drop reorder
+  let dragIndex = -1;
+  let dragOverIndex = -1;
+
+  function handleDragStart(e, index) {
+    dragIndex = index;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(index));
+    e.currentTarget.style.opacity = '0.4';
+  }
+
+  function handleDragEnd(e) {
+    e.currentTarget.style.opacity = '';
+    dragIndex = -1;
+    dragOverIndex = -1;
+  }
+
+  function handleDragOver(e, index) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    dragOverIndex = index;
+  }
+
+  function handleDragLeave() {
+    dragOverIndex = -1;
+  }
+
+  async function handleDrop(e, index) {
+    e.preventDefault();
+    if (dragIndex < 0 || dragIndex === index) {
+      dragIndex = -1;
+      dragOverIndex = -1;
+      return;
+    }
+    const reordered = [...tunnels];
+    const [moved] = reordered.splice(dragIndex, 1);
+    reordered.splice(index, 0, moved);
+    tunnels = reordered;
+    dragIndex = -1;
+    dragOverIndex = -1;
+
+    // Persist new order
+    try {
+      await api.saveTunnelOrder(tunnels.map(t => t.id));
+    } catch (e) {
+      error = e.message;
+    }
+  }
+
   onMount(async () => {
     await refresh();
+
+    // Start stats stream (safe to call multiple times)
+    api.startStatsStream();
+
+    // Listen for stats updates
+    statsUnsub = Events.On('stats-update', (event) => {
+      const snap = event.data;
+      if (!snap || !snap.tunnels) return;
+
+      const newMap = { ...statsMap };
+      for (const s of snap.tunnels) {
+        newMap[s.tunnelId] = {
+          speedTx: s.speedTx || 0,
+          speedRx: s.speedRx || 0,
+          bytesTx: s.bytesTx || 0,
+          bytesRx: s.bytesRx || 0,
+          packetLoss: s.packetLoss || 0,
+          latencyMs: s.latencyMs || 0,
+          jitterMs: s.jitterMs || 0,
+        };
+      }
+      statsMap = newMap;
+    });
+  });
+
+  onDestroy(() => {
+    if (statsUnsub) statsUnsub();
   });
 
   async function refresh() {
     loading = true;
     error = '';
     try {
-      tunnels = (await api.listTunnels() || []).filter(t => t.id !== '__direct__');
+      const list = (await api.listTunnels() || []).filter(t => t.id !== '__direct__');
+      tunnels = list.sort((a, b) => a.sortIndex - b.sortIndex);
     } catch (e) {
       error = e.message || $t('connections.failedToLoad');
     } finally {
@@ -86,6 +172,7 @@
     try { await api.restartTunnel(id); await refresh(); } catch (e) { error = e.message; }
   }
   async function remove(id) {
+    confirmRemoveId = '';
     try { await api.removeTunnel(id); await refresh(); } catch (e) { error = e.message; }
   }
   async function connectAllTunnels() {
@@ -267,31 +354,23 @@
 
   function protocolLabel(proto) {
     switch (proto) {
+      case 'amneziawg': return 'AWG';
+      case 'wireguard': return 'WG';
+      case 'socks5': return 'SOCKS5';
+      case 'httpproxy': return 'HTTP';
+      case 'vless': return 'VLESS';
+      default: return proto.toUpperCase();
+    }
+  }
+
+  function protocolLabelFull(proto) {
+    switch (proto) {
       case 'amneziawg': return 'AmneziaWG';
       case 'wireguard': return 'WireGuard';
       case 'socks5': return 'SOCKS5';
       case 'httpproxy': return 'HTTP Proxy';
       case 'vless': return 'VLESS';
       default: return proto.toUpperCase();
-    }
-  }
-
-  function stateColor(state) {
-    switch (state) {
-      case 'up': return 'text-green-400';
-      case 'connecting': return 'text-yellow-400';
-      case 'error': return 'text-red-400';
-      default: return 'text-zinc-500';
-    }
-  }
-
-  function stateLabel(state) {
-    switch (state) {
-      case 'up': return $t('connections.stateUp');
-      case 'connecting': return $t('connections.stateConnecting');
-      case 'error': return $t('connections.stateError');
-      case 'down': return $t('connections.stateDown');
-      default: return state;
     }
   }
 
@@ -399,70 +478,149 @@
   {:else}
     <!-- Tunnel list -->
     <div class="space-y-2">
-      {#each tunnels as tunnel}
-        <div class="flex items-center justify-between p-3 bg-zinc-800/50 border border-zinc-700/40 rounded-lg hover:bg-zinc-800/70 transition-colors">
-          <div class="flex items-center gap-3 min-w-0">
-            <span class="w-2 h-2 rounded-full shrink-0 {stateDot(tunnel.state)}"></span>
-            <div class="min-w-0">
-              <div class="text-sm font-medium text-zinc-200 truncate">
+      {#each tunnels as tunnel, i}
+        {@const stats = statsMap[tunnel.id]}
+        <div
+          class="p-3 bg-zinc-800/50 border rounded-lg hover:bg-zinc-800/70 transition-colors
+                 {dragOverIndex === i && dragIndex !== i ? 'border-blue-500/50 bg-zinc-800/80' : 'border-zinc-700/40'}"
+          draggable="true"
+          on:dragstart={(e) => handleDragStart(e, i)}
+          on:dragend={handleDragEnd}
+          on:dragover={(e) => handleDragOver(e, i)}
+          on:dragleave={handleDragLeave}
+          on:drop={(e) => handleDrop(e, i)}
+          role="listitem"
+        >
+          <!-- Row 1: drag handle, status dot, name, protocol badge, flag+IP, buttons -->
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2.5 min-w-0">
+              <!-- Drag handle -->
+              <span class="cursor-grab text-zinc-600 hover:text-zinc-400 shrink-0" title={$t('connections.dragToReorder')}>
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
+                </svg>
+              </span>
+              <!-- Status dot -->
+              <span class="w-2 h-2 rounded-full shrink-0 {stateDot(tunnel.state)}"></span>
+              <!-- Name -->
+              <span class="text-sm font-medium text-zinc-200 truncate">
                 {tunnel.name || tunnel.id}
-              </div>
-              <div class="flex items-center gap-2 text-xs text-zinc-500">
-                <span>{protocolLabel(tunnel.protocol)}</span>
-                {#if tunnel.adapterIp}
-                  <span>&middot;</span>
-                  <span>{tunnel.adapterIp}</span>
-                {/if}
-                <span>&middot;</span>
-                <span class={stateColor(tunnel.state)}>{stateLabel(tunnel.state)}</span>
-                {#if tunnel.error}
-                  <span class="text-red-400 truncate">&mdash; {tunnel.error}</span>
-                {/if}
-              </div>
+              </span>
+              <!-- Protocol badge -->
+              <span class="px-1.5 py-0.5 text-[0.625rem] font-medium rounded bg-zinc-700/60 text-zinc-400 shrink-0 leading-none">
+                {protocolLabel(tunnel.protocol)}
+              </span>
+              <!-- Flag + External IP -->
+              {#if tunnel.externalIp}
+                <span class="text-xs text-zinc-500 shrink-0 flex items-center gap-1">
+                  {#if tunnel.countryCode}
+                    {@const flagUrl = countryFlagUrl(tunnel.countryCode)}
+                    {#if flagUrl}
+                      <img src={flagUrl} alt={tunnel.countryCode} class="w-5 h-[15px] object-cover rounded-[2px]"
+                           on:error={(e) => { e.target.style.display = 'none'; e.target.nextElementSibling.style.display = ''; }}
+                      />
+                      <span class="text-[0.625rem] text-zinc-600 font-medium" style="display:none">{tunnel.countryCode}</span>
+                    {:else}
+                      <span class="text-[0.625rem] text-zinc-600 font-medium">{tunnel.countryCode}</span>
+                    {/if}
+                  {/if}
+                  {tunnel.externalIp}
+                </span>
+              {/if}
+            </div>
+
+            <div class="flex items-center gap-1 shrink-0">
+              {#if tunnel.state === 'up'}
+                <button
+                  class="p-1.5 rounded-md text-zinc-400 hover:text-yellow-400 hover:bg-zinc-700/50 transition-colors"
+                  title={$t('connections.restart')}
+                  on:click={() => restart(tunnel.id)}
+                >
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                  </svg>
+                </button>
+                <!-- Power-off (disconnect) -->
+                <button
+                  class="p-1.5 rounded-md text-zinc-400 hover:text-red-400 hover:bg-zinc-700/50 transition-colors"
+                  title={$t('connections.disconnect')}
+                  on:click={() => disconnect(tunnel.id)}
+                >
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/>
+                  </svg>
+                </button>
+              {:else if tunnel.state === 'down' || tunnel.state === 'error'}
+                <button
+                  class="p-1.5 rounded-md text-zinc-400 hover:text-green-400 hover:bg-zinc-700/50 transition-colors"
+                  title={$t('connections.connect')}
+                  on:click={() => connect(tunnel.id)}
+                >
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z"/>
+                  </svg>
+                </button>
+              {/if}
+              <!-- Delete with confirmation -->
+              {#if confirmRemoveId === tunnel.id}
+                <div class="flex items-center gap-1 ml-1">
+                  <button
+                    class="px-2 py-1 text-xs rounded bg-red-600/30 text-red-400 hover:bg-red-600/50 transition-colors"
+                    on:click={() => remove(tunnel.id)}
+                  >
+                    {$t('connections.yes')}
+                  </button>
+                  <button
+                    class="px-2 py-1 text-xs rounded bg-zinc-700/50 text-zinc-400 hover:bg-zinc-700 transition-colors"
+                    on:click={() => { confirmRemoveId = ''; }}
+                  >
+                    {$t('connections.no')}
+                  </button>
+                </div>
+              {:else}
+                <button
+                  class="p-1.5 rounded-md text-zinc-400 hover:text-red-400 hover:bg-zinc-700/50 transition-colors"
+                  title={$t('connections.remove')}
+                  on:click={() => { confirmRemoveId = tunnel.id; }}
+                >
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                  </svg>
+                </button>
+              {/if}
             </div>
           </div>
 
-          <div class="flex items-center gap-1 shrink-0">
-            {#if tunnel.state === 'up'}
-              <button
-                class="p-1.5 rounded-md text-zinc-400 hover:text-yellow-400 hover:bg-zinc-700/50 transition-colors"
-                title={$t('connections.restart')}
-                on:click={() => restart(tunnel.id)}
-              >
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
-                </svg>
-              </button>
-              <button
-                class="p-1.5 rounded-md text-zinc-400 hover:text-red-400 hover:bg-zinc-700/50 transition-colors"
-                title={$t('connections.disconnect')}
-                on:click={() => disconnect(tunnel.id)}
-              >
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/>
-                </svg>
-              </button>
-            {:else if tunnel.state === 'down' || tunnel.state === 'error'}
-              <button
-                class="p-1.5 rounded-md text-zinc-400 hover:text-green-400 hover:bg-zinc-700/50 transition-colors"
-                title={$t('connections.connect')}
-                on:click={() => connect(tunnel.id)}
-              >
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M8 5v14l11-7z"/>
-                </svg>
-              </button>
-            {/if}
-            <button
-              class="p-1.5 rounded-md text-zinc-400 hover:text-red-400 hover:bg-zinc-700/50 transition-colors"
-              title={$t('connections.remove')}
-              on:click={() => remove(tunnel.id)}
-            >
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-              </svg>
-            </button>
-          </div>
+          <!-- Row 2: Error or Stats -->
+          {#if tunnel.error}
+            <div class="mt-1 ml-[2.125rem] text-xs text-red-400 truncate">{tunnel.error}</div>
+          {/if}
+          {#if tunnel.state === 'up' && stats}
+            <div class="mt-1.5 ml-[2.125rem] flex items-center gap-4 text-xs text-zinc-500 font-mono tabular-nums">
+              <span class="inline-flex items-center gap-1">
+                <span class="text-green-400/70">&uarr;</span>
+                <span>{formatSpeed(stats.speedTx)}</span>
+              </span>
+              <span class="inline-flex items-center gap-1">
+                <span class="text-blue-400/70">&darr;</span>
+                <span>{formatSpeed(stats.speedRx)}</span>
+              </span>
+              <span class="text-zinc-600">|</span>
+              <span class="inline-flex items-center gap-1">
+                <span class="text-green-400/70">&uarr;</span>
+                <span>{formatBytes(stats.bytesTx)}</span>
+              </span>
+              <span class="inline-flex items-center gap-1">
+                <span class="text-blue-400/70">&darr;</span>
+                <span>{formatBytes(stats.bytesRx)}</span>
+              </span>
+            </div>
+          {/if}
+
+          <!-- Confirm remove hint -->
+          {#if confirmRemoveId === tunnel.id}
+            <div class="mt-1.5 ml-[2.125rem] text-xs text-zinc-500">{$t('connections.confirmRemoveHint')}</div>
+          {/if}
         </div>
       {/each}
     </div>
@@ -477,7 +635,7 @@
     role="presentation">
     <div class="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4 max-h-[85vh] overflow-y-auto">
       <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-700">
-        <h3 class="text-base font-semibold text-zinc-100">{protocolLabel(modalProtocol)}</h3>
+        <h3 class="text-base font-semibold text-zinc-100">{protocolLabelFull(modalProtocol)}</h3>
         <button class="text-zinc-400 hover:text-zinc-200" on:click={closeModal}>
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>

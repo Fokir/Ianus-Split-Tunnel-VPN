@@ -44,6 +44,10 @@ export function removeTunnel(tunnelID) {
   return BindingService.RemoveTunnel(tunnelID);
 }
 
+export function saveTunnelOrder(tunnelIds) {
+  return BindingService.SaveTunnelOrder(tunnelIds);
+}
+
 // ─── Rules ──────────────────────────────────────────────────────────
 
 export function listRules() {

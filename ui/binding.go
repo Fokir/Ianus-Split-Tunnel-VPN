@@ -76,12 +76,15 @@ func (b *BindingService) GetStatus() (*ServiceStatusResult, error) {
 // ─── Tunnel management ──────────────────────────────────────────────
 
 type TunnelInfo struct {
-	ID         string `json:"id"`
-	Protocol   string `json:"protocol"`
-	Name       string `json:"name"`
-	State      string `json:"state"` // "down", "connecting", "up", "error"
-	Error      string `json:"error"`
-	AdapterIP  string `json:"adapterIp"`
+	ID          string `json:"id"`
+	Protocol    string `json:"protocol"`
+	Name        string `json:"name"`
+	State       string `json:"state"` // "down", "connecting", "up", "error"
+	Error       string `json:"error"`
+	AdapterIP   string `json:"adapterIp"`
+	ExternalIP  string `json:"externalIp"`
+	CountryCode string `json:"countryCode"`
+	SortIndex   int    `json:"sortIndex"`
 }
 
 func tunnelStateStr(s vpnapi.TunnelState) string {
@@ -107,10 +110,13 @@ func (b *BindingService) ListTunnels() ([]TunnelInfo, error) {
 	tunnels := make([]TunnelInfo, 0, len(resp.Tunnels))
 	for _, t := range resp.Tunnels {
 		info := TunnelInfo{
-			ID:        t.Id,
-			State:     tunnelStateStr(t.State),
-			Error:     t.Error,
-			AdapterIP: t.AdapterIp,
+			ID:          t.Id,
+			State:       tunnelStateStr(t.State),
+			Error:       t.Error,
+			AdapterIP:   t.AdapterIp,
+			ExternalIP:  t.ExternalIp,
+			CountryCode: t.CountryCode,
+			SortIndex:   int(t.SortIndex),
 		}
 		if t.Config != nil {
 			info.Protocol = t.Config.Protocol
@@ -121,6 +127,12 @@ func (b *BindingService) ListTunnels() ([]TunnelInfo, error) {
 	return tunnels, nil
 }
 
+func (b *BindingService) emitTunnelsChanged() {
+	if app := application.Get(); app != nil {
+		app.Event.Emit("tunnels-changed", nil)
+	}
+}
+
 func (b *BindingService) ConnectTunnel(tunnelID string) error {
 	resp, err := b.client.Service.Connect(context.Background(), &vpnapi.ConnectRequest{TunnelId: tunnelID})
 	if err != nil {
@@ -129,6 +141,7 @@ func (b *BindingService) ConnectTunnel(tunnelID string) error {
 	if !resp.Success {
 		return errors.New(resp.Error)
 	}
+	b.emitTunnelsChanged()
 	return nil
 }
 
@@ -140,6 +153,7 @@ func (b *BindingService) DisconnectTunnel(tunnelID string) error {
 	if !resp.Success {
 		return errors.New(resp.Error)
 	}
+	b.emitTunnelsChanged()
 	return nil
 }
 
@@ -151,6 +165,7 @@ func (b *BindingService) RestartTunnel(tunnelID string) error {
 	if !resp.Success {
 		return errors.New(resp.Error)
 	}
+	b.emitTunnelsChanged()
 	return nil
 }
 
@@ -162,6 +177,7 @@ func (b *BindingService) ConnectAll() error {
 	if !resp.Success {
 		return errors.New(resp.Error)
 	}
+	b.emitTunnelsChanged()
 	return nil
 }
 
@@ -173,6 +189,7 @@ func (b *BindingService) DisconnectAll() error {
 	if !resp.Success {
 		return errors.New(resp.Error)
 	}
+	b.emitTunnelsChanged()
 	return nil
 }
 
@@ -200,11 +217,25 @@ func (b *BindingService) AddTunnel(params AddTunnelParams) error {
 	if !resp.Success {
 		return errors.New(resp.Error)
 	}
+	b.emitTunnelsChanged()
 	return nil
 }
 
 func (b *BindingService) RemoveTunnel(tunnelID string) error {
 	resp, err := b.client.Service.RemoveTunnel(context.Background(), &vpnapi.RemoveTunnelRequest{TunnelId: tunnelID})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	b.emitTunnelsChanged()
+	return nil
+}
+
+// SaveTunnelOrder persists the display order of tunnels.
+func (b *BindingService) SaveTunnelOrder(tunnelIDs []string) error {
+	resp, err := b.client.Service.SaveTunnelOrder(context.Background(), &vpnapi.SaveTunnelOrderRequest{TunnelIds: tunnelIDs})
 	if err != nil {
 		return err
 	}
@@ -604,6 +635,8 @@ func (b *BindingService) runStatsStream() {
 				"state":      tunnelStateStr(t.State),
 				"speedTx":    t.SpeedTx,
 				"speedRx":    t.SpeedRx,
+				"bytesTx":    t.BytesTx,
+				"bytesRx":    t.BytesRx,
 				"packetLoss": t.PacketLoss,
 				"latencyMs":  t.LatencyMs,
 				"jitterMs":   t.JitterMs,

@@ -425,6 +425,20 @@ func (tc *TunnelControllerImpl) GetAdapterIP(tunnelID string) string {
 	return ip.String()
 }
 
+// GetServerEndpoints returns the remote server endpoint addresses for a tunnel.
+func (tc *TunnelControllerImpl) GetServerEndpoints(tunnelID string) []netip.AddrPort {
+	tc.mu.Lock()
+	inst, ok := tc.instances[tunnelID]
+	tc.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	if ep, ok := inst.provider.(provider.EndpointProvider); ok {
+		return ep.GetServerEndpoints()
+	}
+	return nil
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────
 
 func (tc *TunnelControllerImpl) createProvider(cfg core.TunnelConfig) (provider.TunnelProvider, error) {

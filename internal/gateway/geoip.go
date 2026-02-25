@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -169,6 +170,67 @@ func ListGeoIPCategories(path string) ([]string, error) {
 		codes = append(codes, cat.Code)
 	}
 	return codes, nil
+}
+
+// ─── GeoIPResolver — caching IP→country lookup ─────────────────────
+
+// geoipResolverEntry maps a country code to its PrefixTrie.
+type geoipResolverEntry struct {
+	code string
+	trie *PrefixTrie
+}
+
+// GeoIPResolver resolves IP addresses to country codes using geoip.dat.
+type GeoIPResolver struct {
+	entries []geoipResolverEntry
+}
+
+// NewGeoIPResolver parses geoip.dat and builds a PrefixTrie per country.
+func NewGeoIPResolver(geoipPath string) (*GeoIPResolver, error) {
+	data, err := os.ReadFile(geoipPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read geoip.dat for resolver: %w", err)
+	}
+
+	cats := parseGeoIPList(data)
+	resolver := &GeoIPResolver{}
+
+	for _, cat := range cats {
+		trie := NewPrefixTrie()
+		count := 0
+		for _, cidr := range cat.CIDRs {
+			if len(cidr.IP) == 4 {
+				var ip [4]byte
+				copy(ip[:], cidr.IP)
+				trie.Insert(ip, cidr.Prefix)
+				count++
+			}
+		}
+		if count > 0 {
+			resolver.entries = append(resolver.entries, geoipResolverEntry{
+				code: strings.ToUpper(cat.Code),
+				trie: trie,
+			})
+		}
+	}
+
+	core.Log.Infof("Core", "GeoIP resolver built: %d countries", len(resolver.entries))
+	return resolver, nil
+}
+
+// Lookup returns the 2-letter country code for the given IP address.
+// Returns empty string if no match found.
+func (r *GeoIPResolver) Lookup(addr netip.Addr) string {
+	if r == nil || !addr.Is4() {
+		return ""
+	}
+	ip4 := addr.As4()
+	for i := range r.entries {
+		if r.entries[i].trie.Contains(ip4) {
+			return r.entries[i].code
+		}
+	}
+	return ""
 }
 
 // --- Raw protobuf decoding for geoip.dat ---

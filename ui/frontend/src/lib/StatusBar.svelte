@@ -5,16 +5,14 @@
   import { t } from './i18n';
 
   let tunnels = [];
-  let unsubscribe;
+  let statsUnsub;
+  let tunnelsChangedUnsub;
 
-  onMount(async () => {
-    // Initial load
+  async function loadTunnels() {
     try {
       const list = await api.listTunnels();
       tunnels = (list || []).map(t => ({
         ...t,
-        txSpeed: 0,
-        rxSpeed: 0,
         packetLoss: 0,
         latencyMs: 0,
         jitterMs: 0,
@@ -22,12 +20,16 @@
     } catch (e) {
       // ignore
     }
+  }
+
+  onMount(async () => {
+    await loadTunnels();
 
     // Start stats stream (safe to call multiple times)
     api.startStatsStream();
 
     // Listen for stats updates
-    unsubscribe = Events.On('stats-update', (event) => {
+    statsUnsub = Events.On('stats-update', (event) => {
       const snap = event.data;
       if (!snap || !snap.tunnels) return;
 
@@ -37,8 +39,6 @@
           return {
             ...t,
             state: stat.state || t.state,
-            txSpeed: stat.speedTx || 0,
-            rxSpeed: stat.speedRx || 0,
             packetLoss: stat.packetLoss || 0,
             latencyMs: stat.latencyMs || 0,
             jitterMs: stat.jitterMs || 0,
@@ -47,17 +47,17 @@
         return t;
       });
     });
+
+    // Listen for tunnel list changes (add/remove/connect/disconnect)
+    tunnelsChangedUnsub = Events.On('tunnels-changed', async () => {
+      await loadTunnels();
+    });
   });
 
   onDestroy(() => {
-    if (unsubscribe) unsubscribe();
+    if (statsUnsub) statsUnsub();
+    if (tunnelsChangedUnsub) tunnelsChangedUnsub();
   });
-
-  function formatSpeed(bytesPerSec) {
-    if (bytesPerSec < 1024) return `${bytesPerSec}B/s`;
-    if (bytesPerSec < 1048576) return `${(bytesPerSec / 1024).toFixed(1)}KB/s`;
-    return `${(bytesPerSec / 1048576).toFixed(1)}MB/s`;
-  }
 
   function formatLoss(loss) {
     return `${(loss * 100).toFixed(1)}%`;
@@ -96,15 +96,13 @@
     return parts.join('\n');
   }
 
-  // Sort: Direct (__direct__) always first, then alphabetical by name.
+  // Sort: Direct (__direct__) always first, then by sortIndex.
   $: sortedTunnels = [...tunnels].sort((a, b) => {
     const aIsDirect = a.id === '__direct__';
     const bIsDirect = b.id === '__direct__';
     if (aIsDirect && !bIsDirect) return -1;
     if (!aIsDirect && bIsDirect) return 1;
-    const nameA = (a.name || a.id).toLowerCase();
-    const nameB = (b.name || b.id).toLowerCase();
-    return nameA.localeCompare(nameB);
+    return (a.sortIndex || 0) - (b.sortIndex || 0);
   });
 
 </script>
@@ -116,7 +114,7 @@
     {#each sortedTunnels as tunnel}
       <div class="flex items-center gap-1.5 px-1.5 py-0.5 rounded text-xs min-w-0"
            style="flex: {sortedTunnels.length <= 4 ? '1 1 0' : '0 0 calc(25% - 3px)'}">
-        <!-- State indicator -->
+        <!-- State indicator with tooltip -->
         {#if tunnel.state === 'up' && hasWarning(tunnel)}
           <span class="flex items-center shrink-0 {warningColor(tunnel)}" title={qualityTooltip(tunnel)}>
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3">
@@ -124,22 +122,15 @@
             </svg>
           </span>
         {:else}
-          <span class="w-1.5 h-1.5 rounded-full shrink-0 {tunnel.state === 'up' ? 'bg-green-400' : tunnel.state === 'connecting' ? 'bg-yellow-400 animate-pulse' : tunnel.state === 'error' ? 'bg-red-400' : 'bg-zinc-600'}"></span>
+          <span class="w-1.5 h-1.5 rounded-full shrink-0 {tunnel.state === 'up' ? 'bg-green-400' : tunnel.state === 'connecting' ? 'bg-yellow-400 animate-pulse' : tunnel.state === 'error' ? 'bg-red-400' : 'bg-zinc-600'}"
+                title={tunnel.state === 'up' ? qualityTooltip(tunnel) : ''}></span>
         {/if}
 
-        <!-- Name (truncated with ellipsis on overflow) -->
-        <span class="text-zinc-400 font-medium leading-none truncate min-w-[3rem]">{tunnel.name || tunnel.id}</span>
+        <!-- Name (wider, truncated with ellipsis) -->
+        <span class="text-zinc-400 font-medium leading-none truncate flex-1 min-w-[5rem]">{tunnel.name || tunnel.id}</span>
 
-        <!-- Speed + quality (only if up) -->
+        <!-- Packet loss (only if up) -->
         {#if tunnel.state === 'up'}
-          {@const txText = formatSpeed(tunnel.txSpeed)}
-          {@const rxText = formatSpeed(tunnel.rxSpeed)}
-          <span class="text-zinc-600 font-mono tabular-nums inline-flex items-center gap-0.5 shrink-0">
-            <span class="text-green-400/60 inline-block w-[4rem] overflow-hidden whitespace-nowrap leading-none {txText.length > 7 ? 'text-[0.625rem]' : ''}" title="Upload">&uarr;{txText}</span>
-            <span class="text-blue-400/60 inline-block w-[4rem] overflow-hidden whitespace-nowrap leading-none {rxText.length > 7 ? 'text-[0.625rem]' : ''}" title="Download">&darr;{rxText}</span>
-          </span>
-
-          <!-- Packet loss -->
           <span class="font-mono tabular-nums inline-flex items-center w-[3rem] overflow-hidden whitespace-nowrap leading-none shrink-0 {lossColor(tunnel.packetLoss)}" title={qualityTooltip(tunnel)}>
             {formatLoss(tunnel.packetLoss)}
           </span>

@@ -41,6 +41,7 @@ message TunnelConfig {
   repeated string allowed_ips = 5;
   repeated string disallowed_ips = 6;
   repeated string disallowed_apps = 7;
+  int32 sort_index = 8;             // user-defined display order
 }
 
 message TunnelStatus {
@@ -49,6 +50,9 @@ message TunnelStatus {
   TunnelState state = 3;
   string error = 4;          // error message if state == ERROR
   string adapter_ip = 5;     // VPN adapter IP (e.g. "10.8.1.2")
+  string external_ip = 6;    // VPN server endpoint IP
+  string country_code = 7;   // 2-letter country code from geoip
+  int32 sort_index = 8;      // user-defined display order
 }
 
 // ─── Domain rule messages ───────────────────────────────────────────
@@ -240,6 +244,15 @@ message TunnelListResponse {
   repeated TunnelStatus tunnels = 1;
 }
 
+message SaveTunnelOrderRequest {
+  repeated string tunnel_ids = 1;
+}
+
+message SaveTunnelOrderResponse {
+  bool success = 1;
+  string error = 2;
+}
+
 // -- Rules --
 
 message RuleListResponse {
@@ -413,6 +426,7 @@ service VPNService {
   rpc Connect(ConnectRequest) returns (ConnectResponse);
   rpc Disconnect(DisconnectRequest) returns (DisconnectResponse);
   rpc RestartTunnel(ConnectRequest) returns (ConnectResponse);
+  rpc SaveTunnelOrder(SaveTunnelOrderRequest) returns (SaveTunnelOrderResponse);
 
   // -- Rules --
   rpc ListRules(google.protobuf.Empty) returns (RuleListResponse);

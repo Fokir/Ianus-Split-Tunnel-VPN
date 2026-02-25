@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -214,9 +215,10 @@ type Rule struct {
 
 // TunnelConfig holds the configuration for a single VPN tunnel.
 type TunnelConfig struct {
-	ID       string `yaml:"id"`
-	Protocol string `yaml:"protocol"` // "amneziawg", "wireguard", "httpproxy", "socks5"
-	Name     string `yaml:"name"`
+	ID        string `yaml:"id"`
+	Protocol  string `yaml:"protocol"` // "amneziawg", "wireguard", "httpproxy", "socks5"
+	Name      string `yaml:"name"`
+	SortIndex int    `yaml:"sort_index,omitempty"` // user-defined display order
 
 	// Protocol-specific configuration stored as a generic map.
 	// Parsed by the corresponding provider.
@@ -289,6 +291,7 @@ type ReconnectConfig struct {
 type GUIConfig struct {
 	RestoreConnections bool            `yaml:"restore_connections,omitempty"`
 	ActiveTunnels      []string        `yaml:"active_tunnels,omitempty"`
+	TunnelOrder        []string        `yaml:"tunnel_order,omitempty"` // display order for all tunnels (incl. subscription)
 	Reconnect          ReconnectConfig `yaml:"reconnect,omitempty"`
 }
 
@@ -470,6 +473,36 @@ func (cm *ConfigManager) SetDomainRules(rules []DomainRule) {
 	if cm.bus != nil {
 		cm.bus.Publish(Event{Type: EventConfigReloaded})
 	}
+}
+
+// SetTunnelOrder saves the display order for all tunnels (manual + subscription).
+// The order is stored in gui.tunnel_order as a list of tunnel IDs.
+func (cm *ConfigManager) SetTunnelOrder(ids []string) error {
+	cm.mu.Lock()
+	cm.config.GUI.TunnelOrder = ids
+	// Also reorder config.Tunnels slice for manual tunnels.
+	orderMap := make(map[string]int, len(ids))
+	for i, id := range ids {
+		orderMap[id] = i
+	}
+	for i := range cm.config.Tunnels {
+		if pos, ok := orderMap[cm.config.Tunnels[i].ID]; ok {
+			cm.config.Tunnels[i].SortIndex = pos
+		}
+	}
+	sort.Slice(cm.config.Tunnels, func(i, j int) bool {
+		return cm.config.Tunnels[i].SortIndex < cm.config.Tunnels[j].SortIndex
+	})
+	cm.mu.Unlock()
+
+	return cm.Save()
+}
+
+// GetTunnelOrder returns the saved display order of tunnel IDs.
+func (cm *ConfigManager) GetTunnelOrder() []string {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.config.GUI.TunnelOrder
 }
 
 // SetFromGUI replaces the entire config with values from the GUI.

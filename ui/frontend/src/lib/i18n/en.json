@@ -73,7 +73,12 @@
     "transport": "Transport",
     "security": "Security",
     "securityNone": "None",
-    "mode": "Mode"
+    "mode": "Mode",
+    "dragToReorder": "Drag to reorder",
+    "confirmRemove": "Remove tunnel \"{name}\"?",
+    "confirmRemoveHint": "This action cannot be undone",
+    "yes": "Yes",
+    "no": "No"
   },
   "subscriptions": {
     "title": "Subscriptions",

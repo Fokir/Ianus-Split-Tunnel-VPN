@@ -73,7 +73,12 @@
     "transport": "Транспорт",
     "security": "Безопасность",
     "securityNone": "Нет",
-    "mode": "Режим"
+    "mode": "Режим",
+    "dragToReorder": "Перетащите для сортировки",
+    "confirmRemove": "Удалить туннель \u00ab{name}\u00bb?",
+    "confirmRemoveHint": "Это действие нельзя отменить",
+    "yes": "Да",
+    "no": "Нет"
   },
   "subscriptions": {
     "title": "Подписки",

@@ -8,11 +8,13 @@ package service
 import (
 	"context"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
 	vpnapi "awg-split-tunnel/api/gen"
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/gateway"
 	"awg-split-tunnel/internal/update"
 )
 
@@ -35,6 +37,8 @@ type TunnelController interface {
 	RemoveTunnel(tunnelID string) error
 	// GetAdapterIP returns the VPN adapter IP for a tunnel.
 	GetAdapterIP(tunnelID string) string
+	// GetServerEndpoints returns the remote server endpoint addresses for a tunnel.
+	GetServerEndpoints(tunnelID string) []netip.AddrPort
 }
 
 // Service is the central orchestrator that implements VPNServiceServer.
@@ -56,6 +60,7 @@ type Service struct {
 	geositeFilePath string
 	geoipFilePath   string
 	httpClient      *http.Client
+	geoResolver     *gateway.GeoIPResolver
 
 	subMgr         *core.SubscriptionManager
 	updateChecker  *update.Checker
@@ -120,6 +125,14 @@ func New(c Config) *Service {
 	s.subMgr = c.SubscriptionManager
 	s.updateChecker = c.UpdateChecker
 	s.reconnectMgr = c.ReconnectManager
+
+	// Initialize GeoIP resolver for IP→country lookup (best-effort).
+	if c.GeoIPFilePath != "" {
+		if resolver, err := gateway.NewGeoIPResolver(c.GeoIPFilePath); err == nil {
+			s.geoResolver = resolver
+		}
+	}
+
 	return s
 }
 

@@ -5,7 +5,7 @@ package core
 import "fmt"
 
 // CurrentConfigVersion is the latest config schema version.
-const CurrentConfigVersion = 1
+const CurrentConfigVersion = 2
 
 // configMigration defines a single config migration step.
 type configMigration struct {
@@ -17,6 +17,7 @@ type configMigration struct {
 // Each migration transforms raw YAML map from FromVersion to FromVersion+1.
 var configMigrations = []configMigration{
 	{FromVersion: 0, Migrate: migrateV0toV1},
+	{FromVersion: 1, Migrate: migrateV1toV2},
 }
 
 // MigrateConfig applies all pending migrations to a raw YAML config map.
@@ -67,5 +68,26 @@ func migrateV0toV1(raw map[string]interface{}) error {
 		dns["tunnel_ids"] = []interface{}{id}
 	}
 	delete(dns, "tunnel_id")
+	return nil
+}
+
+// migrateV1toV2 assigns sort_index to each tunnel based on its position in the array.
+func migrateV1toV2(raw map[string]interface{}) error {
+	tunnelsRaw, ok := raw["tunnels"]
+	if !ok {
+		return nil
+	}
+	tunnels, ok := tunnelsRaw.([]interface{})
+	if !ok {
+		return nil
+	}
+
+	for i, tRaw := range tunnels {
+		t, ok := tRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		t["sort_index"] = i
+	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -52,9 +53,29 @@ func (s *Service) Shutdown(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty,
 func (s *Service) ListTunnels(_ context.Context, _ *emptypb.Empty) (*vpnapi.TunnelListResponse, error) {
 	entries := s.registry.All()
 	tunnels := make([]*vpnapi.TunnelStatus, 0, len(entries))
-	for _, e := range entries {
-		tunnels = append(tunnels, tunnelEntryToProto(e, s.ctrl))
+
+	// Build order map from gui.tunnel_order (works for manual + subscription tunnels).
+	orderList := s.cfg.GetTunnelOrder()
+	orderMap := make(map[string]int, len(orderList))
+	for i, id := range orderList {
+		orderMap[id] = i
 	}
+
+	for _, e := range entries {
+		ts := tunnelEntryToProto(e, s.ctrl, s.geoResolver)
+		// Override sort_index from the global order list.
+		if pos, ok := orderMap[e.ID]; ok {
+			ts.SortIndex = int32(pos)
+		} else {
+			// Tunnels not in the order list go to the end.
+			ts.SortIndex = int32(len(orderList) + len(tunnels))
+		}
+		tunnels = append(tunnels, ts)
+	}
+
+	sort.Slice(tunnels, func(i, j int) bool {
+		return tunnels[i].SortIndex < tunnels[j].SortIndex
+	})
 	return &vpnapi.TunnelListResponse{Tunnels: tunnels}, nil
 }
 
@@ -63,7 +84,7 @@ func (s *Service) GetTunnel(_ context.Context, req *vpnapi.GetTunnelRequest) (*v
 	if !ok {
 		return nil, errNotFound("tunnel", req.TunnelId)
 	}
-	return tunnelEntryToProto(&e, s.ctrl), nil
+	return tunnelEntryToProto(&e, s.ctrl, s.geoResolver), nil
 }
 
 func (s *Service) AddTunnel(ctx context.Context, req *vpnapi.AddTunnelRequest) (*vpnapi.AddTunnelResponse, error) {
@@ -139,6 +160,13 @@ func (s *Service) RestartTunnel(ctx context.Context, req *vpnapi.ConnectRequest)
 		return &vpnapi.ConnectResponse{Success: false, Error: err.Error()}, nil
 	}
 	return &vpnapi.ConnectResponse{Success: true}, nil
+}
+
+func (s *Service) SaveTunnelOrder(_ context.Context, req *vpnapi.SaveTunnelOrderRequest) (*vpnapi.SaveTunnelOrderResponse, error) {
+	if err := s.cfg.SetTunnelOrder(req.TunnelIds); err != nil {
+		return &vpnapi.SaveTunnelOrderResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &vpnapi.SaveTunnelOrderResponse{Success: true}, nil
 }
 
 // ─── Rules ──────────────────────────────────────────────────────────
