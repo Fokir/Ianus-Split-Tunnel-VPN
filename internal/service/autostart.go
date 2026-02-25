@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc/mgr"
 
@@ -120,14 +122,68 @@ func isLegacyTaskEnabled() (bool, error) {
 
 const guiTaskName = "AWGSplitTunnelGUI"
 
+var (
+	modWtsapi32                     = windows.NewLazySystemDLL("wtsapi32.dll")
+	procWTSQuerySessionInformationW = modWtsapi32.NewProc("WTSQuerySessionInformationW")
+	procWTSFreeMemory               = modWtsapi32.NewProc("WTSFreeMemory")
+)
+
+const (
+	wtsUserName   = 5
+	wtsDomainName = 7
+)
+
+// getConsoleUsername returns "DOMAIN\User" for the active console session.
+// Works from SYSTEM context (service) via WTS API.
+func getConsoleUsername() (string, error) {
+	sessionID := windows.WTSGetActiveConsoleSessionId()
+
+	queryString := func(infoClass uint32) (string, error) {
+		var buf *uint16
+		var bufSize uint32
+		ret, _, err := procWTSQuerySessionInformationW.Call(
+			0, // WTS_CURRENT_SERVER_HANDLE
+			uintptr(sessionID),
+			uintptr(infoClass),
+			uintptr(unsafe.Pointer(&buf)),
+			uintptr(unsafe.Pointer(&bufSize)),
+		)
+		if ret == 0 {
+			return "", fmt.Errorf("WTSQuerySessionInformation(%d): %w", infoClass, err)
+		}
+		defer procWTSFreeMemory.Call(uintptr(unsafe.Pointer(buf)))
+		return windows.UTF16PtrToString(buf), nil
+	}
+
+	user, err := queryString(wtsUserName)
+	if err != nil {
+		return "", err
+	}
+	if user == "" {
+		return "", fmt.Errorf("no user logged in on console session %d", sessionID)
+	}
+
+	domain, _ := queryString(wtsDomainName)
+	if domain != "" {
+		return domain + `\` + user, nil
+	}
+	return user, nil
+}
+
 // setGUIAutostart creates or removes a scheduled task for GUI autostart.
 // Runs from the service (SYSTEM) which has permission to manage tasks.
 func setGUIAutostart(enabled bool, guiExePath string) error {
 	if enabled {
+		username, err := getConsoleUsername()
+		if err != nil {
+			return fmt.Errorf("get console user: %w", err)
+		}
+
 		out, err := exec.Command("schtasks", "/Create",
 			"/TN", guiTaskName,
 			"/TR", fmt.Sprintf(`"%s" --minimized`, guiExePath),
 			"/SC", "ONLOGON",
+			"/RU", username,
 			"/RL", "HIGHEST",
 			"/F",
 		).CombinedOutput()
