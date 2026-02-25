@@ -423,21 +423,15 @@
     const pattern = wizardSelectedProcess.name;
 
     const newRules = [];
-    for (const tunnel of wizardSelectedTunnels) {
+    for (let i = 0; i < wizardSelectedTunnels.length; i++) {
+      const isLast = i === wizardSelectedTunnels.length - 1;
       newRules.push({
         pattern,
-        tunnelId: tunnel.id,
-        fallback: 'failover',
+        tunnelId: wizardSelectedTunnels[i].id,
+        fallback: isLast ? 'allow_direct' : 'failover',
         priority: 'auto',
       });
     }
-    // Final direct-access rule
-    newRules.push({
-      pattern,
-      tunnelId: '',
-      fallback: 'allow_direct',
-      priority: 'auto',
-    });
 
     // Insert after last existing rule with same pattern, or append
     let insertAt = rules.length;
@@ -1093,26 +1087,21 @@
               <div class="text-[10px] uppercase tracking-wider text-zinc-500 font-medium mb-1.5">{$t('rules.rulesPreview')}</div>
               <div class="border border-zinc-700/50 rounded-lg overflow-hidden">
                 {#each wizardSelectedTunnels as tun, i}
-                  <div class="flex items-center gap-3 px-3 py-2 {i > 0 ? 'border-t border-zinc-700/30' : ''}">
+                  {@const isLast = i === wizardSelectedTunnels.length - 1}
+                  <div class="flex items-center gap-3 px-3 py-2 {i > 0 ? 'border-t border-zinc-700/30' : ''} {isLast ? 'bg-zinc-800/40' : ''}">
                     <span class="text-xs font-mono text-zinc-500 w-5 shrink-0">{i + 1}.</span>
                     <div class="flex-1 min-w-0">
                       <span class="text-sm text-zinc-200">{wizardSelectedProcess?.name}</span>
                       <svg class="w-3.5 h-3.5 inline mx-1.5 text-zinc-600" viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
                       <span class="text-sm text-blue-400">{tun.name || tun.id}</span>
                     </div>
-                    <span class="text-[10px] text-zinc-500 shrink-0">{$t('rules.fallbackFailover')}</span>
+                    {#if isLast}
+                      <span class="text-[10px] text-emerald-400 shrink-0">{$t('rules.fallbackDirect')}</span>
+                    {:else}
+                      <span class="text-[10px] text-zinc-500 shrink-0">{$t('rules.fallbackFailover')}</span>
+                    {/if}
                   </div>
                 {/each}
-                <!-- Final direct rule -->
-                <div class="flex items-center gap-3 px-3 py-2 border-t border-zinc-700/30 bg-zinc-800/40">
-                  <span class="text-xs font-mono text-zinc-500 w-5 shrink-0">{wizardSelectedTunnels.length + 1}.</span>
-                  <div class="flex-1 min-w-0">
-                    <span class="text-sm text-zinc-200">{wizardSelectedProcess?.name}</span>
-                    <svg class="w-3.5 h-3.5 inline mx-1.5 text-zinc-600" viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-                    <span class="text-sm text-emerald-400">{$t('rules.fallbackDirect')}</span>
-                  </div>
-                  <span class="text-[10px] text-zinc-500 shrink-0">{$t('rules.finalFallback')}</span>
-                </div>
               </div>
             </div>
           </div>
