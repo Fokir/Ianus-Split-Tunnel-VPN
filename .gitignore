@@ -7,3 +7,4 @@ build
 .idea
 .serena
 logs
+BINDINGS_GENERATED.md
