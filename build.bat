@@ -31,7 +31,7 @@ if not exist "%OUT_DIR%" mkdir "%OUT_DIR%"
 
 :: ── Frontend build ──────────────────────────────────────────────────
 echo.
-echo [1/7] Installing frontend dependencies...
+echo [1/8] Installing frontend dependencies...
 pushd ui\frontend
 call npm install --silent
 if %ERRORLEVEL% NEQ 0 (
@@ -40,7 +40,7 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-echo [2/7] Building frontend...
+echo [2/8] Building frontend...
 call npm run build
 if %ERRORLEVEL% NEQ 0 (
     popd
@@ -50,7 +50,7 @@ if %ERRORLEVEL% NEQ 0 (
 popd
 
 :: ── Wails bindings ──────────────────────────────────────────────────
-echo [3/7] Generating Wails bindings...
+echo [3/8] Generating Wails bindings...
 pushd ui
 wails3 generate bindings
 if %ERRORLEVEL% NEQ 0 (
@@ -67,8 +67,52 @@ if exist frontend\bindings (
     rmdir frontend 2>nul
 )
 
+:: ── Windows resources (manifest + icon → .syso) ──────────────────────
+echo [4/8] Generating Windows resources (manifest + icon)...
+
+set ICON=.\ui\build\windows\icon.ico
+
+where rsrc >nul 2>nul
+if %ERRORLEVEL% NEQ 0 (
+    echo   WARNING: rsrc not found — EXE files will not have icons or manifests
+    echo   Install with: go install github.com/akavel/rsrc@latest
+    goto skip_resources
+)
+
+:: Service
+if exist ".\cmd\awg-split-tunnel\app.manifest" (
+    rsrc -manifest ".\cmd\awg-split-tunnel\app.manifest" -ico "%ICON%" -o ".\cmd\awg-split-tunnel\rsrc_windows_amd64.syso"
+    echo   - awg-split-tunnel.syso
+)
+
+:: GUI
+if exist ".\ui\build\windows\wails.exe.manifest" (
+    rsrc -manifest ".\ui\build\windows\wails.exe.manifest" -ico "%ICON%" -o ".\ui\rsrc_windows_amd64.syso"
+    echo   - awg-split-tunnel-ui.syso
+)
+
+:: Updater
+if exist "%UPDATER_CMD_DIR%\app.manifest" (
+    rsrc -manifest "%UPDATER_CMD_DIR%\app.manifest" -ico "%ICON%" -o "%UPDATER_CMD_DIR%\rsrc_windows_amd64.syso"
+    echo   - awg-split-tunnel-updater.syso
+)
+
+:: Test runner
+if exist ".\cmd\awg-test\app.manifest" (
+    rsrc -manifest ".\cmd\awg-test\app.manifest" -ico "%ICON%" -o ".\cmd\awg-test\rsrc_windows_amd64.syso"
+    echo   - awg-test.syso
+)
+
+:: Diagnostic tool
+if exist ".\cmd\awg-diag\app.manifest" (
+    rsrc -manifest ".\cmd\awg-diag\app.manifest" -ico "%ICON%" -o ".\cmd\awg-diag\rsrc_windows_amd64.syso"
+    echo   - awg-diag.syso
+)
+
+:skip_resources
+
 :: ── Go builds ───────────────────────────────────────────────────────
-echo [4/7] Building Go binaries (%VERSION%)...
+echo [5/8] Building Go binaries (%VERSION%)...
 
 echo   - %APP_NAME%.exe (VPN service)
 go build -ldflags "%LDFLAGS%" -o "%BINARY%" %CMD_DIR%
@@ -87,7 +131,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 :: ── Diagnostic tool build ──────────────────────────────────────────
-echo [5/7] Building diagnostic tool...
+echo [6/8] Building diagnostic tool...
 
 echo   - %APP_NAME%-diag.exe
 go build -ldflags "%LDFLAGS%" -o "%OUT_DIR%\%APP_NAME%-diag.exe" .\cmd\awg-diag\
@@ -98,15 +142,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 :: ── Test runner build ─────────────────────────────────────────────
-echo [6/7] Building test runner...
-
-:: Generate test runner Windows resource (.syso) from manifest if rsrc is available.
-where rsrc >nul 2>nul
-if %ERRORLEVEL% EQU 0 (
-    if exist ".\cmd\awg-test\app.manifest" (
-        rsrc -manifest ".\cmd\awg-test\app.manifest" -o ".\cmd\awg-test\rsrc_windows_amd64.syso"
-    )
-)
+echo [7/8] Building test runner...
 
 echo   - awg-test.exe
 go build -ldflags "%LDFLAGS%" -o "%OUT_DIR%\awg-test.exe" .\cmd\awg-test\
@@ -117,15 +153,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 :: ── Updater build ───────────────────────────────────────────────────
-echo [7/7] Building updater...
-
-:: Generate updater Windows resource (.syso) from manifest if rsrc is available.
-where rsrc >nul 2>nul
-if %ERRORLEVEL% EQU 0 (
-    if exist "%UPDATER_CMD_DIR%\app.manifest" (
-        rsrc -manifest "%UPDATER_CMD_DIR%\app.manifest" -o "%UPDATER_CMD_DIR%\rsrc_windows_amd64.syso"
-    )
-)
+echo [8/8] Building updater...
 
 echo   - %APP_NAME%-updater.exe
 go build -ldflags "%LDFLAGS%" -o "%OUT_DIR%\%APP_NAME%-updater.exe" %UPDATER_CMD_DIR%

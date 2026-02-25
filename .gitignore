@@ -1,6 +1,7 @@
 *.exe
 *.dll
 *.sys
+*.syso
 
 build
 .idea
