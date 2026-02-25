@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -19,6 +20,7 @@ import (
 	vpnapi "awg-split-tunnel/api/gen"
 	"awg-split-tunnel/internal/ipc"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -456,8 +458,22 @@ func (b *BindingService) GetConfig() (*vpnapi.AppConfig, error) {
 }
 
 func (b *BindingService) SaveConfig(config *vpnapi.AppConfig, restartIfConnected bool) (bool, error) {
+	// Re-encode config through protojson to ensure proper protobuf message
+	// initialization. Wails creates protobuf structs via encoding/json which
+	// leaves internal MessageState uninitialized, causing proto.Marshal to
+	// fail with "string field contains invalid UTF-8" during gRPC send.
+	jsonBytes, err := json.Marshal(config)
+	if err != nil {
+		return false, fmt.Errorf("encode config: %w", err)
+	}
+	cleanConfig := &vpnapi.AppConfig{}
+	opts := protojson.UnmarshalOptions{DiscardUnknown: true}
+	if err := opts.Unmarshal(jsonBytes, cleanConfig); err != nil {
+		return false, fmt.Errorf("decode config: %w", err)
+	}
+
 	resp, err := b.client.Service.SaveConfig(context.Background(), &vpnapi.SaveConfigRequest{
-		Config:             config,
+		Config:             cleanConfig,
 		RestartIfConnected: restartIfConnected,
 	})
 	if err != nil {

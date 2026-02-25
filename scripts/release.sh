@@ -207,6 +207,10 @@ if [[ -n "$OLD_ZIPS" || -n "$OLD_INSTALLERS" ]]; then
     ok "Old artifacts cleaned"
 fi
 
+# Export VERSION so build.bat picks it up instead of git describe.
+export VERSION="$NEW_TAG"
+info "Building with VERSION=$VERSION"
+
 cmd //c build.bat
 if [[ $? -ne 0 ]]; then
     err "build.bat failed"

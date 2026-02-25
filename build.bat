@@ -9,9 +9,11 @@ set UPDATER_CMD_DIR=.\cmd\awg-split-tunnel-updater
 set OUT_DIR=.\build
 set BINARY=%OUT_DIR%\%APP_NAME%.exe
 
-:: Get version info from git.
-for /f "delims=" %%i in ('git describe --tags --always --dirty 2^>nul') do set VERSION=%%i
-if not defined VERSION set VERSION=dev
+:: Get version info from git (unless VERSION is already set externally, e.g. by release.sh).
+if not defined VERSION (
+    for /f "delims=" %%i in ('git describe --tags --always --dirty 2^>nul') do set VERSION=%%i
+    if not defined VERSION set VERSION=dev
+)
 
 for /f "delims=" %%i in ('git rev-parse --short HEAD 2^>nul') do set COMMIT=%%i
 if not defined COMMIT set COMMIT=unknown

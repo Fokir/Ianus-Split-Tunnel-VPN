@@ -210,8 +210,33 @@ func (c *Checker) fetchLatest(ctx context.Context) (*Info, error) {
 }
 
 // normalizeVersion strips the "v" prefix from a version string.
+// For git-describe output like "0.1.7-8-g0d54730" (N commits after tag),
+// it increments the patch version so the dev build is treated as the next
+// release for comparison purposes (e.g. "0.1.7-8-g0d54730" → "0.1.8").
 func normalizeVersion(v string) string {
-	return strings.TrimPrefix(v, "v")
+	v = strings.TrimPrefix(v, "v")
+
+	// Detect git-describe format: X.Y.Z-N-gHASH
+	parts := strings.SplitN(v, "-", 3)
+	if len(parts) == 3 && len(parts[2]) > 0 && parts[2][0] == 'g' {
+		n := 0
+		valid := len(parts[1]) > 0
+		for _, c := range parts[1] {
+			if c >= '0' && c <= '9' {
+				n = n*10 + int(c-'0')
+			} else {
+				valid = false
+				break
+			}
+		}
+		if valid && n > 0 {
+			sv := parseSemver(parts[0])
+			sv[2]++
+			return fmt.Sprintf("%d.%d.%d", sv[0], sv[1], sv[2])
+		}
+	}
+
+	return v
 }
 
 // isNewer returns true if release > current using simple semver comparison.
