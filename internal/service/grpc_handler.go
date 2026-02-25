@@ -6,8 +6,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"syscall"
 	"time"
 
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -702,28 +704,26 @@ func (s *Service) ApplyUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.Ap
 		return &vpnapi.ApplyUpdateResponse{Success: false, Error: "updater binary not found"}, nil
 	}
 
-	// Launch updater process.
+	// Launch updater as a fully detached process.
+	// The updater will stop this service via SCM (clean stop, no recovery actions),
+	// then replace binaries, restart the service, and launch GUI.
 	core.Log.Infof("Update", "Launching updater: %s", updaterPath)
-	attr := &os.ProcAttr{
-		Dir:   installDir,
-		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
-	}
-	_, err = os.StartProcess(updaterPath, []string{
-		updaterPath,
+	cmd := exec.Command(updaterPath,
 		"--install-dir", installDir,
 		"--temp-dir", extractDir,
 		"--start-service",
 		"--launch-gui",
-	}, attr)
-	if err != nil {
+	)
+	cmd.Dir = installDir
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | 0x00000008, // DETACHED_PROCESS
+	}
+	if err := cmd.Start(); err != nil {
 		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("failed to launch updater: %v", err)}, nil
 	}
 
-	// Signal shutdown after a short delay so the response gets sent first.
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		s.bus.PublishAsync(core.Event{Type: core.EventConfigReloaded, Payload: "shutdown"})
-	}()
+	// Do NOT self-terminate the service here. The updater will stop us via SCM,
+	// which ensures a clean stop without triggering recovery actions.
 
 	return &vpnapi.ApplyUpdateResponse{Success: true}, nil
 }

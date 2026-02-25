@@ -59,34 +59,55 @@ func main() {
 	logger.Printf("Install dir: %s", *installDir)
 	logger.Printf("Temp dir: %s", *tempDir)
 
+	// Show progress window (non-closable, topmost).
+	pw := NewProgressWindow()
+	pw.Show()
+	defer pw.Close()
+
 	// Step 1: Wait for service and GUI to exit.
+	pw.SetStatus("Stopping service...")
+	pw.SetProgress(5)
 	logger.Printf("Waiting for service and GUI to exit...")
 	if err := waitForProcessExit(*installDir, 30*time.Second); err != nil {
 		logger.Printf("Warning: %v (proceeding anyway)", err)
 	}
+	pw.SetProgress(20)
 
 	// Step 2: Backup current files.
+	pw.SetStatus("Creating backup...")
+	pw.SetProgress(25)
 	logger.Printf("Backing up current files...")
 	backedUp, err := backupFiles(*installDir)
 	if err != nil {
 		logger.Printf("Error backing up files: %v", err)
+		pw.SetStatus("Error: backup failed")
+		time.Sleep(3 * time.Second)
 		os.Exit(1)
 	}
 	logger.Printf("Backed up %d files", len(backedUp))
+	pw.SetProgress(35)
 
 	// Step 3: Copy new files from temp dir.
+	pw.SetStatus("Installing new files...")
+	pw.SetProgress(40)
 	logger.Printf("Installing new files...")
 	if err := copyNewFiles(*tempDir, *installDir); err != nil {
 		logger.Printf("Error copying new files: %v — rolling back", err)
+		pw.SetStatus("Error: install failed, rolling back...")
 		rollback(*installDir, backedUp, logger)
+		time.Sleep(3 * time.Second)
 		os.Exit(1)
 	}
+	pw.SetProgress(55)
 
 	// Step 4: Start service.
 	if *startService {
+		pw.SetStatus("Starting service...")
+		pw.SetProgress(60)
 		logger.Printf("Starting Windows Service...")
 		if err := winsvc.StartService(); err != nil {
 			logger.Printf("Error starting service: %v — rolling back", err)
+			pw.SetStatus("Error: service start failed, rolling back...")
 			rollback(*installDir, backedUp, logger)
 
 			// Try to start old service after rollback.
@@ -94,13 +115,18 @@ func main() {
 			if err := winsvc.StartService(); err != nil {
 				logger.Printf("Failed to start old service: %v", err)
 			}
+			time.Sleep(3 * time.Second)
 			os.Exit(1)
 		}
+		pw.SetProgress(75)
 
 		// Step 5: Verify service is responsive.
+		pw.SetStatus("Verifying service...")
+		pw.SetProgress(80)
 		logger.Printf("Verifying service...")
 		if err := verifyService(10 * time.Second); err != nil {
 			logger.Printf("Service verification failed: %v — rolling back", err)
+			pw.SetStatus("Error: service verification failed, rolling back...")
 			_ = winsvc.StopService()
 			rollback(*installDir, backedUp, logger)
 
@@ -108,13 +134,17 @@ func main() {
 			if err := winsvc.StartService(); err != nil {
 				logger.Printf("Failed to start old service: %v", err)
 			}
+			time.Sleep(3 * time.Second)
 			os.Exit(1)
 		}
 		logger.Printf("Service is running and responsive")
+		pw.SetProgress(90)
 	}
 
 	// Step 6: Launch GUI in user session.
 	if *launchGUI {
+		pw.SetStatus("Starting application...")
+		pw.SetProgress(95)
 		guiPath := filepath.Join(*installDir, "awg-split-tunnel-ui.exe")
 		if _, err := os.Stat(guiPath); err == nil {
 			logger.Printf("Launching GUI: %s", guiPath)
@@ -125,11 +155,15 @@ func main() {
 	}
 
 	// Step 7: Cleanup backups and temp dir.
+	pw.SetStatus("Cleaning up...")
+	pw.SetProgress(100)
 	logger.Printf("Cleaning up...")
 	cleanupBackups(*installDir, backedUp)
 	os.RemoveAll(*tempDir)
 
 	logger.Printf("Update completed successfully!")
+	pw.SetStatus("Update completed!")
+	time.Sleep(1 * time.Second)
 }
 
 // waitForProcessExit waits until service and GUI processes stop.
@@ -139,6 +173,22 @@ func waitForProcessExit(installDir string, timeout time.Duration) error {
 		if err := winsvc.StopService(); err != nil {
 			return fmt.Errorf("stop service: %w", err)
 		}
+	}
+
+	// Wait for the service process to actually terminate (not just SCM status).
+	// StopService returns when SCM reports Stopped, but the process may still
+	// be running its shutdown sequence (up to 10s timeout).
+	svcDeadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(svcDeadline) {
+		if !isProcessRunning("awg-split-tunnel.exe") {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if isProcessRunning("awg-split-tunnel.exe") {
+		// Force kill the service process if it's still hanging.
+		_ = exec.Command("taskkill", "/F", "/IM", "awg-split-tunnel.exe").Run()
+		time.Sleep(1 * time.Second)
 	}
 
 	// Give the GUI a few seconds to notice the service is gone and exit on its own.
