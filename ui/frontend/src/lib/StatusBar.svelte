@@ -102,7 +102,9 @@
     const bIsDirect = b.id === '__direct__';
     if (aIsDirect && !bIsDirect) return -1;
     if (!aIsDirect && bIsDirect) return 1;
-    return (a.sortIndex || 0) - (b.sortIndex || 0);
+    const diff = (a.sortIndex || 0) - (b.sortIndex || 0);
+    if (diff !== 0) return diff;
+    return a.id.localeCompare(b.id);
   });
 
 </script>

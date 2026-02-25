@@ -67,14 +67,18 @@ func (s *Service) ListTunnels(_ context.Context, _ *emptypb.Empty) (*vpnapi.Tunn
 		if pos, ok := orderMap[e.ID]; ok {
 			ts.SortIndex = int32(pos)
 		} else {
-			// Tunnels not in the order list go to the end.
-			ts.SortIndex = int32(len(orderList) + len(tunnels))
+			// Tunnels not in the order list go to the end
+			// (same base index; stable tiebreak by ID below).
+			ts.SortIndex = int32(len(orderList))
 		}
 		tunnels = append(tunnels, ts)
 	}
 
 	sort.Slice(tunnels, func(i, j int) bool {
-		return tunnels[i].SortIndex < tunnels[j].SortIndex
+		if tunnels[i].SortIndex != tunnels[j].SortIndex {
+			return tunnels[i].SortIndex < tunnels[j].SortIndex
+		}
+		return tunnels[i].Id < tunnels[j].Id
 	})
 	return &vpnapi.TunnelListResponse{Tunnels: tunnels}, nil
 }

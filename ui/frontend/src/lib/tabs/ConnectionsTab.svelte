@@ -154,7 +154,11 @@
     error = '';
     try {
       const list = (await api.listTunnels() || []).filter(t => t.id !== '__direct__');
-      tunnels = list.sort((a, b) => a.sortIndex - b.sortIndex);
+      tunnels = list.sort((a, b) => {
+        const diff = a.sortIndex - b.sortIndex;
+        if (diff !== 0) return diff;
+        return a.id.localeCompare(b.id);
+      });
     } catch (e) {
       error = e.message || $t('connections.failedToLoad');
     } finally {
