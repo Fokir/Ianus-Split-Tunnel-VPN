@@ -463,6 +463,9 @@ service VPNService {
   // -- Connection restore --
   rpc RestoreConnections(google.protobuf.Empty) returns (ConnectResponse);
 
+  // -- DNS --
+  rpc FlushDNS(google.protobuf.Empty) returns (ConnectResponse);
+
   // -- Updates --
   rpc CheckUpdate(google.protobuf.Empty) returns (CheckUpdateResponse);
   rpc ApplyUpdate(google.protobuf.Empty) returns (ApplyUpdateResponse);

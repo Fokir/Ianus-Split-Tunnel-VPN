@@ -636,6 +636,18 @@ func (s *Service) removeSubscriptionTunnels(subName string) {
 	}
 }
 
+// ─── DNS ─────────────────────────────────────────────────────────────
+
+func (s *Service) FlushDNS(_ context.Context, _ *emptypb.Empty) (*vpnapi.ConnectResponse, error) {
+	if s.dnsFlush == nil {
+		return &vpnapi.ConnectResponse{Success: false, Error: "DNS flush not available"}, nil
+	}
+	if err := s.dnsFlush(); err != nil {
+		return &vpnapi.ConnectResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &vpnapi.ConnectResponse{Success: true}, nil
+}
+
 // ─── Updates ─────────────────────────────────────────────────────────
 
 func (s *Service) CheckUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.CheckUpdateResponse, error) {

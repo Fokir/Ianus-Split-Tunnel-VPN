@@ -50,6 +50,7 @@ const (
 	VPNService_RemoveSubscription_FullMethodName    = "/awg.vpn.v1.VPNService/RemoveSubscription"
 	VPNService_RefreshSubscription_FullMethodName   = "/awg.vpn.v1.VPNService/RefreshSubscription"
 	VPNService_RestoreConnections_FullMethodName    = "/awg.vpn.v1.VPNService/RestoreConnections"
+	VPNService_FlushDNS_FullMethodName             = "/awg.vpn.v1.VPNService/FlushDNS"
 	VPNService_CheckUpdate_FullMethodName           = "/awg.vpn.v1.VPNService/CheckUpdate"
 	VPNService_ApplyUpdate_FullMethodName           = "/awg.vpn.v1.VPNService/ApplyUpdate"
 )
@@ -98,6 +99,8 @@ type VPNServiceClient interface {
 	RefreshSubscription(ctx context.Context, in *RefreshSubscriptionRequest, opts ...grpc.CallOption) (*RefreshSubscriptionResponse, error)
 	// -- Connection restore --
 	RestoreConnections(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConnectResponse, error)
+	// -- DNS --
+	FlushDNS(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConnectResponse, error)
 	// -- Updates --
 	CheckUpdate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*CheckUpdateResponse, error)
 	ApplyUpdate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ApplyUpdateResponse, error)
@@ -429,6 +432,16 @@ func (c *vPNServiceClient) RestoreConnections(ctx context.Context, in *emptypb.E
 	return out, nil
 }
 
+func (c *vPNServiceClient) FlushDNS(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConnectResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConnectResponse)
+	err := c.cc.Invoke(ctx, VPNService_FlushDNS_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *vPNServiceClient) CheckUpdate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*CheckUpdateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CheckUpdateResponse)
@@ -493,6 +506,8 @@ type VPNServiceServer interface {
 	RefreshSubscription(context.Context, *RefreshSubscriptionRequest) (*RefreshSubscriptionResponse, error)
 	// -- Connection restore --
 	RestoreConnections(context.Context, *emptypb.Empty) (*ConnectResponse, error)
+	// -- DNS --
+	FlushDNS(context.Context, *emptypb.Empty) (*ConnectResponse, error)
 	// -- Updates --
 	CheckUpdate(context.Context, *emptypb.Empty) (*CheckUpdateResponse, error)
 	ApplyUpdate(context.Context, *emptypb.Empty) (*ApplyUpdateResponse, error)
@@ -595,6 +610,9 @@ func (UnimplementedVPNServiceServer) RefreshSubscription(context.Context, *Refre
 }
 func (UnimplementedVPNServiceServer) RestoreConnections(context.Context, *emptypb.Empty) (*ConnectResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RestoreConnections not implemented")
+}
+func (UnimplementedVPNServiceServer) FlushDNS(context.Context, *emptypb.Empty) (*ConnectResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FlushDNS not implemented")
 }
 func (UnimplementedVPNServiceServer) CheckUpdate(context.Context, *emptypb.Empty) (*CheckUpdateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CheckUpdate not implemented")
@@ -1149,6 +1167,24 @@ func _VPNService_RestoreConnections_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VPNService_FlushDNS_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).FlushDNS(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_FlushDNS_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).FlushDNS(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _VPNService_CheckUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -1303,6 +1339,10 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RestoreConnections",
 			Handler:    _VPNService_RestoreConnections_Handler,
+		},
+		{
+			MethodName: "FlushDNS",
+			Handler:    _VPNService_FlushDNS_Handler,
 		},
 		{
 			MethodName: "CheckUpdate",

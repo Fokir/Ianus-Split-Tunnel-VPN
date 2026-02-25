@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -300,6 +301,21 @@ func runVPN(configPath string) error {
 		tunnelCtrl.SetDomainMatchFunc(&fn)
 	}
 
+	dnsFlush := func() error {
+		if dnsResolver != nil {
+			dnsResolver.FlushCache()
+		}
+		domainTable.Flush()
+		// Flush Windows DNS cache.
+		cmd := exec.Command("ipconfig", "/flushdns")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		if err := cmd.Run(); err != nil {
+			core.Log.Warnf("DNS", "ipconfig /flushdns failed: %v", err)
+		}
+		core.Log.Infof("DNS", "All DNS caches flushed")
+		return nil
+	}
+
 	domainReloader := func(rules []core.DomainRule) error {
 		m := buildDomainMatcher(rules, geositeFilePath, nicHTTPClient)
 		if dnsResolver != nil {
@@ -382,6 +398,7 @@ func runVPN(configPath string) error {
 		StatsCollector:      statsCollector,
 		Version:             version,
 		DomainReloader:      domainReloader,
+		DNSFlush:            dnsFlush,
 		GeositeFilePath:     geositeFilePath,
 		GeoIPFilePath:       geoipFilePath,
 		HTTPClient:          nicHTTPClient,

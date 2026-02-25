@@ -137,6 +137,23 @@
     }
     return true;
   }
+
+  let flushing = false;
+  let flushSuccess = false;
+
+  async function flushDNS() {
+    flushing = true;
+    flushSuccess = false;
+    try {
+      await api.flushDNS();
+      flushSuccess = true;
+      setTimeout(() => flushSuccess = false, 3000);
+    } catch (e) {
+      error = e.message || 'Failed to flush DNS';
+    } finally {
+      flushing = false;
+    }
+  }
 </script>
 
 {#if dirty}
@@ -365,7 +382,28 @@
 
     <!-- DNS -->
     <section class="space-y-3">
-      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">{$t('settings.dns')}</h3>
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">{$t('settings.dns')}</h3>
+        <button
+          class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors {flushSuccess ? 'bg-green-600/20 text-green-400' : 'bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100'}"
+          on:click={flushDNS}
+          disabled={flushing}
+          title={$t('settings.flushDnsHint')}
+        >
+          {#if flushing}
+            <svg class="inline-block animate-spin h-3 w-3 mr-1" viewBox="0 0 24 24" fill="none">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            {$t('settings.flushDnsFlushing')}
+          {:else if flushSuccess}
+            <svg class="inline-block h-3 w-3 mr-1" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            {$t('settings.flushDnsSuccess')}
+          {:else}
+            {$t('settings.flushDns')}
+          {/if}
+        </button>
+      </div>
       <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4 space-y-3">
         <div>
           <!-- svelte-ignore a11y-label-has-associated-control -->

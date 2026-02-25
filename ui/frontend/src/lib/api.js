@@ -92,6 +92,12 @@ export function listProcesses(nameFilter = '') {
   return BindingService.ListProcesses(nameFilter);
 }
 
+// ─── DNS ────────────────────────────────────────────────────────────
+
+export function flushDNS() {
+  return BindingService.FlushDNS();
+}
+
 // ─── Config ─────────────────────────────────────────────────────────
 
 export function getConfig() {

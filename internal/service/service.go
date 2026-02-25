@@ -57,6 +57,7 @@ type Service struct {
 	startTime time.Time
 
 	domainReloader  func(rules []core.DomainRule) error
+	dnsFlush        func() error
 	geositeFilePath string
 	geoipFilePath   string
 	httpClient      *http.Client
@@ -83,6 +84,8 @@ type Config struct {
 	// DomainReloader rebuilds the domain matcher from updated rules.
 	// Called by SaveDomainRules and UpdateGeosite handlers.
 	DomainReloader func(rules []core.DomainRule) error
+	// DNSFlush clears the DNS cache, domain table, and Windows DNS cache.
+	DNSFlush func() error
 	// GeositeFilePath is the path to geosite.dat for listing categories and updating.
 	GeositeFilePath string
 	// GeoIPFilePath is the path to geoip.dat for listing categories and updating.
@@ -108,6 +111,7 @@ func New(c Config) *Service {
 		version:         c.Version,
 		startTime:       time.Now(),
 		domainReloader:  c.DomainReloader,
+		dnsFlush:        c.DNSFlush,
 		geositeFilePath: c.GeositeFilePath,
 		geoipFilePath:   c.GeoIPFilePath,
 		httpClient:      c.HTTPClient,

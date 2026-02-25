@@ -157,6 +157,18 @@ func (r *DNSResolver) Stop() {
 	core.Log.Infof("DNS", "Resolver stopped")
 }
 
+// FlushCache clears the DNS response cache and domain table.
+func (r *DNSResolver) FlushCache() {
+	if r.cache != nil {
+		r.cache.Flush()
+		core.Log.Infof("DNS", "DNS cache flushed")
+	}
+	if r.domainTable != nil {
+		r.domainTable.Flush()
+		core.Log.Infof("DNS", "Domain table flushed")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // UDP DNS
 // ---------------------------------------------------------------------------
@@ -200,6 +212,15 @@ func (r *DNSResolver) udpLoop(ctx context.Context) {
 
 func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAddr *net.UDPAddr) {
 	name := extractDNSName(query)
+
+	// Block AAAA (IPv6) queries — return empty NOERROR response.
+	// IPv6 is disabled in the VPN stack; forwarding AAAA would leak IPv6 addresses.
+	if isAAAAQuery(query) {
+		if resp := makeEmptyResponse(query); resp != nil {
+			r.udpConn.WriteToUDP(resp, clientAddr)
+		}
+		return
+	}
 
 	// Domain-based routing: intercept before cache/forwarding.
 	// DNS forwarding goes through all configured tunnels in parallel.
@@ -270,6 +291,18 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 			}
 			return
 		}
+	}
+
+	// Last resort: raw DNS via OS network stack (bypasses providers entirely).
+	// Handles the case when all VPN tunnels are removed and __direct__ is unavailable.
+	resp, err = r.forwardRawUDP(ctx, query)
+	if err == nil {
+		r.cacheStore(query, resp)
+		r.udpConn.WriteToUDP(resp, clientAddr)
+		if name != "" {
+			core.Log.Debugf("DNS", "%s → raw fallback (UDP)", name)
+		}
+		return
 	}
 
 	core.Log.Warnf("DNS", "All tunnels/servers failed for %s (UDP): %v", name, err)
@@ -469,6 +502,17 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 
 	name := extractDNSName(query)
 
+	// Block AAAA (IPv6) queries — return empty NOERROR response.
+	if isAAAAQuery(query) {
+		if resp := makeEmptyResponse(query); resp != nil {
+			var respLen [2]byte
+			binary.BigEndian.PutUint16(respLen[:], uint16(len(resp)))
+			clientConn.Write(respLen[:])
+			clientConn.Write(resp)
+		}
+		return
+	}
+
 	// Domain-based routing: intercept before cache/forwarding.
 	// DNS forwarding goes through all configured tunnels in parallel.
 	// Only the routeTunnelID (for DomainTable) reflects the domain rule's target.
@@ -523,6 +567,16 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 	if err != nil && r.config.FallbackDirect {
 		resp, server, err = r.forwardTCP(ctx, DirectTunnelID, query)
 		usedTunnel = DirectTunnelID
+	}
+
+	// Last resort: raw DNS via OS network stack.
+	if err != nil {
+		rawResp, rawErr := r.forwardRawUDP(ctx, query)
+		if rawErr == nil {
+			resp = rawResp
+			err = nil
+			usedTunnel = "raw"
+		}
 	}
 
 	if err != nil {
@@ -689,6 +743,96 @@ func (r *DNSResolver) forwardTCPSingle(ctx context.Context, prov provider.Tunnel
 	}
 
 	return resp, server, nil
+}
+
+// defaultFallbackServers are used when all configured tunnels and direct
+// provider fail. These provide a last-resort DNS resolution path.
+var defaultFallbackServers = []string{"8.8.8.8:53", "1.1.1.1:53"}
+
+// forwardRawUDP sends a DNS query directly via the OS network stack (bypassing
+// providers) as a last resort when all tunnels and the direct provider fail.
+func (r *DNSResolver) forwardRawUDP(ctx context.Context, query []byte) ([]byte, error) {
+	servers := make([]string, 0, len(r.config.Servers)+2)
+	for _, s := range r.config.Servers {
+		servers = append(servers, net.JoinHostPort(s.String(), "53"))
+	}
+	if len(servers) == 0 {
+		servers = defaultFallbackServers
+	}
+
+	var lastErr error
+	for _, addr := range servers {
+		d := net.Dialer{Timeout: r.config.Timeout}
+		conn, err := d.DialContext(ctx, "udp4", addr)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		conn.SetDeadline(time.Now().Add(r.config.Timeout))
+		if _, err := conn.Write(query); err != nil {
+			conn.Close()
+			lastErr = err
+			continue
+		}
+		resp := make([]byte, 4096)
+		n, err := conn.Read(resp)
+		conn.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if n < 12 {
+			lastErr = fmt.Errorf("response too short (%d bytes)", n)
+			continue
+		}
+		return resp[:n], nil
+	}
+	return nil, fmt.Errorf("raw fallback DNS failed: %w", lastErr)
+}
+
+// isAAAAQuery checks if a DNS query is an AAAA (IPv6) query.
+// AAAA record type = 28 (0x001C).
+func isAAAAQuery(query []byte) bool {
+	if len(query) < 12 {
+		return false
+	}
+	// Skip header (12 bytes), then QNAME labels.
+	pos := 12
+	for pos < len(query) {
+		labelLen := int(query[pos])
+		if labelLen == 0 {
+			pos++ // skip root label
+			break
+		}
+		if labelLen >= 64 {
+			break // pointer — shouldn't be in query
+		}
+		pos += 1 + labelLen
+	}
+	// QTYPE is 2 bytes after QNAME.
+	if pos+2 > len(query) {
+		return false
+	}
+	qtype := binary.BigEndian.Uint16(query[pos : pos+2])
+	return qtype == 28 // AAAA
+}
+
+// makeEmptyResponse creates a NOERROR response with zero answer records.
+// Used to suppress AAAA responses when IPv6 is disabled.
+func makeEmptyResponse(query []byte) []byte {
+	if len(query) < 12 {
+		return nil
+	}
+	resp := make([]byte, len(query))
+	copy(resp, query)
+	// Set QR=1 (response), RCODE=0 (NOERROR).
+	resp[2] = query[2] | 0x80 // QR=1
+	resp[3] = query[3] & 0xF0 // RCODE=NOERROR
+	// Zero answer/authority/additional counts.
+	resp[6], resp[7] = 0, 0
+	resp[8], resp[9] = 0, 0
+	resp[10], resp[11] = 0, 0
+	return resp
 }
 
 // ---------------------------------------------------------------------------

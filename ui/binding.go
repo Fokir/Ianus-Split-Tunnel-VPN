@@ -487,6 +487,20 @@ func (b *BindingService) SaveConfig(config *vpnapi.AppConfig, restartIfConnected
 	return resp.Restarted, nil
 }
 
+// ─── DNS ────────────────────────────────────────────────────────────
+
+// FlushDNS clears all DNS caches (internal + domain table + Windows).
+func (b *BindingService) FlushDNS() error {
+	resp, err := b.client.Service.FlushDNS(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
 // ─── Autostart ──────────────────────────────────────────────────────
 
 type AutostartInfo struct {
