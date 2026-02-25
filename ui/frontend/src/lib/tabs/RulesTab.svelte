@@ -557,7 +557,14 @@
             </span>
           </div>
           <!-- Group rules -->
-          <table class="w-full text-sm">
+          <table class="w-full text-sm" style="table-layout:fixed">
+            <colgroup>
+              <col style="width:32px" />
+              <col />
+              <col style="width:140px" />
+              <col style="width:100px" />
+              <col style="width:96px" />
+            </colgroup>
             <tbody>
               {#each group.rules as rule, ri (rule.realIndex)}
                 <tr
@@ -586,7 +593,7 @@
                       <div class="w-6 h-6"></div>
                     {/if}
                   </td>
-                  <td class="px-4 py-2.5 {rule.active === false ? 'text-zinc-500' : 'text-zinc-300'}">
+                  <td class="px-4 py-2.5 truncate {rule.active === false ? 'text-zinc-500' : 'text-zinc-300'}" title="{tunnelName(rule.tunnelId)}">
                     {tunnelName(rule.tunnelId)}
                     {#if rule.active === false}
                       <span class="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] rounded bg-zinc-700/50 text-zinc-500 font-sans">offline</span>
