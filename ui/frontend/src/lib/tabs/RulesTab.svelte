@@ -55,15 +55,17 @@
   $: groups = computeGroups(rules);
 
   function computeGroups(rulesList) {
+    const map = new Map();
     const result = [];
-    let current = null;
     for (let i = 0; i < rulesList.length; i++) {
       const rule = rulesList[i];
-      if (!current || current.pattern !== rule.pattern) {
-        current = { pattern: rule.pattern, startIndex: i, rules: [] };
-        result.push(current);
+      let group = map.get(rule.pattern);
+      if (!group) {
+        group = { pattern: rule.pattern, rules: [] };
+        map.set(rule.pattern, group);
+        result.push(group);
       }
-      current.rules.push({ ...rule, realIndex: i });
+      group.rules.push({ ...rule, realIndex: i });
     }
     return result;
   }
@@ -369,8 +371,8 @@
       return;
     }
     const g = groups[gi];
-    const fromReal = g.startIndex + dragRuleIdx;
-    const toReal = g.startIndex + ri;
+    const fromReal = g.rules[dragRuleIdx].realIndex;
+    const toReal = g.rules[ri].realIndex;
     const reordered = [...rules];
     const [moved] = reordered.splice(fromReal, 1);
     reordered.splice(toReal, 0, moved);
