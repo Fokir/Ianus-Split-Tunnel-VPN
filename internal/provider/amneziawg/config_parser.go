@@ -34,13 +34,18 @@ type peerAccumulator struct {
 	lines     []string
 }
 
-func (pa *peerAccumulator) flush(uapi *strings.Builder) {
-	if pa.publicKey != "" {
-		fmt.Fprintf(uapi, "public_key=%s\n", pa.publicKey)
+func (pa *peerAccumulator) flush(uapi *strings.Builder) error {
+	if pa.publicKey == "" {
+		if len(pa.lines) > 0 {
+			return fmt.Errorf("peer section has no PublicKey but contains %d keys", len(pa.lines))
+		}
+		return nil
 	}
+	fmt.Fprintf(uapi, "public_key=%s\n", pa.publicKey)
 	for _, line := range pa.lines {
 		fmt.Fprint(uapi, line)
 	}
+	return nil
 }
 
 // ParseConfigFile reads an AmneziaWG .conf file and produces a ParsedConfig.
@@ -59,22 +64,38 @@ func ParseConfigFile(path string) (*ParsedConfig, error) {
 	peerSeen := false
 	var currentPeer *peerAccumulator
 
-	flushPeer := func() {
+	flushPeer := func() error {
 		if currentPeer != nil {
-			currentPeer.flush(&uapi)
+			if err := currentPeer.flush(&uapi); err != nil {
+				return err
+			}
 			currentPeer = nil
 		}
+		return nil
 	}
 
+	firstLine := true
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		line := scanner.Text()
+		// Strip UTF-8 BOM from the first line (common in Windows-exported configs).
+		if firstLine {
+			line = strings.TrimPrefix(line, "\xEF\xBB\xBF")
+			firstLine = false
+		}
+		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		// Skip WireSock extension lines (e.g. @ws:AllowedApps = ...).
+		if strings.HasPrefix(line, "@") {
 			continue
 		}
 
 		if strings.HasPrefix(line, "[") {
-			flushPeer()
+			if err := flushPeer(); err != nil {
+				return nil, err
+			}
 			section = strings.ToLower(strings.Trim(line, "[] "))
 			if section == "peer" {
 				if !peerSeen {
@@ -105,7 +126,9 @@ func ParseConfigFile(path string) (*ParsedConfig, error) {
 		}
 	}
 
-	flushPeer()
+	if err := flushPeer(); err != nil {
+		return nil, err
+	}
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read config: %w", err)

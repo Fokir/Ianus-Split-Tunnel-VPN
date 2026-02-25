@@ -26,6 +26,27 @@ type ParsedConfig struct {
 	PeerEndpoints []netip.AddrPort
 }
 
+// peerAccumulator buffers UAPI lines for a single [Peer] section
+// so that public_key is always emitted first (required by UAPI protocol).
+type peerAccumulator struct {
+	publicKey string
+	lines     []string
+}
+
+func (pa *peerAccumulator) flush(uapi *strings.Builder) error {
+	if pa.publicKey == "" {
+		if len(pa.lines) > 0 {
+			return fmt.Errorf("peer section has no PublicKey but contains %d keys", len(pa.lines))
+		}
+		return nil
+	}
+	fmt.Fprintf(uapi, "public_key=%s\n", pa.publicKey)
+	for _, line := range pa.lines {
+		fmt.Fprint(uapi, line)
+	}
+	return nil
+}
+
 // ParseConfigFile reads a standard WireGuard .conf file and produces a ParsedConfig.
 // AmneziaWG obfuscation fields (Jc, Jmin, Jmax, S1-S4, H1-H4) are silently ignored.
 func ParseConfigFile(path string) (*ParsedConfig, error) {
@@ -39,19 +60,47 @@ func ParseConfigFile(path string) (*ParsedConfig, error) {
 	var uapi strings.Builder
 	section := ""
 	peerSeen := false
+	var currentPeer *peerAccumulator
 
+	flushPeer := func() error {
+		if currentPeer != nil {
+			if err := currentPeer.flush(&uapi); err != nil {
+				return err
+			}
+			currentPeer = nil
+		}
+		return nil
+	}
+
+	firstLine := true
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		line := scanner.Text()
+		// Strip UTF-8 BOM from the first line (common in Windows-exported configs).
+		if firstLine {
+			line = strings.TrimPrefix(line, "\xEF\xBB\xBF")
+			firstLine = false
+		}
+		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		// Skip WireSock extension lines (e.g. @ws:AllowedApps = ...).
+		if strings.HasPrefix(line, "@") {
 			continue
 		}
 
 		if strings.HasPrefix(line, "[") {
+			if err := flushPeer(); err != nil {
+				return nil, err
+			}
 			section = strings.ToLower(strings.Trim(line, "[] "))
-			if section == "peer" && !peerSeen {
-				peerSeen = true
-				fmt.Fprint(&uapi, "replace_peers=true\n")
+			if section == "peer" {
+				if !peerSeen {
+					peerSeen = true
+					fmt.Fprint(&uapi, "replace_peers=true\n")
+				}
+				currentPeer = &peerAccumulator{}
 			}
 			continue
 		}
@@ -69,10 +118,14 @@ func ParseConfigFile(path string) (*ParsedConfig, error) {
 				return nil, fmt.Errorf("[Interface] %s: %w", key, err)
 			}
 		case "peer":
-			if err := parsePeerKey(key, value, result, &uapi); err != nil {
+			if err := parsePeerKey(key, value, result, currentPeer); err != nil {
 				return nil, fmt.Errorf("[Peer] %s: %w", key, err)
 			}
 		}
+	}
+
+	if err := flushPeer(); err != nil {
+		return nil, err
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -127,31 +180,31 @@ func parseInterfaceKey(key, value string, cfg *ParsedConfig, uapi *strings.Build
 	return nil
 }
 
-func parsePeerKey(key, value string, cfg *ParsedConfig, uapi *strings.Builder) error {
+func parsePeerKey(key, value string, cfg *ParsedConfig, peer *peerAccumulator) error {
 	switch strings.ToLower(key) {
 	case "publickey":
 		h, err := base64ToHex(value)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(uapi, "public_key=%s\n", h)
+		peer.publicKey = h
 	case "presharedkey":
 		h, err := base64ToHex(value)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(uapi, "preshared_key=%s\n", h)
+		peer.lines = append(peer.lines, fmt.Sprintf("preshared_key=%s\n", h))
 	case "endpoint":
-		fmt.Fprintf(uapi, "endpoint=%s\n", value)
+		peer.lines = append(peer.lines, fmt.Sprintf("endpoint=%s\n", value))
 		if ap, err := netip.ParseAddrPort(value); err == nil {
 			cfg.PeerEndpoints = append(cfg.PeerEndpoints, ap)
 		}
 	case "allowedips":
 		for _, cidr := range splitCSV(value) {
-			fmt.Fprintf(uapi, "allowed_ip=%s\n", cidr)
+			peer.lines = append(peer.lines, fmt.Sprintf("allowed_ip=%s\n", cidr))
 		}
 	case "persistentkeepalive":
-		fmt.Fprintf(uapi, "persistent_keepalive_interval=%s\n", value)
+		peer.lines = append(peer.lines, fmt.Sprintf("persistent_keepalive_interval=%s\n", value))
 	}
 	return nil
 }
