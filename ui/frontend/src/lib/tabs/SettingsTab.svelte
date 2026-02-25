@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import * as api from '../api.js';
+  import { sortTunnels } from '../utils.js';
   import ErrorAlert from '../ErrorAlert.svelte';
   import { t, locale, availableLocales } from '../i18n';
 
@@ -45,7 +46,7 @@
       ]);
       config = cfg || {};
       autostart = as || { enabled: false, restoreConnections: false };
-      tunnels = tl || [];
+      tunnels = sortTunnels(tl || []);
 
       // Ensure nested objects exist (field names must match proto JSON: snake_case)
       if (!config.dns) config.dns = {};

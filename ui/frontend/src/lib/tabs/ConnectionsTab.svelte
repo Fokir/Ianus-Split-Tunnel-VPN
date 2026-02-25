@@ -2,7 +2,7 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { Events } from '@wailsio/runtime';
   import * as api from '../api.js';
-  import { countryFlagUrl, formatSpeed, formatBytes } from '../utils.js';
+  import { countryFlagUrl, formatSpeed, formatBytes, sortTunnels } from '../utils.js';
   import ErrorAlert from '../ErrorAlert.svelte';
   import { t } from '../i18n';
 
@@ -154,11 +154,7 @@
     error = '';
     try {
       const list = (await api.listTunnels() || []).filter(t => t.id !== '__direct__');
-      tunnels = list.sort((a, b) => {
-        const diff = a.sortIndex - b.sortIndex;
-        if (diff !== 0) return diff;
-        return a.id.localeCompare(b.id);
-      });
+      tunnels = sortTunnels(list);
     } catch (e) {
       error = e.message || $t('connections.failedToLoad');
     } finally {

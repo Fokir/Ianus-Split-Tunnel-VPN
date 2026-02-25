@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import * as api from '../api.js';
+  import { sortTunnels } from '../utils.js';
   import ErrorAlert from '../ErrorAlert.svelte';
   import { t } from '../i18n';
 
@@ -88,7 +89,7 @@
         api.listGeoIPCategories().catch(() => [])
       ]);
       rules = r || [];
-      tunnels = t || [];
+      tunnels = sortTunnels(t || []);
       geositeCategories = cats || [];
       geoipCategories = gipCats || [];
     } catch (e) {

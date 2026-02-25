@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { Events } from '@wailsio/runtime';
   import * as api from './api.js';
+  import { sortTunnels } from './utils.js';
   import { t } from './i18n';
 
   let tunnels = [];
@@ -97,14 +98,12 @@
   }
 
   // Sort: Direct (__direct__) always first, then by sortIndex.
-  $: sortedTunnels = [...tunnels].sort((a, b) => {
+  $: sortedTunnels = sortTunnels(tunnels).sort((a, b) => {
     const aIsDirect = a.id === '__direct__';
     const bIsDirect = b.id === '__direct__';
     if (aIsDirect && !bIsDirect) return -1;
     if (!aIsDirect && bIsDirect) return 1;
-    const diff = (a.sortIndex || 0) - (b.sortIndex || 0);
-    if (diff !== 0) return diff;
-    return a.id.localeCompare(b.id);
+    return 0;
   });
 
 </script>

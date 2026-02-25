@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import * as api from '../api.js';
+  import { sortTunnels } from '../utils.js';
   import ErrorAlert from '../ErrorAlert.svelte';
   import { t } from '../i18n';
 
@@ -91,7 +92,7 @@
     try {
       const [r, t, cfg] = await Promise.all([api.listRules(), api.listTunnels(), api.getConfig()]);
       rules = r || [];
-      tunnels = t || [];
+      tunnels = sortTunnels(t || []);
       config = cfg || {};
       if (!config.global) config.global = {};
       buildDisallowedIpsList();
