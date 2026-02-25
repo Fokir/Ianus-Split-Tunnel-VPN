@@ -7,7 +7,7 @@ Unicode true
 ####
 
 ## Project defines (override wails_tools.nsh defaults)
-!define INFO_PROJECTNAME    "awg-split-tunnel-gui"
+!define INFO_PROJECTNAME    "awg-split-tunnel-ui"
 !define INFO_COMPANYNAME    "AWG"
 !define INFO_PRODUCTNAME    "AWG Split Tunnel"
 !define INFO_COPYRIGHT      "© 2026, AWG"
@@ -58,7 +58,7 @@ ManifestDPIAware true
 !insertmacro MUI_LANGUAGE "English"
 
 Name "${INFO_PRODUCTNAME}"
-OutFile "..\..\..\bin\${INFO_PROJECTNAME}-${ARCH}-installer.exe"
+OutFile "..\..\..\..\build\${INFO_PROJECTNAME}-${ARCH}-installer.exe"
 InstallDir "$PROGRAMFILES64\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}"
 ShowInstDetails show
 
