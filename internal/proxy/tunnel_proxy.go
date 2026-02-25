@@ -177,8 +177,8 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 	// client's initial data to extract the TLS SNI hostname and potentially
 	// override the tunnel routing decision.
 	if matchFn := tp.domainMatchFunc.Load(); matchFn != nil {
-		buf := make([]byte, 1536) // 1 MTU — sufficient for ClientHello
-		clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 16384) // 16KB — handles modern TLS ClientHello including post-quantum (ML-KEM)
+		clientConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		n, _ := clientConn.Read(buf)
 		clientConn.SetReadDeadline(time.Time{})
 		if n > 0 {

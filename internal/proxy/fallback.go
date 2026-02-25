@@ -25,11 +25,13 @@ const (
 	// earlyEOFTimeout is how long to wait for the first response byte from
 	// the tunnel after sending initial client data. If the tunnel closes
 	// within this window with 0 bytes, it's treated as server-side blocking.
-	earlyEOFTimeout = 5 * time.Second
+	// 3s is enough to distinguish slow tunnels from server-side blackholes.
+	earlyEOFTimeout = 3 * time.Second
 
 	// initialDataReadTimeout is how long to wait for the client's first data
 	// (e.g. TLS ClientHello) before giving up on early EOF detection.
-	initialDataReadTimeout = 5 * time.Second
+	// Client sends immediately after TCP handshake, so 2s is more than enough.
+	initialDataReadTimeout = 2 * time.Second
 )
 
 // directTunnelID is the special tunnel ID for direct (non-VPN) traffic.
@@ -366,7 +368,8 @@ func (fd *FallbackDialer) DetectEarlyEOF(
 	info core.NATInfo,
 ) EarlyEOFResult {
 	// Only detect early EOF for policies that have a fallback path.
-	if info.Fallback == core.PolicyBlock || info.Fallback == core.PolicyDrop {
+	// Also skip for __direct__ tunnel — no VPN server to block the connection.
+	if info.Fallback == core.PolicyBlock || info.Fallback == core.PolicyDrop || info.TunnelID == directTunnelID {
 		return EarlyEOFResult{RemoteConn: remoteConn, ActualTunnel: info.TunnelID}
 	}
 
