@@ -314,61 +314,62 @@ step "Step 6: Generate changelog"
 
 CHANGELOG="$OUT_DIR/CHANGELOG.md"
 
+# First pass: classify each commit into LABEL|HASH|MSG lines in a temp file.
+TMPLOG=$(mktemp)
+trap "rm -f '$TMPLOG'" EXIT
+
+while IFS= read -r line; do
+    if [[ "$line" =~ ^([a-f0-9]+)\ ([a-zA-Z]+)(\(.*\))?:\ (.+)$ ]]; then
+        HASH="${BASH_REMATCH[1]}"
+        TYPE="${BASH_REMATCH[2]}"
+        MSG="${BASH_REMATCH[4]}"
+    else
+        HASH="${line%% *}"
+        TYPE="other"
+        MSG="${line#* }"
+    fi
+
+    case "$TYPE" in
+        feat)     LABEL="Features" ;;
+        fix)      LABEL="Bug Fixes" ;;
+        refactor) LABEL="Refactoring" ;;
+        perf)     LABEL="Performance" ;;
+        docs)     LABEL="Documentation" ;;
+        test)     LABEL="Tests" ;;
+        ci)       LABEL="CI" ;;
+        chore)    LABEL="Chores" ;;
+        build)    LABEL="Build" ;;
+        style)    LABEL="Style" ;;
+        *)        LABEL="Other" ;;
+    esac
+
+    printf '%s|%s|%s\n' "$LABEL" "$HASH" "$MSG" >> "$TMPLOG"
+done < <(git log "${LAST_TAG}..HEAD" --oneline --no-merges 2>/dev/null)
+
+# Second pass: emit grouped markdown.
 {
     echo "# Changelog — $NEW_TAG"
     echo ""
     echo "Released: $(date +%Y-%m-%d)"
     echo ""
 
-    # Collect commits grouped by conventional commit type
-    declare -A GROUPS
-    declare -a GROUP_ORDER=()
+    FOUND_ANY=false
+    for SECTION in "Features" "Bug Fixes" "Performance" "Refactoring" "Build" "CI" "Tests" "Documentation" "Style" "Chores" "Other"; do
+        ITEMS=""
+        while IFS='|' read -r LABEL HASH MSG; do
+            [[ "$LABEL" == "$SECTION" ]] && ITEMS+="- ${MSG} (\`${HASH}\`)"$'\n'
+        done < "$TMPLOG"
 
-    while IFS= read -r line; do
-        # Parse conventional commit: type(scope): message  OR  type: message
-        if [[ "$line" =~ ^[a-f0-9]+\ ([a-zA-Z]+)(\(.*\))?:\ (.+)$ ]]; then
-            TYPE="${BASH_REMATCH[1]}"
-            MSG="${BASH_REMATCH[3]}"
-            HASH="${line%% *}"
-        else
-            TYPE="other"
-            MSG="${line#* }"
-            HASH="${line%% *}"
+        if [[ -n "$ITEMS" ]]; then
+            FOUND_ANY=true
+            echo "## $SECTION"
+            echo ""
+            echo -n "$ITEMS"
+            echo ""
         fi
-
-        # Normalize type names
-        case "$TYPE" in
-            feat)     LABEL="Features" ;;
-            fix)      LABEL="Bug Fixes" ;;
-            refactor) LABEL="Refactoring" ;;
-            perf)     LABEL="Performance" ;;
-            docs)     LABEL="Documentation" ;;
-            test)     LABEL="Tests" ;;
-            ci)       LABEL="CI" ;;
-            chore)    LABEL="Chores" ;;
-            build)    LABEL="Build" ;;
-            style)    LABEL="Style" ;;
-            *)        LABEL="Other" ;;
-        esac
-
-        # Track group order (first occurrence)
-        if [[ -z "${GROUPS[$LABEL]+x}" ]]; then
-            GROUP_ORDER+=("$LABEL")
-            GROUPS[$LABEL]=""
-        fi
-        GROUPS[$LABEL]+="- ${MSG} (\`${HASH}\`)"$'\n'
-    done < <(git log "${LAST_TAG}..HEAD" --oneline --no-merges 2>/dev/null)
-
-    # Print groups in order
-    for label in "${GROUP_ORDER[@]}"; do
-        echo "## $label"
-        echo ""
-        echo -n "${GROUPS[$label]}"
-        echo ""
     done
 
-    # If no commits found
-    if [[ ${#GROUP_ORDER[@]} -eq 0 ]]; then
+    if [[ "$FOUND_ANY" == false ]]; then
         echo "No changes since $LAST_TAG."
         echo ""
     fi
@@ -376,6 +377,8 @@ CHANGELOG="$OUT_DIR/CHANGELOG.md"
     echo "---"
     echo "Full diff: https://github.com/$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo 'OWNER/REPO')/compare/${LAST_TAG}...${NEW_TAG}"
 } > "$CHANGELOG"
+
+rm -f "$TMPLOG"
 
 ok "Changelog: $CHANGELOG"
 echo ""
