@@ -61,10 +61,10 @@ func main() {
 	// Create main window (hidden initially, shown from tray or on start).
 	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "AWG Split Tunnel",
-		Width:            900,
-		Height:           650,
-		MinWidth:         850,
-		MinHeight:        450,
+		Width:            950,
+		Height:           700,
+		MinWidth:         900,
+		MinHeight:        500,
 		URL:              "/",
 		Frameless:        true,
 		BackgroundColour: application.NewRGB(24, 24, 27), // zinc-900
