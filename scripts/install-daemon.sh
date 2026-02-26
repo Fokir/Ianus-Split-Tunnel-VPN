@@ -21,7 +21,15 @@ fi
 
 # ── Resolve source binary ────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_BINARY="${1:-${SCRIPT_DIR}/../build/${BINARY_NAME}}"
+SOURCE_BINARY="${1:-}"
+if [[ -z "$SOURCE_BINARY" ]]; then
+    # Look next to script (release tarball layout), then in build dir (dev layout).
+    if [[ -f "${SCRIPT_DIR}/${BINARY_NAME}" ]]; then
+        SOURCE_BINARY="${SCRIPT_DIR}/${BINARY_NAME}"
+    else
+        SOURCE_BINARY="${SCRIPT_DIR}/../build/${BINARY_NAME}"
+    fi
+fi
 
 if [[ ! -f "$SOURCE_BINARY" ]]; then
     echo "Error: Binary not found: $SOURCE_BINARY"
@@ -47,7 +55,12 @@ mkdir -p "$CONFIG_DIR"
 
 # Copy example config if config doesn't exist yet.
 if [[ ! -f "${CONFIG_DIR}/config.yaml" ]]; then
-    EXAMPLE_CONFIG="${SCRIPT_DIR}/../config.example.yaml"
+    # Check next to script (tarball), then project root (dev).
+    if [[ -f "${SCRIPT_DIR}/config.example.yaml" ]]; then
+        EXAMPLE_CONFIG="${SCRIPT_DIR}/config.example.yaml"
+    else
+        EXAMPLE_CONFIG="${SCRIPT_DIR}/../config.example.yaml"
+    fi
     if [[ -f "$EXAMPLE_CONFIG" ]]; then
         echo "  Copying example config to ${CONFIG_DIR}/config.yaml..."
         cp "$EXAMPLE_CONFIG" "${CONFIG_DIR}/config.yaml"

@@ -166,15 +166,24 @@ jobs:
           lipo -create -output build/awg-split-tunnel \
             build/awg-split-tunnel-arm64 build/awg-split-tunnel-amd64
 
+      - name: Stage release files
+        run: |
+          mkdir -p build/stage
+          cp scripts/install-daemon.sh scripts/uninstall-daemon.sh build/stage/
+          cp config.example.yaml build/stage/
+
       - name: Create tarballs
         run: |
           cd build
           for ARCH in arm64 amd64; do
+            cp "awg-split-tunnel-${ARCH}" stage/awg-split-tunnel
             tar czf "awg-split-tunnel-v${VERSION}-darwin-${ARCH}.tar.gz" \
-              "awg-split-tunnel-${ARCH}"
+              -C stage awg-split-tunnel install-daemon.sh uninstall-daemon.sh config.example.yaml
+            rm stage/awg-split-tunnel
           done
+          cp awg-split-tunnel stage/awg-split-tunnel
           tar czf "awg-split-tunnel-v${VERSION}-darwin-universal.tar.gz" \
-            "awg-split-tunnel"
+            -C stage awg-split-tunnel install-daemon.sh uninstall-daemon.sh config.example.yaml
 
       - uses: actions/upload-artifact@v4
         with:

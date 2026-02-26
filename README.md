@@ -5,7 +5,7 @@
 ### Multi-tunnel VPN client with per-process split tunneling
 
 [![Latest Release](https://img.shields.io/github/v/release/Fokir/Ianus-Split-Tunnel-VPN?style=for-the-badge&color=6C63FF&label=Latest)](https://github.com/Fokir/Ianus-Split-Tunnel-VPN/releases/latest)
-[![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?style=for-the-badge&logo=windows)](https://github.com/Fokir/Ianus-Split-Tunnel-VPN)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-0078D4?style=for-the-badge&logo=windows)](https://github.com/Fokir/Ianus-Split-Tunnel-VPN)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/License-CC_BY--NC--SA_4.0-EF9421?style=for-the-badge)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 
@@ -17,7 +17,7 @@
 
 ## Overview
 
-AWG Split Tunnel is a Windows VPN client that routes application traffic through different VPN tunnels based on per-process rules. Unlike traditional VPN clients that capture all system traffic, AWG Split Tunnel lets you choose exactly which apps go through which tunnel — and which stay on your direct connection.
+AWG Split Tunnel is a VPN client for Windows and macOS that routes application traffic through different VPN tunnels based on per-process rules. Unlike traditional VPN clients that capture all system traffic, AWG Split Tunnel lets you choose exactly which apps go through which tunnel — and which stay on your direct connection.
 
 Run multiple tunnels simultaneously, set fallback policies, prioritize latency-sensitive traffic, and route by domain — all from a single lightweight GUI.
 
@@ -134,7 +134,47 @@ domain_rules:
 2. Extract to any directory
 3. Run `awg-split-tunnel.exe`
 
-### Command Line
+### macOS (daemon only)
+
+Download the appropriate tarball from the [latest release](https://github.com/Fokir/Ianus-Split-Tunnel-VPN/releases/latest):
+
+| File | Architecture |
+|------|-------------|
+| `awg-split-tunnel-*-darwin-universal.tar.gz` | Apple Silicon + Intel |
+| `awg-split-tunnel-*-darwin-arm64.tar.gz` | Apple Silicon (M1/M2/M3/M4) |
+| `awg-split-tunnel-*-darwin-amd64.tar.gz` | Intel Mac |
+
+```bash
+# Download and extract (universal example)
+curl -fsSL https://github.com/Fokir/Ianus-Split-Tunnel-VPN/releases/latest/download/awg-split-tunnel-vX.Y.Z-darwin-universal.tar.gz | tar xz
+
+# Install daemon (copies binary, creates LaunchDaemon, starts service)
+sudo ./install-daemon.sh
+
+# Edit config
+sudo nano /etc/awg-split-tunnel/config.yaml
+
+# Restart after config changes
+sudo launchctl kickstart -k system/com.awg.split-tunnel
+```
+
+**Manage the daemon:**
+
+```bash
+# Status
+sudo launchctl print system/com.awg.split-tunnel
+
+# Logs
+tail -f /var/log/awg-split-tunnel.log
+
+# Stop
+sudo launchctl bootout system/com.awg.split-tunnel
+
+# Uninstall
+sudo ./uninstall-daemon.sh
+```
+
+### Windows — Command Line
 
 ```bash
 # Run with custom config
@@ -149,7 +189,7 @@ awg-split-tunnel stop
 awg-split-tunnel uninstall
 ```
 
-> **Note:** Administrator privileges are required — the application manages network adapters and WFP filters.
+> **Note:** Administrator/root privileges are required — the application manages network adapters and firewall filters.
 
 ## Configuration
 
@@ -277,7 +317,7 @@ This project is licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/lic
 
 ## Обзор
 
-AWG Split Tunnel — VPN-клиент для Windows с раздельной маршрутизацией трафика по процессам. В отличие от обычных VPN-клиентов, которые захватывают весь системный трафик, AWG Split Tunnel позволяет точно выбирать, какие приложения идут через какой туннель, а какие остаются на прямом подключении.
+AWG Split Tunnel — VPN-клиент для Windows и macOS с раздельной маршрутизацией трафика по процессам. В отличие от обычных VPN-клиентов, которые захватывают весь системный трафик, AWG Split Tunnel позволяет точно выбирать, какие приложения идут через какой туннель, а какие остаются на прямом подключении.
 
 Запускайте несколько туннелей одновременно, настраивайте политики отката, приоритизируйте чувствительный к задержкам трафик и маршрутизируйте по доменам — всё из одного компактного интерфейса.
 
@@ -377,7 +417,47 @@ domain_rules:
 2. Распакуйте в любую папку
 3. Запустите `awg-split-tunnel.exe`
 
-### Командная строка
+### macOS (только daemon)
+
+Скачайте подходящий архив из [последнего релиза](https://github.com/Fokir/Ianus-Split-Tunnel-VPN/releases/latest):
+
+| Файл | Архитектура |
+|------|-------------|
+| `awg-split-tunnel-*-darwin-universal.tar.gz` | Apple Silicon + Intel |
+| `awg-split-tunnel-*-darwin-arm64.tar.gz` | Apple Silicon (M1/M2/M3/M4) |
+| `awg-split-tunnel-*-darwin-amd64.tar.gz` | Intel Mac |
+
+```bash
+# Скачать и распаковать (пример для universal)
+curl -fsSL https://github.com/Fokir/Ianus-Split-Tunnel-VPN/releases/latest/download/awg-split-tunnel-vX.Y.Z-darwin-universal.tar.gz | tar xz
+
+# Установить daemon (копирует бинарник, создаёт LaunchDaemon, запускает сервис)
+sudo ./install-daemon.sh
+
+# Отредактировать конфиг
+sudo nano /etc/awg-split-tunnel/config.yaml
+
+# Перезапустить после изменения конфига
+sudo launchctl kickstart -k system/com.awg.split-tunnel
+```
+
+**Управление daemon:**
+
+```bash
+# Статус
+sudo launchctl print system/com.awg.split-tunnel
+
+# Логи
+tail -f /var/log/awg-split-tunnel.log
+
+# Остановить
+sudo launchctl bootout system/com.awg.split-tunnel
+
+# Удалить
+sudo ./uninstall-daemon.sh
+```
+
+### Windows — Командная строка
 
 ```bash
 # Запуск с пользовательским конфигом
@@ -392,7 +472,7 @@ awg-split-tunnel stop
 awg-split-tunnel uninstall
 ```
 
-> **Примечание:** Требуются права администратора — приложение управляет сетевыми адаптерами и WFP-фильтрами.
+> **Примечание:** Требуются права администратора/root — приложение управляет сетевыми адаптерами и правилами фаервола.
 
 ## Конфигурация
 
