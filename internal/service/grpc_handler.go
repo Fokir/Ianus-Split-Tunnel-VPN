@@ -795,10 +795,11 @@ func (s *Service) StopConflictingServices(_ context.Context, req *vpnapi.StopCon
 		}
 	}
 
-	// Phase 3: clean up orphaned WinDivert WFP filters, sublayers, and providers.
-	// Even after the driver service is deleted, WFP artifacts may linger.
-	if err := gateway.CleanupWinDivertWFP(); err != nil {
-		core.Log.Warnf("Core", "WinDivert WFP cleanup: %v", err)
+	// Phase 3: clean up orphaned WFP filters, sublayers, and providers from
+	// conflicting software (WinDivert, GearUP Booster, etc.).
+	// Even after driver services are deleted, WFP artifacts may linger.
+	if err := gateway.CleanupConflictingWFP(); err != nil {
+		core.Log.Warnf("Core", "Conflicting WFP cleanup: %v", err)
 	}
 
 	resp := &vpnapi.StopConflictingServicesResponse{

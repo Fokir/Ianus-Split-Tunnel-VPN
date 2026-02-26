@@ -26,6 +26,7 @@ type ConflictingServiceInfo struct {
 
 // knownConflictingServices lists Windows services that conflict with WFP/TUN routing.
 // WinDivert registers under different names depending on the version.
+// GearUP Booster installs WFP and packet capture kernel drivers.
 var knownConflictingServices = []struct {
 	Name        string
 	DisplayName string
@@ -34,6 +35,8 @@ var knownConflictingServices = []struct {
 	{"WinDivert", "WinDivert Driver", "WinDivert kernel driver intercepts network packets and conflicts with WFP rules"},
 	{"WinDivert14", "WinDivert 1.4 Driver", "WinDivert 1.4 kernel driver intercepts network packets and conflicts with WFP rules"},
 	{"WinDivert1.4", "WinDivert 1.4 Driver", "WinDivert 1.4 kernel driver intercepts network packets and conflicts with WFP rules"},
+	{"gunetfilter", "GearUP Net Filter", "GearUP Booster WFP driver intercepts packets and conflicts with TUN routing"},
+	{"hostpacket", "GearUP Host Packet", "GearUP Booster kernel packet driver conflicts with TUN routing"},
 }
 
 // knownConflictingProcesses lists user-space processes that use WinDivert or
@@ -46,6 +49,7 @@ var knownConflictingProcesses = []struct {
 	{"winws.exe", "Zapret (winws)", "Zapret DPI bypass tool uses WinDivert to modify packets"},
 	{"goodbyedpi.exe", "GoodbyeDPI", "DPI bypass tool uses WinDivert to modify packets"},
 	{"blockcheck.exe", "Zapret BlockCheck", "Zapret diagnostics tool uses WinDivert"},
+	{"gearup_booster.exe", "GearUP Booster", "Game booster uses WFP driver and VPN tunnel that conflicts with TUN routing"},
 }
 
 // CheckConflictingServices detects running third-party services and processes
