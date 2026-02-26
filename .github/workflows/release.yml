@@ -43,15 +43,17 @@ jobs:
           go install github.com/wailsapp/wails/v3/cmd/wails3@latest
           choco install nsis -y --no-progress
 
-      - name: Build frontend
+      - name: Install frontend dependencies
         working-directory: ui/frontend
-        run: |
-          npm ci
-          npm run build
+        run: npm ci
 
       - name: Generate Wails bindings
         working-directory: ui
         run: wails3 generate bindings
+
+      - name: Build frontend
+        working-directory: ui/frontend
+        run: npm run build
 
       - name: Generate Windows resources (.syso)
         shell: bash
