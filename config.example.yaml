@@ -26,6 +26,10 @@ global:
   # allowed_ips:
   #   - "0.0.0.0/0"
 
+  # Kill switch: block ALL non-VPN traffic when VPN is active.
+  # Prevents data leaks if VPN disconnects. Default: false.
+  # kill_switch: false
+
 tunnels:
 #  - id: awg-germany
 #    protocol: amneziawg

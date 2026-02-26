@@ -17,6 +17,9 @@ type RealNIC struct {
 
 // TUNAdapter abstracts a TUN adapter (WinTUN on Windows, utun on macOS).
 type TUNAdapter interface {
+	// Name returns the OS-level interface name (e.g. "utun5" on macOS, "AWG Gateway" on Windows).
+	// Used by kill switch to allow traffic on the TUN interface.
+	Name() string
 	// LUID returns the adapter's locally unique identifier.
 	LUID() uint64
 	// InterfaceIndex returns the adapter's interface index.
@@ -58,6 +61,11 @@ type ProcessFilter interface {
 	RemoveDNSPermitForSelf()
 	// BlockAllIPv6 blocks all IPv6 traffic.
 	BlockAllIPv6() error
+	// EnableKillSwitch blocks all non-VPN traffic except loopback and VPN endpoints.
+	// tunIfName is the TUN interface name; vpnEndpoints are the VPN server addresses to exempt.
+	EnableKillSwitch(tunIfName string, vpnEndpoints []netip.Addr) error
+	// DisableKillSwitch removes the kill switch rules.
+	DisableKillSwitch() error
 	// Close tears down the filter session (rules auto-removed on Windows).
 	Close() error
 }
@@ -99,6 +107,14 @@ type InterfaceBinder interface {
 	// BindControl returns a net.Dialer.Control function that binds sockets
 	// to the specified network interface.
 	BindControl(ifIndex uint32) func(network, address string, c syscall.RawConn) error
+}
+
+// NetworkMonitor detects network changes (interface up/down, default route changes).
+type NetworkMonitor interface {
+	// Start begins monitoring for network changes.
+	Start() error
+	// Stop stops the monitor.
+	Stop() error
 }
 
 // Notifier sends system notifications.

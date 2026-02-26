@@ -260,6 +260,7 @@ type GlobalFilterConfig struct {
 	DisallowedIPs  []string `yaml:"disallowed_ips,omitempty"`
 	DisallowedApps []string `yaml:"disallowed_apps,omitempty"`
 	DisableLocal   bool     `yaml:"disable_local,omitempty"`
+	KillSwitch     bool     `yaml:"kill_switch,omitempty"`
 }
 
 // UpdateConfig holds auto-update settings.

@@ -168,6 +168,9 @@ func (a *TUNAdapter) configureInterface() error {
 	return nil
 }
 
+// Name returns the utun interface name (e.g. "utun5").
+func (a *TUNAdapter) Name() string { return a.name }
+
 // LUID returns the interface index as uint64 (macOS has no LUID; index serves the same role).
 func (a *TUNAdapter) LUID() uint64 { return uint64(a.ifIndex) }
 
@@ -268,6 +271,22 @@ func (a *TUNAdapter) ClearDNS() error {
 	_ = flushSystemDNS()
 	core.Log.Infof("DNS", "System DNS restored on service %q", a.primaryService)
 	return nil
+}
+
+// ReapplyDNS re-detects the primary network service and re-applies DNS configuration.
+// Useful after a network change (WiFi→Ethernet) when the primary service may have changed.
+func (a *TUNAdapter) ReapplyDNS(servers []netip.Addr) error {
+	newSvc, err := primaryNetworkService()
+	if err != nil {
+		return fmt.Errorf("detect primary service: %w", err)
+	}
+
+	if newSvc != a.primaryService {
+		core.Log.Infof("DNS", "Primary network service changed: %q → %q", a.primaryService, newSvc)
+		a.primaryService = newSvc
+	}
+
+	return a.SetDNS(servers)
 }
 
 // Close tears down the utun adapter. The kernel removes the utun interface when the fd is closed.

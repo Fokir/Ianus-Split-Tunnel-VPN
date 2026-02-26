@@ -82,6 +82,9 @@ func NewAdapter() (*Adapter, error) {
 	return a, nil
 }
 
+// Name returns the adapter display name.
+func (a *Adapter) Name() string { return adapterName }
+
 // LUID returns the adapter's locally unique identifier.
 func (a *Adapter) LUID() uint64 { return a.luid }
 

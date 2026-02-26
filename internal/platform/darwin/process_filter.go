@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	pfAnchorRoot = "com.awg"
-	pfAnchorDNS  = "com.awg/dns"
-	pfAnchorIPv6 = "com.awg/ipv6"
+	pfAnchorRoot       = "com.awg"
+	pfAnchorDNS        = "com.awg/dns"
+	pfAnchorIPv6       = "com.awg/ipv6"
+	pfAnchorKillSwitch = "com.awg/killswitch"
 )
 
 // ProcessFilter implements platform.ProcessFilter using macOS PF (Packet Filter).
@@ -37,6 +38,9 @@ type ProcessFilter struct {
 
 	// IPv6 blocking state.
 	ipv6Blocked bool
+
+	// Kill switch state.
+	killSwitchActive bool
 
 	// Per-process tracking (advisory — routing does actual enforcement).
 	blocked map[string]bool
@@ -260,6 +264,63 @@ func (f *ProcessFilter) BlockAllIPv6() error {
 	return nil
 }
 
+// --- Kill Switch ---
+
+// EnableKillSwitch blocks all non-VPN traffic except loopback and VPN endpoints.
+// Uses PF anchor com.awg/killswitch with "quick" rules.
+func (f *ProcessFilter) EnableKillSwitch(tunIfName string, vpnEndpoints []netip.Addr) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if !f.pfSetup {
+		return fmt.Errorf("PF not initialized")
+	}
+
+	var rules strings.Builder
+	// Allow loopback.
+	rules.WriteString("pass out quick on lo0 all\n")
+	rules.WriteString("pass in quick on lo0 all\n")
+	// Allow all traffic on TUN interface.
+	fmt.Fprintf(&rules, "pass out quick on %s all\n", tunIfName)
+	fmt.Fprintf(&rules, "pass in quick on %s all\n", tunIfName)
+	// Allow traffic to VPN endpoints (needed for the tunnel itself).
+	for _, ep := range vpnEndpoints {
+		fmt.Fprintf(&rules, "pass out quick proto udp to %s\n", ep.String())
+		fmt.Fprintf(&rules, "pass out quick proto tcp to %s\n", ep.String())
+	}
+	// Block everything else.
+	rules.WriteString("block drop out quick all\n")
+	rules.WriteString("block drop in quick all\n")
+
+	if err := pfctlLoadAnchor(pfAnchorKillSwitch, rules.String()); err != nil {
+		return err
+	}
+
+	f.killSwitchActive = true
+	core.Log.Infof("PF", "Kill switch enabled (TUN=%s, %d VPN endpoints)", tunIfName, len(vpnEndpoints))
+	return nil
+}
+
+// DisableKillSwitch removes the kill switch rules.
+func (f *ProcessFilter) DisableKillSwitch() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if !f.killSwitchActive {
+		return nil
+	}
+
+	if f.pfSetup {
+		if err := pfctlFlushAnchor(pfAnchorKillSwitch); err != nil {
+			return err
+		}
+	}
+
+	f.killSwitchActive = false
+	core.Log.Infof("PF", "Kill switch disabled")
+	return nil
+}
+
 // --- Cleanup ---
 
 // Close flushes all PF anchor rules, restores original pf.conf config,
@@ -271,6 +332,7 @@ func (f *ProcessFilter) Close() error {
 	if f.pfSetup {
 		pfctlFlushAnchor(pfAnchorDNS)
 		pfctlFlushAnchor(pfAnchorIPv6)
+		pfctlFlushAnchor(pfAnchorKillSwitch)
 
 		// Restore original pf.conf (removes our anchor reference from running config).
 		if out, err := exec.Command("pfctl", "-f", "/etc/pf.conf").CombinedOutput(); err != nil {

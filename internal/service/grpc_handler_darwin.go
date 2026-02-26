@@ -4,37 +4,70 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	vpnapi "awg-split-tunnel/api/gen"
+	"awg-split-tunnel/internal/update"
 )
 
-// ─── Platform stubs for macOS ────────────────────────────────────────
-// These methods have platform-specific implementations on Windows.
-// On macOS they return reasonable defaults or "not supported" errors.
+// ─── Platform-specific gRPC handlers for macOS ──────────────────────
 
-func (s *Service) ListProcesses(_ context.Context, _ *vpnapi.ProcessListRequest) (*vpnapi.ProcessListResponse, error) {
-	// TODO: Implement macOS process listing via proc_pidinfo.
-	return &vpnapi.ProcessListResponse{}, nil
+func (s *Service) ListProcesses(_ context.Context, req *vpnapi.ProcessListRequest) (*vpnapi.ProcessListResponse, error) {
+	procs, err := listRunningProcesses(req.NameFilter)
+	if err != nil {
+		return nil, err
+	}
+	return &vpnapi.ProcessListResponse{Processes: procs}, nil
 }
 
 func (s *Service) GetAutostart(_ context.Context, _ *emptypb.Empty) (*vpnapi.AutostartConfig, error) {
-	// TODO: Implement macOS autostart via LaunchAgent.
+	enabled, _ := isAutostartEnabled()
 	return &vpnapi.AutostartConfig{
-		Enabled:            false,
+		Enabled:            enabled,
 		RestoreConnections: s.cfg.Get().GUI.RestoreConnections,
 	}, nil
 }
 
-func (s *Service) SetAutostart(_ context.Context, _ *vpnapi.SetAutostartRequest) (*vpnapi.SetAutostartResponse, error) {
-	// TODO: Implement macOS autostart via LaunchAgent.
-	return &vpnapi.SetAutostartResponse{Success: false, Error: "autostart not yet supported on macOS"}, nil
+func (s *Service) SetAutostart(_ context.Context, req *vpnapi.SetAutostartRequest) (*vpnapi.SetAutostartResponse, error) {
+	if err := setAutostartEnabled(req.Config.Enabled, req.Config.GuiExePath); err != nil {
+		return &vpnapi.SetAutostartResponse{Success: false, Error: err.Error()}, nil
+	}
+
+	// Persist restore_connections in config.
+	cfg := s.cfg.Get()
+	cfg.GUI.RestoreConnections = req.Config.RestoreConnections
+	s.cfg.SetFromGUI(cfg)
+	if err := s.cfg.Save(); err != nil {
+		return &vpnapi.SetAutostartResponse{Success: false, Error: err.Error()}, nil
+	}
+
+	return &vpnapi.SetAutostartResponse{Success: true}, nil
 }
 
-func (s *Service) ApplyUpdate(_ context.Context, _ *emptypb.Empty) (*vpnapi.ApplyUpdateResponse, error) {
-	// TODO: Implement macOS update mechanism.
-	return &vpnapi.ApplyUpdateResponse{Success: false, Error: "in-place update not yet supported on macOS"}, nil
+func (s *Service) ApplyUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.ApplyUpdateResponse, error) {
+	if s.updateChecker == nil {
+		return &vpnapi.ApplyUpdateResponse{Success: false, Error: "update checker not initialized"}, nil
+	}
+
+	info := s.updateChecker.GetLatestInfo()
+	if info == nil {
+		return &vpnapi.ApplyUpdateResponse{Success: false, Error: "no update available"}, nil
+	}
+
+	// Download the tarball.
+	extractDir, err := update.DownloadDarwin(ctx, info, s.httpClient, nil)
+	if err != nil {
+		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("download failed: %v", err)}, nil
+	}
+
+	// Apply: replace binary and restart daemon.
+	if err := update.ApplyDarwinUpdate(extractDir); err != nil {
+		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("apply failed: %v", err)}, nil
+	}
+
+	return &vpnapi.ApplyUpdateResponse{Success: true}, nil
 }
 
 func (s *Service) CheckConflictingServices(_ context.Context, _ *emptypb.Empty) (*vpnapi.ConflictingServicesResponse, error) {

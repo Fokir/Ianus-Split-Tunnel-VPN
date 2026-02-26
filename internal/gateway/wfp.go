@@ -526,6 +526,17 @@ func (w *WFPManager) BlockAllIPv6() error {
 	return nil
 }
 
+// EnableKillSwitch is a no-op on Windows. WFP per-process blocking rules
+// already enforce traffic through the TUN adapter, providing equivalent protection.
+func (w *WFPManager) EnableKillSwitch(tunIfName string, vpnEndpoints []netip.Addr) error {
+	return nil
+}
+
+// DisableKillSwitch is a no-op on Windows.
+func (w *WFPManager) DisableKillSwitch() error {
+	return nil
+}
+
 // Close closes the WFP session. Dynamic=true means all rules are auto-removed.
 func (w *WFPManager) Close() error {
 	if w.session != nil {

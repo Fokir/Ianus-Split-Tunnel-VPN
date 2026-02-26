@@ -11,6 +11,11 @@ type Platform struct {
 	NewInterfaceBinder func() InterfaceBinder
 	Notifier           Notifier
 
+	// NewNetworkMonitor creates a monitor that calls onChange when network
+	// configuration changes (default route, interface up/down).
+	// May be nil on platforms that don't support it yet.
+	NewNetworkMonitor func(onChange func()) (NetworkMonitor, error)
+
 	// PreStartup runs platform-specific initialization before the main VPN loop
 	// (e.g., cleanup conflicting WFP filters on Windows).
 	PreStartup func() error

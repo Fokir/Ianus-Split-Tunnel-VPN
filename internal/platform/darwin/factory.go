@@ -31,7 +31,11 @@ func NewPlatform() *platform.Platform {
 		},
 		IPC:                NewIPCTransport(),
 		NewInterfaceBinder: func() platform.InterfaceBinder { return &InterfaceBinder{} },
-		Notifier:           &Notifier{},
+		Notifier: &Notifier{},
+
+		NewNetworkMonitor: func(onChange func()) (platform.NetworkMonitor, error) {
+			return NewNetworkMonitor(onChange)
+		},
 
 		PreStartup: func() error {
 			// No pre-startup cleanup needed on macOS (no WFP conflicts).

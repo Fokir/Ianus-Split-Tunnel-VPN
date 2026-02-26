@@ -249,6 +249,22 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 			}
 		}
 
+		// === Kill Switch ===
+		if cfgManager.Get().Global.KillSwitch {
+			var vpnEndpoints []netip.Addr
+			for _, entry := range registry.All() {
+				if entry.ID == gateway.DirectTunnelID || entry.State != core.TunnelStateUp {
+					continue
+				}
+				for _, ep := range tunnelCtrl.GetServerEndpoints(entry.ID) {
+					vpnEndpoints = append(vpnEndpoints, ep.Addr())
+				}
+			}
+			if err := procFilter.EnableKillSwitch(adapter.Name(), vpnEndpoints); err != nil {
+				core.Log.Warnf("Core", "Failed to enable kill switch: %v", err)
+			}
+		}
+
 		gwActive = true
 		core.Log.Infof("Core", "Gateway activated (VPN tunnel available)")
 	}
@@ -258,6 +274,11 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 		defer gwMu.Unlock()
 		if !gwActive {
 			return
+		}
+
+		// Disable kill switch before removing other rules.
+		if err := procFilter.DisableKillSwitch(); err != nil {
+			core.Log.Warnf("Core", "Failed to disable kill switch: %v", err)
 		}
 
 		// Remove per-process blocking rules first — they block apps on real NIC.
@@ -306,8 +327,88 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 			activateGateway()
 		} else if vpnUp == 0 && wasActive {
 			deactivateGateway()
+		} else if vpnUp > 0 && wasActive && cfgManager.Get().Global.KillSwitch {
+			// VPN endpoint list may have changed — refresh kill switch rules.
+			var vpnEndpoints []netip.Addr
+			for _, entry := range registry.All() {
+				if entry.ID == gateway.DirectTunnelID || entry.State != core.TunnelStateUp {
+					continue
+				}
+				for _, ep := range tunnelCtrl.GetServerEndpoints(entry.ID) {
+					vpnEndpoints = append(vpnEndpoints, ep.Addr())
+				}
+			}
+			if err := procFilter.EnableKillSwitch(adapter.Name(), vpnEndpoints); err != nil {
+				core.Log.Warnf("Core", "Failed to refresh kill switch: %v", err)
+			}
 		}
 	})
+
+	// === 11d. Network Monitor (detect network changes — macOS) ===
+	var netMon platform.NetworkMonitor
+	if plat.NewNetworkMonitor != nil {
+		onChange := func() {
+			core.Log.Infof("Core", "Network change detected")
+
+			// Re-discover real NIC (gateway may have changed).
+			newNIC, err := routeMgr.DiscoverRealNIC()
+			if err != nil {
+				core.Log.Warnf("Route", "Failed to re-discover NIC after network change: %v", err)
+				return
+			}
+
+			gwMu.Lock()
+			isActive := gwActive
+			gwMu.Unlock()
+
+			if !isActive {
+				return
+			}
+
+			// Update realNIC reference.
+			realNIC = newNIC
+
+			// Re-apply bypass routes for all connected VPN tunnels.
+			for _, entry := range registry.All() {
+				if entry.ID == gateway.DirectTunnelID || entry.State != core.TunnelStateUp {
+					continue
+				}
+				for _, ep := range tunnelCtrl.GetServerEndpoints(entry.ID) {
+					if err := routeMgr.AddBypassRoute(ep.Addr()); err != nil {
+						core.Log.Warnf("Route", "Re-apply bypass route for %s: %v", ep.Addr(), err)
+					}
+				}
+			}
+
+			// Re-apply DNS on new primary network service.
+			if hasDNSResolver {
+				type dnsReapplier interface {
+					ReapplyDNS(servers []netip.Addr) error
+				}
+				if r, ok := adapter.(dnsReapplier); ok {
+					if err := r.ReapplyDNS([]netip.Addr{adapter.IP()}); err != nil {
+						core.Log.Warnf("DNS", "ReapplyDNS: %v", err)
+					}
+				} else {
+					if err := adapter.SetDNS([]netip.Addr{adapter.IP()}); err != nil {
+						core.Log.Warnf("DNS", "Re-set DNS: %v", err)
+					}
+				}
+			}
+
+			core.Log.Infof("Core", "Network change handled (new gateway: %s)", newNIC.Gateway)
+		}
+
+		nm, err := plat.NewNetworkMonitor(onChange)
+		if err != nil {
+			core.Log.Warnf("Core", "Failed to create network monitor: %v", err)
+		} else {
+			netMon = nm
+			if err := netMon.Start(); err != nil {
+				core.Log.Warnf("Core", "Failed to start network monitor: %v", err)
+			}
+		}
+	}
 
 	// === 11c. Domain-based routing ===
 	geositeFilePath := resolveRelativeToExe("geosite.dat")
@@ -499,6 +600,30 @@ mainLoop:
 			if dnsResolver != nil {
 				domainReloader(newCfg.DomainRules)
 			}
+			// Check if kill switch setting changed.
+			gwMu.Lock()
+			active := gwActive
+			gwMu.Unlock()
+			if active {
+				if newCfg.Global.KillSwitch {
+					var vpnEndpoints []netip.Addr
+					for _, entry := range registry.All() {
+						if entry.ID == gateway.DirectTunnelID || entry.State != core.TunnelStateUp {
+							continue
+						}
+						for _, ep := range tunnelCtrl.GetServerEndpoints(entry.ID) {
+							vpnEndpoints = append(vpnEndpoints, ep.Addr())
+						}
+					}
+					if err := procFilter.EnableKillSwitch(adapter.Name(), vpnEndpoints); err != nil {
+						core.Log.Warnf("Core", "Failed to enable kill switch on reload: %v", err)
+					}
+				} else {
+					if err := procFilter.DisableKillSwitch(); err != nil {
+						core.Log.Warnf("Core", "Failed to disable kill switch on reload: %v", err)
+					}
+				}
+			}
 			core.Log.Infof("Core", "Configuration reloaded.")
 		case <-runCtx.Done():
 			core.Log.Infof("Core", "Run context cancelled. Exiting main loop.")
@@ -522,6 +647,11 @@ mainLoop:
 
 		if dnsResolver != nil {
 			dnsResolver.Stop()
+		}
+
+		// Stop network monitor.
+		if netMon != nil {
+			netMon.Stop()
 		}
 
 		// Use tunnel controller for graceful shutdown of all tunnels
