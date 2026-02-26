@@ -2,6 +2,7 @@
 *.dll
 *.sys
 *.syso
+/awg-split-tunnel
 
 build
 .idea
