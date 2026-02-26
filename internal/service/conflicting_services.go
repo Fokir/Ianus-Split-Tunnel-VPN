@@ -5,6 +5,7 @@ package service
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unsafe"
 
 	"awg-split-tunnel/internal/core"
@@ -49,20 +50,26 @@ var knownConflictingProcesses = []struct {
 
 // CheckConflictingServices detects running third-party services and processes
 // that are known to conflict with our WFP rules and TUN routing.
+// Also detects WinDivert driver services in non-stopped states (e.g. registered
+// but not yet started) because the kernel driver may still be loaded.
 func CheckConflictingServices() []ConflictingServiceInfo {
 	var result []ConflictingServiceInfo
 
 	// Check Windows services (WinDivert driver, etc.)
+	// Detect any non-deleted service — even if it reports as "stopped," the kernel
+	// driver may still be loaded if handles were not properly closed.
 	for _, s := range knownConflictingServices {
-		if running, err := isServiceRunning(s.Name); err == nil && running {
-			result = append(result, ConflictingServiceInfo{
-				Name:        s.Name,
-				DisplayName: s.DisplayName,
-				Type:        "service",
-				Running:     true,
-				Description: s.Description,
-			})
+		state, err := getServiceState(s.Name)
+		if err != nil {
+			continue // service doesn't exist
 		}
+		result = append(result, ConflictingServiceInfo{
+			Name:        s.Name,
+			DisplayName: s.DisplayName,
+			Type:        "service",
+			Running:     state == svc.Running || state == svc.StartPending || state == svc.StopPending,
+			Description: s.Description,
+		})
 	}
 
 	// Check running processes (winws.exe, goodbyedpi.exe, etc.)
@@ -80,6 +87,28 @@ func CheckConflictingServices() []ConflictingServiceInfo {
 	}
 
 	return result
+}
+
+// getServiceState returns the current state of a Windows service.
+// Returns an error if the service doesn't exist.
+func getServiceState(serviceName string) (svc.State, error) {
+	m, err := mgr.Connect()
+	if err != nil {
+		return 0, err
+	}
+	defer m.Disconnect()
+
+	s, err := m.OpenService(serviceName)
+	if err != nil {
+		return 0, err // service doesn't exist
+	}
+	defer s.Close()
+
+	status, err := s.Query()
+	if err != nil {
+		return 0, err
+	}
+	return status.State, nil
 }
 
 // StopConflictingService stops a conflicting service or kills a process by name.
@@ -126,8 +155,10 @@ func isServiceRunning(serviceName string) (bool, error) {
 
 // stopWindowsService stops and deletes a Windows driver service via SCM.
 // This is the equivalent of `sc stop <name>` followed by `sc delete <name>`.
-// Deletion prevents the driver from auto-loading again. The application that
-// installed it (e.g. zapret) will reinstall it on next launch if needed.
+// Waits for the service to fully stop before deleting to ensure the kernel
+// driver is completely unloaded. Deletion prevents the driver from auto-loading
+// again. The application that installed it (e.g. zapret) will reinstall it on
+// next launch if needed.
 func stopWindowsService(serviceName string) error {
 	m, err := mgr.Connect()
 	if err != nil {
@@ -141,13 +172,30 @@ func stopWindowsService(serviceName string) error {
 	}
 	defer s.Close()
 
-	// Stop the service first.
+	// Stop the service.
 	status, err := s.Control(svc.Stop)
 	if err != nil {
 		// If already stopped, continue to delete.
 		core.Log.Warnf("Core", "Stop service %q: %v (continuing to delete)", serviceName, err)
 	} else {
-		core.Log.Infof("Core", "Stopped conflicting service %q (state=%d)", serviceName, status.State)
+		// Wait for the service to fully stop (up to 15 seconds).
+		// This is critical for kernel drivers like WinDivert — the driver must
+		// be completely unloaded before we can safely proceed.
+		for i := 0; i < 30; i++ {
+			if status.State == svc.Stopped {
+				core.Log.Infof("Core", "Conflicting service %q stopped", serviceName)
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+			status, err = s.Query()
+			if err != nil {
+				core.Log.Warnf("Core", "Query service %q: %v", serviceName, err)
+				break
+			}
+		}
+		if status.State != svc.Stopped {
+			core.Log.Warnf("Core", "Service %q did not stop in time (state=%d)", serviceName, status.State)
+		}
 	}
 
 	// Delete the service registration to prevent it from loading again.
@@ -161,7 +209,10 @@ func stopWindowsService(serviceName string) error {
 	return nil
 }
 
-// killProcessByName terminates all processes matching the given executable name.
+// killProcessByName terminates all processes matching the given executable name
+// and waits for them to fully exit. Waiting is important because the process may
+// hold handles to kernel drivers (e.g. WinDivert) that prevent the driver from
+// unloading until the handle is released.
 func killProcessByName(exeName string) error {
 	pids, err := findProcessesByName(exeName)
 	if err != nil {
@@ -172,17 +223,32 @@ func killProcessByName(exeName string) error {
 		return nil // already not running
 	}
 
+	// Terminate and collect handles to wait on.
+	var handles []windows.Handle
 	var lastErr error
 	for _, pid := range pids {
-		handle, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, pid)
+		// Open with TERMINATE + SYNCHRONIZE so we can wait for exit.
+		handle, err := windows.OpenProcess(
+			windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, pid,
+		)
 		if err != nil {
 			lastErr = fmt.Errorf("open process %d: %w", pid, err)
 			continue
 		}
 		if err := windows.TerminateProcess(handle, 1); err != nil {
 			lastErr = fmt.Errorf("terminate process %d: %w", pid, err)
+			windows.CloseHandle(handle)
+			continue
 		}
-		windows.CloseHandle(handle)
+		handles = append(handles, handle)
+	}
+
+	// Wait for all terminated processes to fully exit (up to 5 seconds each).
+	// This ensures handles to kernel drivers are released before we try to
+	// stop the driver service.
+	for _, h := range handles {
+		windows.WaitForSingleObject(h, 5000) // 5s timeout
+		windows.CloseHandle(h)
 	}
 
 	if lastErr != nil {

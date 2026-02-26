@@ -770,8 +770,23 @@ func (s *Service) StopConflictingServices(_ context.Context, req *vpnapi.StopCon
 		}
 	}
 
-	ordered := append(processes, services...)
-	for _, name := range ordered {
+	// Phase 1: kill user-space processes (releases WinDivert handles).
+	for _, name := range processes {
+		if err := StopConflictingService(name); err != nil {
+			core.Log.Warnf("Core", "Failed to stop conflicting process %q: %v", name, err)
+			failed = append(failed, name)
+		} else {
+			stopped = append(stopped, name)
+		}
+	}
+
+	// Phase 2: stop and delete driver services.
+	// killProcessByName already waits for process exit, but add a small extra
+	// delay to ensure kernel handles are fully released.
+	if len(processes) > 0 && len(services) > 0 {
+		time.Sleep(1 * time.Second)
+	}
+	for _, name := range services {
 		if err := StopConflictingService(name); err != nil {
 			core.Log.Warnf("Core", "Failed to stop conflicting service %q: %v", name, err)
 			failed = append(failed, name)
