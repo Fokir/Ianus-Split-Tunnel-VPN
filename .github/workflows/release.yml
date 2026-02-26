@@ -1,0 +1,229 @@
+name: Release
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/frontend/package-lock.json
+
+      - name: Extract version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          COMMIT="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "COMMIT=$COMMIT" >> $GITHUB_ENV
+          echo "BUILD_DATE=$DATE" >> $GITHUB_ENV
+          echo "LDFLAGS=-s -w -X main.version=$VERSION -X main.commit=$COMMIT -X main.buildDate=$DATE" >> $GITHUB_ENV
+
+      - name: Install tools
+        shell: bash
+        run: |
+          go install github.com/akavel/rsrc@latest
+          go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+          choco install nsis -y --no-progress
+
+      - name: Build frontend
+        working-directory: ui/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Generate Wails bindings
+        working-directory: ui
+        run: wails3 generate bindings
+
+      - name: Generate Windows resources (.syso)
+        shell: bash
+        run: |
+          ICO="ui/build/windows/icon.ico"
+          rsrc -manifest cmd/awg-split-tunnel/app.manifest -ico "$ICO" -o cmd/awg-split-tunnel/rsrc_windows_amd64.syso
+          rsrc -manifest ui/build/windows/wails.exe.manifest -ico "$ICO" -o ui/rsrc_windows_amd64.syso
+          rsrc -manifest cmd/awg-split-tunnel-updater/app.manifest -ico "$ICO" -o cmd/awg-split-tunnel-updater/rsrc_windows_amd64.syso
+          rsrc -manifest cmd/awg-diag/app.manifest -ico "$ICO" -o cmd/awg-diag/rsrc_windows_amd64.syso
+
+      - name: Build Go binaries
+        shell: bash
+        run: |
+          mkdir -p build
+          go build -ldflags "$LDFLAGS" -o build/awg-split-tunnel.exe ./cmd/awg-split-tunnel/
+          go build -ldflags "$LDFLAGS -H windowsgui" -o build/awg-split-tunnel-ui.exe ./ui/
+          go build -ldflags "$LDFLAGS" -o build/awg-split-tunnel-updater.exe ./cmd/awg-split-tunnel-updater/
+          go build -ldflags "$LDFLAGS" -o build/awg-split-tunnel-diag.exe ./cmd/awg-diag/
+          cp dll/wintun.dll build/
+
+      - name: Build NSIS installer
+        shell: bash
+        run: |
+          ABS_SERVICE="$(cygpath -w "$(pwd)/build/awg-split-tunnel.exe")"
+          ABS_GUI="$(cygpath -w "$(pwd)/build/awg-split-tunnel-ui.exe")"
+          ABS_UPDATER="$(cygpath -w "$(pwd)/build/awg-split-tunnel-updater.exe")"
+          ABS_WINTUN="$(cygpath -w "$(pwd)/build/wintun.dll")"
+          ABS_CONFIG="$(cygpath -w "$(pwd)/config.example.yaml")"
+          "/c/Program Files (x86)/NSIS/makensis.exe" \
+            -DARG_WAILS_AMD64_BINARY="$ABS_GUI" \
+            -DARG_SERVICE_BINARY="$ABS_SERVICE" \
+            -DARG_UPDATER_BINARY="$ABS_UPDATER" \
+            -DARG_WINTUN_DLL="$ABS_WINTUN" \
+            -DARG_CONFIG_EXAMPLE="$ABS_CONFIG" \
+            -DINFO_PRODUCTVERSION="$VERSION" \
+            ui/build/windows/nsis/project.nsi
+
+      - name: Create release ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path `
+            build/awg-split-tunnel.exe, `
+            build/awg-split-tunnel-ui.exe, `
+            build/awg-split-tunnel-updater.exe, `
+            build/wintun.dll, `
+            config.example.yaml `
+            -DestinationPath "build/awg-split-tunnel-v${{ env.VERSION }}-windows-amd64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: |
+            build/awg-split-tunnel-v*-windows-amd64.zip
+            build/*installer*.exe
+          retention-days: 5
+
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Extract version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          COMMIT="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "COMMIT=$COMMIT" >> $GITHUB_ENV
+          echo "BUILD_DATE=$DATE" >> $GITHUB_ENV
+          echo "LDFLAGS=-s -w -X main.version=$VERSION -X main.commit=$COMMIT -X main.buildDate=$DATE" >> $GITHUB_ENV
+
+      - name: Build daemon binaries
+        run: |
+          mkdir -p build
+
+          # arm64 (native on macos-14 runner)
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
+            go build -ldflags "$LDFLAGS" -o build/awg-split-tunnel-arm64 ./cmd/awg-split-tunnel/
+
+          # amd64 (cross-compile)
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
+            go build -ldflags "$LDFLAGS" -o build/awg-split-tunnel-amd64 ./cmd/awg-split-tunnel/
+
+          # Universal binary
+          lipo -create -output build/awg-split-tunnel \
+            build/awg-split-tunnel-arm64 build/awg-split-tunnel-amd64
+
+      - name: Create tarballs
+        run: |
+          cd build
+          for ARCH in arm64 amd64; do
+            tar czf "awg-split-tunnel-v${VERSION}-darwin-${ARCH}.tar.gz" \
+              "awg-split-tunnel-${ARCH}"
+          done
+          tar czf "awg-split-tunnel-v${VERSION}-darwin-universal.tar.gz" \
+            "awg-split-tunnel"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-daemon-artifacts
+          path: build/awg-split-tunnel-v*-darwin-*.tar.gz
+          retention-days: 5
+
+  # build-macos-gui:
+  #   runs-on: macos-14
+  #   steps:
+  #     # Uncomment when macOS GUI is fully implemented and tested.
+  #     # Requires CGO_ENABLED=1 for Wails v3 WKWebView bridge.
+  #     # See ui/main_darwin.go and ui/build/darwin/Taskfile.yml for details.
+  #     - run: echo "macOS GUI build placeholder — enable after GUI implementation"
+
+  create-release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate changelog
+        shell: bash
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          TAG="${GITHUB_REF_NAME}"
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+
+          echo "# Changelog - ${TAG}" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
+          # Process each conventional commit type
+          for PAIR in "feat:Features" "fix:Bug Fixes" "perf:Performance" "refactor:Refactoring" "docs:Documentation" "test:Tests" "ci:CI" "build:Build"; do
+            TYPE="${PAIR%%:*}"
+            LABEL="${PAIR#*:}"
+            COMMITS=$(git log $RANGE --oneline --no-merges --grep="^${TYPE}" --format="- %s (%h)" 2>/dev/null || true)
+            if [ -n "$COMMITS" ]; then
+              echo "## $LABEL" >> CHANGELOG.md
+              echo "$COMMITS" >> CHANGELOG.md
+              echo "" >> CHANGELOG.md
+            fi
+          done
+
+          # Other commits (not matching any type)
+          OTHER=$(git log $RANGE --oneline --no-merges \
+            --invert-grep --grep="^feat" --grep="^fix" --grep="^perf" \
+            --grep="^refactor" --grep="^docs" --grep="^test" --grep="^ci" \
+            --grep="^build" --format="- %s (%h)" 2>/dev/null || true)
+          if [ -n "$OTHER" ]; then
+            echo "## Other" >> CHANGELOG.md
+            echo "$OTHER" >> CHANGELOG.md
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "Release ${{ github.ref_name }}" \
+            --notes-file CHANGELOG.md \
+            artifacts/*

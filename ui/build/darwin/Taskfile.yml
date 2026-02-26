@@ -1,0 +1,108 @@
+version: '3'
+
+includes:
+  common: ../Taskfile.yml
+
+vars:
+  APP_NAME: "AWG Split Tunnel"
+  BIN_DIR: "bin"
+  BUNDLE_ID: "com.awg.split-tunnel.gui"
+
+tasks:
+  build:
+    summary: Builds the macOS application
+    deps:
+      - task: common:go:mod:tidy
+      - task: common:build:frontend
+        vars:
+          BUILD_FLAGS:
+            ref: .BUILD_FLAGS
+          DEV:
+            ref: .DEV
+      - task: common:generate:bindings
+        vars:
+          BUILD_FLAGS:
+            ref: .BUILD_FLAGS
+      - task: common:generate:icons
+    cmds:
+      - task: build:native
+
+  build:native:
+    summary: Builds universal macOS binary (arm64 + amd64)
+    internal: true
+    cmds:
+      - mkdir -p "{{.BIN_DIR}}"
+      # arm64
+      - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64
+        go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/awg-split-tunnel-gui-arm64"
+      # amd64
+      - CGO_ENABLED=0 GOOS=darwin GOARCH=amd64
+        go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/awg-split-tunnel-gui-amd64"
+      # Universal binary
+      - lipo -create -output "{{.BIN_DIR}}/awg-split-tunnel-gui"
+        "{{.BIN_DIR}}/awg-split-tunnel-gui-arm64"
+        "{{.BIN_DIR}}/awg-split-tunnel-gui-amd64"
+    vars:
+      BUILD_FLAGS: >-
+        {{if eq .DEV "true"}}
+          -buildvcs=false -gcflags=all="-l"
+        {{else}}
+          -tags production -trimpath -buildvcs=false -ldflags="-w -s"
+        {{end}}
+
+  package:
+    summary: Creates .app bundle and .dmg
+    deps:
+      - task: build
+    cmds:
+      - task: create:app:bundle
+      - task: create:dmg
+
+  create:app:bundle:
+    summary: Creates macOS .app bundle
+    cmds:
+      - |
+        APP="{{.BIN_DIR}}/{{.APP_NAME}}.app"
+        rm -rf "$APP"
+        mkdir -p "$APP/Contents/MacOS"
+        mkdir -p "$APP/Contents/Resources"
+        cp "{{.BIN_DIR}}/awg-split-tunnel-gui" "$APP/Contents/MacOS/{{.APP_NAME}}"
+        cp build/darwin/icons.icns "$APP/Contents/Resources/appicon.icns" 2>/dev/null || true
+        cat > "$APP/Contents/Info.plist" << 'PLIST'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>CFBundleExecutable</key>
+          <string>AWG Split Tunnel</string>
+          <key>CFBundleIconFile</key>
+          <string>appicon</string>
+          <key>CFBundleIdentifier</key>
+          <string>com.awg.split-tunnel.gui</string>
+          <key>CFBundleName</key>
+          <string>AWG Split Tunnel</string>
+          <key>CFBundlePackageType</key>
+          <string>APPL</string>
+          <key>LSMinimumSystemVersion</key>
+          <string>13.0</string>
+          <key>LSUIElement</key>
+          <true/>
+          <key>NSHighResolutionCapable</key>
+          <true/>
+        </dict>
+        </plist>
+        PLIST
+
+  create:dmg:
+    summary: Creates DMG disk image
+    cmds:
+      - |
+        hdiutil create -volname "{{.APP_NAME}}" \
+          -srcfolder "{{.BIN_DIR}}/{{.APP_NAME}}.app" \
+          -ov -format UDZO \
+          "{{.BIN_DIR}}/{{.APP_NAME}}.dmg"
+
+  run:
+    summary: Opens the .app bundle
+    cmds:
+      - open "{{.BIN_DIR}}/{{.APP_NAME}}.app"

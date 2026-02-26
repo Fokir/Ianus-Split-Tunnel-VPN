@@ -1,0 +1,49 @@
+name: CI
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build-and-vet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Go vet (Windows)
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: go vet ./...
+
+      - name: Build Windows
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: go build ./...
+
+      # macOS GUI (./ui/) requires CGO for Wails WKWebView bridge,
+      # so we skip it in cross-compilation and only build daemon + libraries.
+      - name: Build macOS arm64 (daemon)
+        env:
+          CGO_ENABLED: "0"
+          GOOS: darwin
+          GOARCH: arm64
+        run: go build ./cmd/... ./internal/...
+
+      - name: Build macOS amd64 (daemon)
+        env:
+          CGO_ENABLED: "0"
+          GOOS: darwin
+          GOARCH: amd64
+        run: go build ./cmd/... ./internal/...
+
+      - name: Tests
+        run: go test ./...

@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows || darwin
 
 package main
 
@@ -9,9 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"syscall"
 	"sync"
 	"time"
 
@@ -555,17 +553,6 @@ func guiExePath() (string, error) {
 	return filepath.Clean(exe), nil
 }
 
-// removeLegacyGUIRegistryEntries cleans up old HKCU\Run entries from previous versions.
-func removeLegacyGUIRegistryEntries() {
-	// Best-effort removal using reg.exe (avoid importing x/sys/windows/registry in GUI).
-	for _, name := range []string{"AWGSplitTunnelGUI", "AWGSplitTunnel"} {
-		cmd := exec.Command("reg", "delete",
-			`HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`,
-			"/v", name, "/f")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		_ = cmd.Run()
-	}
-}
 
 func (b *BindingService) RestoreConnections() error {
 	resp, err := b.client.Service.RestoreConnections(context.Background(), &emptypb.Empty{})
