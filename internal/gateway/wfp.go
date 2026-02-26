@@ -533,6 +533,107 @@ func (w *WFPManager) Close() error {
 	return nil
 }
 
+// CleanupWinDivertWFP removes orphaned WinDivert WFP providers, sublayers, and
+// filters. WinDivert registers a kernel callout driver that creates WFP objects;
+// after the driver is stopped these may linger if the driver didn't unload
+// cleanly. This function opens a temporary non-dynamic session, enumerates all
+// WFP state, and removes anything that looks like WinDivert.
+//
+// Safe to call even if no WinDivert artifacts exist.
+func CleanupWinDivertWFP() error {
+	sess, err := wf.New(&wf.Options{
+		Name:        "AWG WinDivert Cleanup",
+		Description: "Temporary session for removing WinDivert WFP artifacts",
+		Dynamic:     false, // deletions must persist after session closes
+	})
+	if err != nil {
+		return fmt.Errorf("[WFP] open cleanup session: %w", err)
+	}
+	defer sess.Close()
+
+	// Step 1: find WinDivert providers.
+	providers, err := sess.Providers()
+	if err != nil {
+		return fmt.Errorf("[WFP] enumerate providers: %w", err)
+	}
+
+	var windivertProviders []wf.ProviderID
+	for _, p := range providers {
+		if isWinDivertName(p.Name) || isWinDivertName(p.Description) {
+			windivertProviders = append(windivertProviders, p.ID)
+			core.Log.Infof("WFP", "Found WinDivert provider %q (%v)", p.Name, p.ID)
+		}
+	}
+
+	if len(windivertProviders) == 0 {
+		core.Log.Infof("WFP", "No WinDivert WFP artifacts found")
+		return nil
+	}
+
+	// Step 2: delete filters that belong to WinDivert providers.
+	rules, err := sess.Rules()
+	if err != nil {
+		core.Log.Warnf("WFP", "Enumerate rules for cleanup: %v", err)
+	} else {
+		var deleted int
+		for _, r := range rules {
+			if providerIn(r.Provider, windivertProviders) || isWinDivertName(r.Name) {
+				if err := sess.DeleteRule(r.ID); err != nil {
+					core.Log.Warnf("WFP", "Delete WinDivert rule %v: %v", r.ID, err)
+				} else {
+					deleted++
+				}
+			}
+		}
+		if deleted > 0 {
+			core.Log.Infof("WFP", "Deleted %d WinDivert WFP filters", deleted)
+		}
+	}
+
+	// Step 3: delete sublayers that belong to WinDivert providers.
+	for _, pid := range windivertProviders {
+		sublayers, err := sess.Sublayers(pid)
+		if err != nil {
+			core.Log.Warnf("WFP", "Enumerate sublayers for provider %v: %v", pid, err)
+			continue
+		}
+		for _, sl := range sublayers {
+			if err := sess.DeleteSublayer(sl.ID); err != nil {
+				core.Log.Warnf("WFP", "Delete WinDivert sublayer %v: %v", sl.ID, err)
+			} else {
+				core.Log.Infof("WFP", "Deleted WinDivert sublayer %q", sl.Name)
+			}
+		}
+	}
+
+	// Step 4: delete the WinDivert providers themselves.
+	for _, pid := range windivertProviders {
+		if err := sess.DeleteProvider(pid); err != nil {
+			core.Log.Warnf("WFP", "Delete WinDivert provider %v: %v", pid, err)
+		} else {
+			core.Log.Infof("WFP", "Deleted WinDivert provider %v", pid)
+		}
+	}
+
+	return nil
+}
+
+// isWinDivertName checks whether a WFP object name/description belongs to WinDivert.
+func isWinDivertName(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.Contains(lower, "windivert")
+}
+
+// providerIn checks whether pid is in the list.
+func providerIn(pid wf.ProviderID, list []wf.ProviderID) bool {
+	for _, p := range list {
+		if p == pid {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *WFPManager) nextRuleID() wf.RuleID {
 	w.nextSeq++
 	guid, err := windows.GenerateGUID()

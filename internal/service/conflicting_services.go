@@ -206,7 +206,87 @@ func stopWindowsService(serviceName string) error {
 		core.Log.Infof("Core", "Deleted conflicting service %q", serviceName)
 	}
 
+	// Verify the kernel driver (.sys) is actually unloaded from memory.
+	// On Windows 10, SCM may report Stopped while the driver is still loaded.
+	driverFile := serviceName + ".sys"
+	if isKernelDriverLoaded(driverFile) {
+		core.Log.Warnf("Core", "Kernel driver %q still loaded after service stop, waiting...", driverFile)
+		if waitForDriverUnload(driverFile, 10*time.Second) {
+			core.Log.Infof("Core", "Kernel driver %q fully unloaded", driverFile)
+		} else {
+			core.Log.Warnf("Core", "Kernel driver %q still loaded after timeout — may require reboot", driverFile)
+		}
+	}
+
 	return nil
+}
+
+var (
+	modPsapi                   = windows.NewLazySystemDLL("psapi.dll")
+	procEnumDeviceDrivers      = modPsapi.NewProc("EnumDeviceDrivers")
+	procGetDeviceDriverBaseNameW = modPsapi.NewProc("GetDeviceDriverBaseNameW")
+)
+
+// isKernelDriverLoaded checks whether a kernel driver (.sys) is loaded by
+// enumerating loaded kernel modules via EnumDeviceDrivers + GetDeviceDriverBaseNameW.
+// This is the most reliable way to verify that a driver like WinDivert.sys has
+// actually been unloaded from memory, not just marked as "stopped" by SCM.
+// On Windows 10, the SCM may report Stopped while the driver is still loaded.
+func isKernelDriverLoaded(driverName string) bool {
+	// EnumDeviceDrivers returns base addresses of all loaded kernel modules.
+	var needed uint32
+	ptrSize := uint32(unsafe.Sizeof(uintptr(0)))
+
+	// First call to get required buffer size.
+	r1, _, _ := procEnumDeviceDrivers.Call(0, 0, uintptr(unsafe.Pointer(&needed)))
+	if r1 == 0 || needed == 0 {
+		return false
+	}
+
+	count := needed / ptrSize
+	addrs := make([]uintptr, count)
+	r1, _, _ = procEnumDeviceDrivers.Call(
+		uintptr(unsafe.Pointer(&addrs[0])),
+		uintptr(needed),
+		uintptr(unsafe.Pointer(&needed)),
+	)
+	if r1 == 0 {
+		return false
+	}
+
+	target := strings.ToLower(driverName)
+	buf := make([]uint16, 260)
+	for _, addr := range addrs {
+		if addr == 0 {
+			continue
+		}
+		n, _, _ := procGetDeviceDriverBaseNameW.Call(
+			addr,
+			uintptr(unsafe.Pointer(&buf[0])),
+			uintptr(len(buf)),
+		)
+		if n == 0 {
+			continue
+		}
+		name := strings.ToLower(windows.UTF16ToString(buf[:n]))
+		if name == target {
+			return true
+		}
+	}
+	return false
+}
+
+// waitForDriverUnload polls until the named kernel driver is no longer loaded
+// or the timeout expires. Returns true if the driver was unloaded.
+func waitForDriverUnload(driverName string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !isKernelDriverLoaded(driverName) {
+			return true
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return false
 }
 
 // killProcessByName terminates all processes matching the given executable name
