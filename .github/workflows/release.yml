@@ -29,9 +29,12 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          # Strip pre-release suffix for NSIS (requires X.X.X numeric format).
+          NSIS_VERSION="${VERSION%%-*}"
           COMMIT="$(git rev-parse --short HEAD)"
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "NSIS_VERSION=$NSIS_VERSION" >> $GITHUB_ENV
           echo "COMMIT=$COMMIT" >> $GITHUB_ENV
           echo "BUILD_DATE=$DATE" >> $GITHUB_ENV
           echo "LDFLAGS=-s -w -X main.version=$VERSION -X main.commit=$COMMIT -X main.buildDate=$DATE" >> $GITHUB_ENV
@@ -95,7 +98,7 @@ jobs:
             -DARG_UPDATER_BINARY="$ABS_UPDATER" \
             -DARG_WINTUN_DLL="$ABS_WINTUN" \
             -DARG_CONFIG_EXAMPLE="$ABS_CONFIG" \
-            -DINFO_PRODUCTVERSION="$VERSION" \
+            -DINFO_PRODUCTVERSION="$NSIS_VERSION" \
             ui/build/windows/nsis/project.nsi
 
       - name: Create release ZIP
