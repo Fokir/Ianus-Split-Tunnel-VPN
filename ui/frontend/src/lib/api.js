@@ -159,3 +159,13 @@ export function applyUpdate() {
 export function startUpdateNotifier() {
   return BindingService.StartUpdateNotifier();
 }
+
+// ─── Conflicting services ────────────────────────────────────────
+
+export function checkConflictingServices() {
+  return BindingService.CheckConflictingServices();
+}
+
+export function stopConflictingServices(names) {
+  return BindingService.StopConflictingServices(names);
+}

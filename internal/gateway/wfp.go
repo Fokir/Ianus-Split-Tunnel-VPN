@@ -275,13 +275,26 @@ func (w *WFPManager) AddBypassPrefixes(prefixes []netip.Prefix) error {
 	return nil
 }
 
+// Special keys for DNS-related WFP rules.
+const (
+	wfpDNSBlockKey      = "__dns_block__"
+	wfpDNSPermitSelfKey = "__dns_self_permit__"
+)
+
 // BlockDNSOnInterface adds WFP rules to block DNS (UDP/TCP port 53) on a
 // specific interface (typically the physical NIC). This prevents ISP DPI from
 // intercepting DNS queries while keeping DNS available on other adapters
 // (e.g. VMware, Hyper-V work subnets).
+// Idempotent: no-op if already blocked.
 func (w *WFPManager) BlockDNSOnInterface(ifLUID uint64) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if _, exists := w.rules[wfpDNSBlockKey]; exists {
+		return nil // already blocked
+	}
+
+	var ruleIDs []wf.RuleID
 
 	for _, proto := range []uint8{17, 6} {
 		protoName := "UDP"
@@ -317,16 +330,25 @@ func (w *WFPManager) BlockDNSOnInterface(ifLUID uint64) error {
 		}); err != nil {
 			return fmt.Errorf("[WFP] block DNS leak %s: %w", protoName, err)
 		}
+		ruleIDs = append(ruleIDs, ruleID)
 	}
 
+	w.rules[wfpDNSBlockKey] = ruleIDs
 	core.Log.Infof("WFP", "DNS blocked on interface LUID 0x%x (port 53 UDP+TCP)", ifLUID)
 	return nil
+}
+
+// UnblockDNSOnInterface removes the DNS blocking rules added by BlockDNSOnInterface.
+func (w *WFPManager) UnblockDNSOnInterface() {
+	w.removeRulesByKey(wfpDNSBlockKey)
+	core.Log.Infof("WFP", "DNS block rules removed")
 }
 
 // PermitDNSForSelf adds WFP PERMIT rules allowing our own process to send DNS
 // queries on the specified interface. This is needed so the DNS resolver can
 // fall back to the direct provider (real NIC) when VPN tunnels are down.
 // Weight 4000 overrides BlockDNSOnInterface (weight 3000).
+// Idempotent: no-op if already permitted.
 func (w *WFPManager) PermitDNSForSelf(ifLUID uint64) error {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -340,6 +362,12 @@ func (w *WFPManager) PermitDNSForSelf(ifLUID uint64) error {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if _, exists := w.rules[wfpDNSPermitSelfKey]; exists {
+		return nil // already permitted
+	}
+
+	var ruleIDs []wf.RuleID
 
 	for _, proto := range []uint8{17, 6} {
 		protoName := "UDP"
@@ -380,10 +408,55 @@ func (w *WFPManager) PermitDNSForSelf(ifLUID uint64) error {
 		}); err != nil {
 			return fmt.Errorf("[WFP] permit DNS self %s: %w", protoName, err)
 		}
+		ruleIDs = append(ruleIDs, ruleID)
 	}
 
+	w.rules[wfpDNSPermitSelfKey] = ruleIDs
 	core.Log.Infof("WFP", "DNS self-permit on interface LUID 0x%x (port 53 UDP+TCP)", ifLUID)
 	return nil
+}
+
+// RemoveDNSPermitForSelf removes the DNS self-permit rules added by PermitDNSForSelf.
+func (w *WFPManager) RemoveDNSPermitForSelf() {
+	w.removeRulesByKey(wfpDNSPermitSelfKey)
+}
+
+// UnblockAllProcesses removes all per-process WFP rules (but not IPv6, DNS, or
+// bypass rules). Used when deactivating the gateway so that previously blocked
+// apps can reach the real NIC directly.
+func (w *WFPManager) UnblockAllProcesses() {
+	w.mu.Lock()
+	var toDelete []wf.RuleID
+	for key, ids := range w.rules {
+		switch key {
+		case "__ipv6_block__", wfpDNSBlockKey, wfpDNSPermitSelfKey:
+			continue // keep these
+		}
+		toDelete = append(toDelete, ids...)
+		delete(w.rules, key)
+	}
+	w.mu.Unlock()
+
+	for _, id := range toDelete {
+		w.session.DeleteRule(id)
+	}
+	if len(toDelete) > 0 {
+		core.Log.Infof("WFP", "Removed all per-process blocking rules (%d rules)", len(toDelete))
+	}
+}
+
+// removeRulesByKey removes all WFP rules stored under the given key.
+func (w *WFPManager) removeRulesByKey(key string) {
+	w.mu.Lock()
+	ruleIDs, exists := w.rules[key]
+	if exists {
+		delete(w.rules, key)
+	}
+	w.mu.Unlock()
+
+	for _, id := range ruleIDs {
+		w.session.DeleteRule(id)
+	}
 }
 
 // BlockAllIPv6 adds WFP rules that block all IPv6 traffic (except loopback)

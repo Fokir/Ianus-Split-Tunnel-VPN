@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -726,4 +727,66 @@ func (s *Service) ApplyUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.Ap
 	// which ensures a clean stop without triggering recovery actions.
 
 	return &vpnapi.ApplyUpdateResponse{Success: true}, nil
+}
+
+// ─── Conflicting services ──────────────────────────────────────────
+
+func (s *Service) CheckConflictingServices(_ context.Context, _ *emptypb.Empty) (*vpnapi.ConflictingServicesResponse, error) {
+	detected := CheckConflictingServices()
+
+	var services []*vpnapi.ConflictingService
+	for _, d := range detected {
+		services = append(services, &vpnapi.ConflictingService{
+			Name:        d.Name,
+			DisplayName: d.DisplayName,
+			Type:        d.Type,
+			Running:     d.Running,
+			Description: d.Description,
+		})
+	}
+
+	return &vpnapi.ConflictingServicesResponse{Services: services}, nil
+}
+
+func (s *Service) StopConflictingServices(_ context.Context, req *vpnapi.StopConflictingServicesRequest) (*vpnapi.StopConflictingServicesResponse, error) {
+	var stopped, failed []string
+
+	// Stop processes FIRST (winws.exe, goodbyedpi.exe), then driver services
+	// (WinDivert). This order is important because the driver can't be stopped
+	// while user-space processes hold open handles to it.
+	var processes, services []string
+	for _, name := range req.Names {
+		isService := false
+		for _, s := range knownConflictingServices {
+			if strings.EqualFold(s.Name, name) {
+				isService = true
+				break
+			}
+		}
+		if isService {
+			services = append(services, name)
+		} else {
+			processes = append(processes, name)
+		}
+	}
+
+	ordered := append(processes, services...)
+	for _, name := range ordered {
+		if err := StopConflictingService(name); err != nil {
+			core.Log.Warnf("Core", "Failed to stop conflicting service %q: %v", name, err)
+			failed = append(failed, name)
+		} else {
+			stopped = append(stopped, name)
+		}
+	}
+
+	resp := &vpnapi.StopConflictingServicesResponse{
+		Success: len(failed) == 0,
+		Stopped: stopped,
+		Failed:  failed,
+	}
+	if len(failed) > 0 {
+		resp.Error = fmt.Sprintf("failed to stop: %v", failed)
+	}
+	return resp, nil
 }

@@ -410,6 +410,31 @@ message SetAutostartResponse {
   string error = 2;
 }
 
+// ─── Conflicting services ──────────────────────────────────────────
+
+message ConflictingService {
+  string name = 1;             // service or process name
+  string display_name = 2;     // human-readable name
+  string type = 3;             // "service" or "process"
+  bool running = 4;            // true if currently active
+  string description = 5;      // why it conflicts
+}
+
+message ConflictingServicesResponse {
+  repeated ConflictingService services = 1;
+}
+
+message StopConflictingServicesRequest {
+  repeated string names = 1;   // service/process names to stop
+}
+
+message StopConflictingServicesResponse {
+  bool success = 1;
+  string error = 2;
+  repeated string stopped = 3;   // successfully stopped
+  repeated string failed = 4;    // failed to stop
+}
+
 // ─── Service definition ─────────────────────────────────────────────
 
 service VPNService {
@@ -469,4 +494,8 @@ service VPNService {
   // -- Updates --
   rpc CheckUpdate(google.protobuf.Empty) returns (CheckUpdateResponse);
   rpc ApplyUpdate(google.protobuf.Empty) returns (ApplyUpdateResponse);
+
+  // -- Conflicting services --
+  rpc CheckConflictingServices(google.protobuf.Empty) returns (ConflictingServicesResponse);
+  rpc StopConflictingServices(StopConflictingServicesRequest) returns (StopConflictingServicesResponse);
 }

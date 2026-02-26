@@ -11,6 +11,7 @@
   import AboutTab from './lib/tabs/AboutTab.svelte';
   import StatusBar from './lib/StatusBar.svelte';
   import TitleBar from './lib/TitleBar.svelte';
+  import ConflictingServicesModal from './lib/ConflictingServicesModal.svelte';
   import { t } from './lib/i18n';
   import { tabDirty } from './lib/stores/dirty.js';
 
@@ -27,6 +28,8 @@
   let activeTab = 'connections';
   let pendingTab = null;
   let showUnsavedModal = false;
+  let conflictingServices = [];
+  let showConflictingModal = false;
 
   function switchTab(tabId) {
     if (tabId === activeTab) return;
@@ -63,6 +66,19 @@
     switchTab(target);
   }
 
+  async function checkConflicting() {
+    if (localStorage.getItem('hideConflictingServicesModal') === 'true') return;
+    try {
+      const services = await api.checkConflictingServices();
+      if (services && services.length > 0) {
+        conflictingServices = services;
+        showConflictingModal = true;
+      }
+    } catch (e) {
+      // Silently ignore — non-critical check
+    }
+  }
+
   onMount(() => {
     Events.On('navigate', handleNavigate);
 
@@ -70,6 +86,9 @@
     if (localStorage.getItem('autoUpdateEnabled') !== 'false') {
       api.startUpdateNotifier();
     }
+
+    // Check for conflicting services on startup.
+    checkConflicting();
   });
 
   onDestroy(() => {
@@ -124,6 +143,14 @@
 
   <!-- Status bar -->
   <StatusBar />
+
+  <!-- Conflicting services modal -->
+  {#if showConflictingModal}
+    <ConflictingServicesModal
+      services={conflictingServices}
+      on:close={() => { showConflictingModal = false; }}
+    />
+  {/if}
 
   <!-- Unsaved changes confirmation modal -->
   {#if showUnsavedModal}

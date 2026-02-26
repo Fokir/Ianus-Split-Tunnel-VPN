@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -235,13 +236,10 @@ func runVPN(configPath string) error {
 		subMgr.Start(ctx)
 	}
 
-	// === 11. Set default route via TUN (LAST — after all bypass routes) ===
-	if err := routeMgr.SetDefaultRoute(); err != nil {
-		return fmt.Errorf("failed to set default route: %w", err)
-	}
-
-	// === 11a. DNS Resolver (local DNS forwarder through VPN) ===
+	// === 11. DNS Resolver (local DNS forwarder — created and started now, ===
+	// === but routes and DNS interception are activated only when VPN tunnels connect) ===
 	var dnsResolver *gateway.DNSResolver
+	hasDNSResolver := false
 	if len(dnsConfig.TunnelIDs) > 0 && len(dnsConfig.FallbackServers) > 0 {
 		resolverCfg := gateway.DNSResolverConfig{
 			ListenAddr:     adapter.IP().String() + ":53",
@@ -254,24 +252,102 @@ func runVPN(configPath string) error {
 		if err := dnsResolver.Start(ctx); err != nil {
 			core.Log.Warnf("DNS", "Failed to start DNS resolver: %v", err)
 		} else {
-			resolverIP := []netip.Addr{adapter.IP()}
-			if err := adapter.SetDNS(resolverIP); err != nil {
-				core.Log.Warnf("DNS", "Failed to set DNS on TUN adapter: %v", err)
-			} else {
-				core.Log.Infof("DNS", "TUN adapter DNS → %s (local resolver)", adapter.IP())
-			}
+			hasDNSResolver = true
+		}
+	}
 
+	// === 11a. Gateway activation controller ===
+	// Routes, DNS interception, and WFP per-process blocking are ONLY active
+	// when at least one VPN tunnel (excluding __direct__) is UP.
+	// This ensures unmatched traffic always flows through the real NIC normally.
+	var (
+		gwMu     sync.Mutex
+		gwActive bool
+	)
+
+	activateGateway := func() {
+		gwMu.Lock()
+		defer gwMu.Unlock()
+		if gwActive {
+			return
+		}
+
+		if err := routeMgr.SetDefaultRoute(); err != nil {
+			core.Log.Errorf("Core", "Failed to set default route on activation: %v", err)
+			return
+		}
+
+		if hasDNSResolver {
+			if err := adapter.SetDNS([]netip.Addr{adapter.IP()}); err != nil {
+				core.Log.Warnf("DNS", "Failed to set DNS on TUN adapter: %v", err)
+			}
 			if err := wfpMgr.BlockDNSOnInterface(realNIC.LUID); err != nil {
 				core.Log.Warnf("DNS", "Failed to add DNS leak protection: %v", err)
 			}
-
-			// Allow our own process to send DNS through the real NIC,
-			// so the DNS resolver can fall back to direct when VPN tunnels are down.
 			if err := wfpMgr.PermitDNSForSelf(realNIC.LUID); err != nil {
 				core.Log.Warnf("DNS", "Failed to add DNS self-permit: %v", err)
 			}
 		}
+
+		gwActive = true
+		core.Log.Infof("Core", "Gateway activated (VPN tunnel available)")
 	}
+
+	deactivateGateway := func() {
+		gwMu.Lock()
+		defer gwMu.Unlock()
+		if !gwActive {
+			return
+		}
+
+		// Remove per-process WFP rules first — they block apps on real NIC.
+		wfpMgr.UnblockAllProcesses()
+
+		if err := routeMgr.RemoveDefaultRoute(); err != nil {
+			core.Log.Warnf("Route", "Failed to remove default route: %v", err)
+		}
+
+		if hasDNSResolver {
+			wfpMgr.UnblockDNSOnInterface()
+			wfpMgr.RemoveDNSPermitForSelf()
+			if err := adapter.ClearDNS(); err != nil {
+				core.Log.Warnf("DNS", "Failed to clear TUN DNS: %v", err)
+			}
+		}
+
+		gwActive = false
+		core.Log.Infof("Core", "Gateway deactivated (no VPN tunnels)")
+	}
+
+	// Subscribe to tunnel state changes — activate/deactivate gateway dynamically.
+	bus.Subscribe(core.EventTunnelStateChanged, func(e core.Event) {
+		payload, ok := e.Payload.(core.TunnelStatePayload)
+		if !ok {
+			return
+		}
+		// Ignore the direct tunnel — it's always up.
+		if payload.TunnelID == gateway.DirectTunnelID {
+			return
+		}
+
+		// Count active VPN tunnels (excluding __direct__).
+		vpnUp := 0
+		for _, entry := range registry.All() {
+			if entry.ID != gateway.DirectTunnelID && entry.State == core.TunnelStateUp {
+				vpnUp++
+			}
+		}
+
+		gwMu.Lock()
+		wasActive := gwActive
+		gwMu.Unlock()
+
+		if vpnUp > 0 && !wasActive {
+			activateGateway()
+		} else if vpnUp == 0 && wasActive {
+			deactivateGateway()
+		}
+	})
 
 	// === 11c. Domain-based routing ===
 	geositeFilePath := resolveRelativeToExe("geosite.dat")

@@ -62,6 +62,8 @@ type RouteManager interface {
 	RealNICInfo() RealNIC
 	// SetDefaultRoute adds default routes (0/1 + 128/1) through the TUN adapter.
 	SetDefaultRoute() error
+	// RemoveDefaultRoute removes the default routes while keeping bypass routes.
+	RemoveDefaultRoute() error
 	// AddBypassRoute adds a host route for a VPN server through the real NIC.
 	AddBypassRoute(dst netip.Addr) error
 	// Cleanup removes all routes added by this manager.

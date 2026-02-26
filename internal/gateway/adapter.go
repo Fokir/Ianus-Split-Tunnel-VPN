@@ -173,6 +173,22 @@ func (a *Adapter) SetDNS(servers []netip.Addr) error {
 	return nil
 }
 
+// ClearDNS removes DNS server configuration from the TUN adapter, restoring
+// default system DNS resolution via the real NIC.
+func (a *Adapter) ClearDNS() error {
+	out, err := exec.Command("netsh", "interface", "ipv4", "set", "dnsservers",
+		fmt.Sprintf("name=%d", a.ifIndex), "dhcp",
+	).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("clear dns: %s: %w", string(out), err)
+	}
+
+	// Flush DNS cache to apply immediately.
+	exec.Command("ipconfig", "/flushdns").Run()
+	core.Log.Infof("DNS", "TUN adapter DNS cleared")
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // IP configuration via iphlpapi.dll
 // ---------------------------------------------------------------------------

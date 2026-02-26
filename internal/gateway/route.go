@@ -24,8 +24,9 @@ type RouteManager struct {
 	tunLUID  uint64
 	realNIC  RealNIC
 
-	mu     sync.Mutex
-	routes []mibIPForwardRow2 // routes we've added (for cleanup)
+	mu            sync.Mutex
+	routes        []mibIPForwardRow2 // bypass routes we've added (for cleanup)
+	defaultRoutes []mibIPForwardRow2 // default split routes (0/1 + 128/1), managed separately
 }
 
 // NewRouteManager creates a route manager for the given TUN adapter.
@@ -67,9 +68,16 @@ func (rm *RouteManager) RealNICInfo() RealNIC { return rm.realNIC }
 // This captures all traffic without replacing the actual 0.0.0.0/0 entry.
 // Also adds backup split routes via real NIC (high metric) so that the direct
 // provider's IP_UNICAST_IF can find matching routes on the real NIC interface.
+//
+// These routes are tracked separately so they can be removed via RemoveDefaultRoute
+// without affecting bypass routes.
 func (rm *RouteManager) SetDefaultRoute() error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
+
+	if len(rm.defaultRoutes) > 0 {
+		return nil // already set
+	}
 
 	// Backup split routes via real NIC (high metric, used by IP_UNICAST_IF).
 	// Without these, IP_UNICAST_IF has no /1 route on the real NIC and TCP
@@ -77,20 +85,56 @@ func (rm *RouteManager) SetDefaultRoute() error {
 	const backupMetric = 9999
 	for _, prefix := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
 		p := netip.MustParsePrefix(prefix)
-		if err := rm.addRouteWithMetric(p, rm.realNIC.LUID, rm.realNIC.Gateway, backupMetric); err != nil {
+		row, err := rm.createRoute(p, rm.realNIC.LUID, rm.realNIC.Gateway, backupMetric)
+		if err != nil {
 			core.Log.Warnf("Route", "Backup route %s via real NIC: %v", prefix, err)
+			continue
 		}
+		rm.defaultRoutes = append(rm.defaultRoutes, row)
 	}
 
 	// Primary split routes via TUN (metric 0, captures all traffic).
-	if err := rm.addRoute(netip.MustParsePrefix("0.0.0.0/1"), rm.tunLUID, netip.Addr{}); err != nil {
+	row, err := rm.createRoute(netip.MustParsePrefix("0.0.0.0/1"), rm.tunLUID, netip.Addr{}, 0)
+	if err != nil {
 		return fmt.Errorf("[Route] add 0.0.0.0/1: %w", err)
 	}
-	if err := rm.addRoute(netip.MustParsePrefix("128.0.0.0/1"), rm.tunLUID, netip.Addr{}); err != nil {
+	rm.defaultRoutes = append(rm.defaultRoutes, row)
+
+	row, err = rm.createRoute(netip.MustParsePrefix("128.0.0.0/1"), rm.tunLUID, netip.Addr{}, 0)
+	if err != nil {
 		return fmt.Errorf("[Route] add 128.0.0.0/1: %w", err)
 	}
+	rm.defaultRoutes = append(rm.defaultRoutes, row)
 
 	core.Log.Infof("Route", "Default routes set via TUN")
+	return nil
+}
+
+// RemoveDefaultRoute removes the default split routes (0.0.0.0/1 + 128.0.0.0/1)
+// while keeping bypass routes intact. This is used to deactivate the gateway
+// when no VPN tunnels are active.
+func (rm *RouteManager) RemoveDefaultRoute() error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	if len(rm.defaultRoutes) == 0 {
+		return nil // not set
+	}
+
+	var lastErr error
+	for _, row := range rm.defaultRoutes {
+		r, _, _ := procDeleteIpForwardEntry2.Call(uintptr(unsafe.Pointer(&row)))
+		if r != 0 {
+			lastErr = fmt.Errorf("DeleteIpForwardEntry2: 0x%x", r)
+		}
+	}
+	rm.defaultRoutes = nil
+
+	if lastErr != nil {
+		core.Log.Warnf("Route", "RemoveDefaultRoute completed with errors: %v", lastErr)
+		return lastErr
+	}
+	core.Log.Infof("Route", "Default routes removed")
 	return nil
 }
 
@@ -115,6 +159,14 @@ func (rm *RouteManager) Cleanup() error {
 	defer rm.mu.Unlock()
 
 	var lastErr error
+	for _, row := range rm.defaultRoutes {
+		r, _, _ := procDeleteIpForwardEntry2.Call(uintptr(unsafe.Pointer(&row)))
+		if r != 0 {
+			lastErr = fmt.Errorf("DeleteIpForwardEntry2: 0x%x", r)
+		}
+	}
+	rm.defaultRoutes = nil
+
 	for _, row := range rm.routes {
 		r, _, _ := procDeleteIpForwardEntry2.Call(uintptr(unsafe.Pointer(&row)))
 		if r != 0 {
@@ -182,7 +234,9 @@ const (
 	fwdOrigin         = 100 // NL_ROUTE_ORIGIN
 )
 
-func (rm *RouteManager) addRouteWithMetric(dst netip.Prefix, luid uint64, nextHop netip.Addr, metric uint32) error {
+// createRoute creates a route entry in the system routing table and returns
+// the row for later deletion. Does NOT append to any tracking slice.
+func (rm *RouteManager) createRoute(dst netip.Prefix, luid uint64, nextHop netip.Addr, metric uint32) (mibIPForwardRow2, error) {
 	var row mibIPForwardRow2
 	initIpForwardEntry(&row)
 
@@ -210,9 +264,17 @@ func (rm *RouteManager) addRouteWithMetric(dst netip.Prefix, luid uint64, nextHo
 	r, _, _ := procCreateIpForwardEntry2.Call(uintptr(unsafe.Pointer(&row)))
 	// ERROR_OBJECT_ALREADY_EXISTS can come as HRESULT 0x80071392 or Win32 0x1392.
 	if r != 0 && r != 0x80071392 && r != 0x1392 {
-		return fmt.Errorf("CreateIpForwardEntry2 failed: 0x%x", r)
+		return row, fmt.Errorf("CreateIpForwardEntry2 failed: 0x%x", r)
 	}
 
+	return row, nil
+}
+
+func (rm *RouteManager) addRouteWithMetric(dst netip.Prefix, luid uint64, nextHop netip.Addr, metric uint32) error {
+	row, err := rm.createRoute(dst, luid, nextHop, metric)
+	if err != nil {
+		return err
+	}
 	rm.routes = append(rm.routes, row)
 	return nil
 }

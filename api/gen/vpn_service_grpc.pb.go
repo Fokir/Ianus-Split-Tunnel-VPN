@@ -20,39 +20,41 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	VPNService_GetStatus_FullMethodName             = "/awg.vpn.v1.VPNService/GetStatus"
-	VPNService_Shutdown_FullMethodName              = "/awg.vpn.v1.VPNService/Shutdown"
-	VPNService_ListTunnels_FullMethodName           = "/awg.vpn.v1.VPNService/ListTunnels"
-	VPNService_GetTunnel_FullMethodName             = "/awg.vpn.v1.VPNService/GetTunnel"
-	VPNService_AddTunnel_FullMethodName             = "/awg.vpn.v1.VPNService/AddTunnel"
-	VPNService_RemoveTunnel_FullMethodName          = "/awg.vpn.v1.VPNService/RemoveTunnel"
-	VPNService_UpdateTunnel_FullMethodName          = "/awg.vpn.v1.VPNService/UpdateTunnel"
-	VPNService_Connect_FullMethodName               = "/awg.vpn.v1.VPNService/Connect"
-	VPNService_Disconnect_FullMethodName            = "/awg.vpn.v1.VPNService/Disconnect"
-	VPNService_RestartTunnel_FullMethodName         = "/awg.vpn.v1.VPNService/RestartTunnel"
-	VPNService_SaveTunnelOrder_FullMethodName       = "/awg.vpn.v1.VPNService/SaveTunnelOrder"
-	VPNService_ListRules_FullMethodName             = "/awg.vpn.v1.VPNService/ListRules"
-	VPNService_SaveRules_FullMethodName             = "/awg.vpn.v1.VPNService/SaveRules"
-	VPNService_ListDomainRules_FullMethodName       = "/awg.vpn.v1.VPNService/ListDomainRules"
-	VPNService_SaveDomainRules_FullMethodName       = "/awg.vpn.v1.VPNService/SaveDomainRules"
-	VPNService_ListGeositeCategories_FullMethodName = "/awg.vpn.v1.VPNService/ListGeositeCategories"
-	VPNService_ListGeoIPCategories_FullMethodName   = "/awg.vpn.v1.VPNService/ListGeoIPCategories"
-	VPNService_UpdateGeosite_FullMethodName         = "/awg.vpn.v1.VPNService/UpdateGeosite"
-	VPNService_GetConfig_FullMethodName             = "/awg.vpn.v1.VPNService/GetConfig"
-	VPNService_SaveConfig_FullMethodName            = "/awg.vpn.v1.VPNService/SaveConfig"
-	VPNService_StreamLogs_FullMethodName            = "/awg.vpn.v1.VPNService/StreamLogs"
-	VPNService_StreamStats_FullMethodName           = "/awg.vpn.v1.VPNService/StreamStats"
-	VPNService_ListProcesses_FullMethodName         = "/awg.vpn.v1.VPNService/ListProcesses"
-	VPNService_GetAutostart_FullMethodName          = "/awg.vpn.v1.VPNService/GetAutostart"
-	VPNService_SetAutostart_FullMethodName          = "/awg.vpn.v1.VPNService/SetAutostart"
-	VPNService_ListSubscriptions_FullMethodName     = "/awg.vpn.v1.VPNService/ListSubscriptions"
-	VPNService_AddSubscription_FullMethodName       = "/awg.vpn.v1.VPNService/AddSubscription"
-	VPNService_RemoveSubscription_FullMethodName    = "/awg.vpn.v1.VPNService/RemoveSubscription"
-	VPNService_RefreshSubscription_FullMethodName   = "/awg.vpn.v1.VPNService/RefreshSubscription"
-	VPNService_RestoreConnections_FullMethodName    = "/awg.vpn.v1.VPNService/RestoreConnections"
-	VPNService_FlushDNS_FullMethodName             = "/awg.vpn.v1.VPNService/FlushDNS"
-	VPNService_CheckUpdate_FullMethodName           = "/awg.vpn.v1.VPNService/CheckUpdate"
-	VPNService_ApplyUpdate_FullMethodName           = "/awg.vpn.v1.VPNService/ApplyUpdate"
+	VPNService_GetStatus_FullMethodName                = "/awg.vpn.v1.VPNService/GetStatus"
+	VPNService_Shutdown_FullMethodName                 = "/awg.vpn.v1.VPNService/Shutdown"
+	VPNService_ListTunnels_FullMethodName              = "/awg.vpn.v1.VPNService/ListTunnels"
+	VPNService_GetTunnel_FullMethodName                = "/awg.vpn.v1.VPNService/GetTunnel"
+	VPNService_AddTunnel_FullMethodName                = "/awg.vpn.v1.VPNService/AddTunnel"
+	VPNService_RemoveTunnel_FullMethodName             = "/awg.vpn.v1.VPNService/RemoveTunnel"
+	VPNService_UpdateTunnel_FullMethodName             = "/awg.vpn.v1.VPNService/UpdateTunnel"
+	VPNService_Connect_FullMethodName                  = "/awg.vpn.v1.VPNService/Connect"
+	VPNService_Disconnect_FullMethodName               = "/awg.vpn.v1.VPNService/Disconnect"
+	VPNService_RestartTunnel_FullMethodName            = "/awg.vpn.v1.VPNService/RestartTunnel"
+	VPNService_SaveTunnelOrder_FullMethodName          = "/awg.vpn.v1.VPNService/SaveTunnelOrder"
+	VPNService_ListRules_FullMethodName                = "/awg.vpn.v1.VPNService/ListRules"
+	VPNService_SaveRules_FullMethodName                = "/awg.vpn.v1.VPNService/SaveRules"
+	VPNService_ListDomainRules_FullMethodName          = "/awg.vpn.v1.VPNService/ListDomainRules"
+	VPNService_SaveDomainRules_FullMethodName          = "/awg.vpn.v1.VPNService/SaveDomainRules"
+	VPNService_ListGeositeCategories_FullMethodName    = "/awg.vpn.v1.VPNService/ListGeositeCategories"
+	VPNService_ListGeoIPCategories_FullMethodName      = "/awg.vpn.v1.VPNService/ListGeoIPCategories"
+	VPNService_UpdateGeosite_FullMethodName            = "/awg.vpn.v1.VPNService/UpdateGeosite"
+	VPNService_GetConfig_FullMethodName                = "/awg.vpn.v1.VPNService/GetConfig"
+	VPNService_SaveConfig_FullMethodName               = "/awg.vpn.v1.VPNService/SaveConfig"
+	VPNService_StreamLogs_FullMethodName               = "/awg.vpn.v1.VPNService/StreamLogs"
+	VPNService_StreamStats_FullMethodName              = "/awg.vpn.v1.VPNService/StreamStats"
+	VPNService_ListProcesses_FullMethodName            = "/awg.vpn.v1.VPNService/ListProcesses"
+	VPNService_GetAutostart_FullMethodName             = "/awg.vpn.v1.VPNService/GetAutostart"
+	VPNService_SetAutostart_FullMethodName             = "/awg.vpn.v1.VPNService/SetAutostart"
+	VPNService_ListSubscriptions_FullMethodName        = "/awg.vpn.v1.VPNService/ListSubscriptions"
+	VPNService_AddSubscription_FullMethodName          = "/awg.vpn.v1.VPNService/AddSubscription"
+	VPNService_RemoveSubscription_FullMethodName       = "/awg.vpn.v1.VPNService/RemoveSubscription"
+	VPNService_RefreshSubscription_FullMethodName      = "/awg.vpn.v1.VPNService/RefreshSubscription"
+	VPNService_RestoreConnections_FullMethodName       = "/awg.vpn.v1.VPNService/RestoreConnections"
+	VPNService_FlushDNS_FullMethodName                 = "/awg.vpn.v1.VPNService/FlushDNS"
+	VPNService_CheckUpdate_FullMethodName              = "/awg.vpn.v1.VPNService/CheckUpdate"
+	VPNService_ApplyUpdate_FullMethodName              = "/awg.vpn.v1.VPNService/ApplyUpdate"
+	VPNService_CheckConflictingServices_FullMethodName = "/awg.vpn.v1.VPNService/CheckConflictingServices"
+	VPNService_StopConflictingServices_FullMethodName  = "/awg.vpn.v1.VPNService/StopConflictingServices"
 )
 
 // VPNServiceClient is the client API for VPNService service.
@@ -104,6 +106,9 @@ type VPNServiceClient interface {
 	// -- Updates --
 	CheckUpdate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*CheckUpdateResponse, error)
 	ApplyUpdate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ApplyUpdateResponse, error)
+	// -- Conflicting services --
+	CheckConflictingServices(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConflictingServicesResponse, error)
+	StopConflictingServices(ctx context.Context, in *StopConflictingServicesRequest, opts ...grpc.CallOption) (*StopConflictingServicesResponse, error)
 }
 
 type vPNServiceClient struct {
@@ -462,6 +467,26 @@ func (c *vPNServiceClient) ApplyUpdate(ctx context.Context, in *emptypb.Empty, o
 	return out, nil
 }
 
+func (c *vPNServiceClient) CheckConflictingServices(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConflictingServicesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConflictingServicesResponse)
+	err := c.cc.Invoke(ctx, VPNService_CheckConflictingServices_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) StopConflictingServices(ctx context.Context, in *StopConflictingServicesRequest, opts ...grpc.CallOption) (*StopConflictingServicesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StopConflictingServicesResponse)
+	err := c.cc.Invoke(ctx, VPNService_StopConflictingServices_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VPNServiceServer is the server API for VPNService service.
 // All implementations must embed UnimplementedVPNServiceServer
 // for forward compatibility.
@@ -511,6 +536,9 @@ type VPNServiceServer interface {
 	// -- Updates --
 	CheckUpdate(context.Context, *emptypb.Empty) (*CheckUpdateResponse, error)
 	ApplyUpdate(context.Context, *emptypb.Empty) (*ApplyUpdateResponse, error)
+	// -- Conflicting services --
+	CheckConflictingServices(context.Context, *emptypb.Empty) (*ConflictingServicesResponse, error)
+	StopConflictingServices(context.Context, *StopConflictingServicesRequest) (*StopConflictingServicesResponse, error)
 	mustEmbedUnimplementedVPNServiceServer()
 }
 
@@ -619,6 +647,12 @@ func (UnimplementedVPNServiceServer) CheckUpdate(context.Context, *emptypb.Empty
 }
 func (UnimplementedVPNServiceServer) ApplyUpdate(context.Context, *emptypb.Empty) (*ApplyUpdateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplyUpdate not implemented")
+}
+func (UnimplementedVPNServiceServer) CheckConflictingServices(context.Context, *emptypb.Empty) (*ConflictingServicesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckConflictingServices not implemented")
+}
+func (UnimplementedVPNServiceServer) StopConflictingServices(context.Context, *StopConflictingServicesRequest) (*StopConflictingServicesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StopConflictingServices not implemented")
 }
 func (UnimplementedVPNServiceServer) mustEmbedUnimplementedVPNServiceServer() {}
 func (UnimplementedVPNServiceServer) testEmbeddedByValue()                    {}
@@ -1221,6 +1255,42 @@ func _VPNService_ApplyUpdate_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VPNService_CheckConflictingServices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).CheckConflictingServices(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_CheckConflictingServices_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).CheckConflictingServices(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_StopConflictingServices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopConflictingServicesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).StopConflictingServices(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_StopConflictingServices_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).StopConflictingServices(ctx, req.(*StopConflictingServicesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // VPNService_ServiceDesc is the grpc.ServiceDesc for VPNService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1351,6 +1421,14 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ApplyUpdate",
 			Handler:    _VPNService_ApplyUpdate_Handler,
+		},
+		{
+			MethodName: "CheckConflictingServices",
+			Handler:    _VPNService_CheckConflictingServices_Handler,
+		},
+		{
+			MethodName: "StopConflictingServices",
+			Handler:    _VPNService_StopConflictingServices_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

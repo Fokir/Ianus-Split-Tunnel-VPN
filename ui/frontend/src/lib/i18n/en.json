@@ -319,6 +319,18 @@
     "discard": "Discard",
     "stay": "Stay"
   },
+  "conflicting": {
+    "title": "Conflicting services detected",
+    "message": "The following programs may conflict with the VPN client and cause network issues. We recommend stopping them before use.",
+    "service": "Service",
+    "process": "Process",
+    "stopAll": "Stop all",
+    "ignore": "Ignore",
+    "stopping": "Stopping...",
+    "stopped": "Successfully stopped",
+    "partialError": "Failed to stop: {names}",
+    "dontShowAgain": "Don't show again"
+  },
   "time": {
     "h": "h",
     "m": "m",
