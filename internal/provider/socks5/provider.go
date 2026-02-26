@@ -65,9 +65,8 @@ func (p *Provider) Connect(ctx context.Context) error {
 	defer p.mu.Unlock()
 
 	p.state = core.TunnelStateConnecting
-	core.Log.Infof("SOCKS5", "Connecting tunnel %q to %s:%d...", p.name, p.config.Server, p.config.Port)
-
-	serverStr := fmt.Sprintf("%s:%d", p.config.Server, p.config.Port)
+	serverStr := net.JoinHostPort(p.config.Server, fmt.Sprintf("%d", p.config.Port))
+	core.Log.Infof("SOCKS5", "Connecting tunnel %q to %s...", p.name, serverStr)
 
 	// Resolve server address for bypass routes.
 	if ap, err := netip.ParseAddrPort(serverStr); err == nil {
@@ -170,7 +169,7 @@ func (p *Provider) DialUDP(ctx context.Context, addr string) (net.Conn, error) {
 		return nil, provider.ErrUDPNotSupported
 	}
 
-	serverStr := fmt.Sprintf("%s:%d", p.config.Server, p.config.Port)
+	serverStr := net.JoinHostPort(p.config.Server, fmt.Sprintf("%d", p.config.Port))
 
 	var auth *socks5Auth
 	if p.config.Username != "" {

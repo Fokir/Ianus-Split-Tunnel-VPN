@@ -66,9 +66,8 @@ func (p *Provider) Connect(ctx context.Context) error {
 	defer p.mu.Unlock()
 
 	p.state = core.TunnelStateConnecting
-	core.Log.Infof("HTTP", "Connecting tunnel %q to %s:%d...", p.name, p.config.Server, p.config.Port)
-
-	serverStr := fmt.Sprintf("%s:%d", p.config.Server, p.config.Port)
+	serverStr := net.JoinHostPort(p.config.Server, fmt.Sprintf("%d", p.config.Port))
+	core.Log.Infof("HTTP", "Connecting tunnel %q to %s...", p.name, serverStr)
 
 	// Resolve server address for bypass routes.
 	if ap, err := netip.ParseAddrPort(serverStr); err == nil {
@@ -131,7 +130,7 @@ func (p *Provider) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
 		return nil, fmt.Errorf("[HTTP] tunnel %q is not up (state=%d)", p.name, state)
 	}
 
-	serverStr := fmt.Sprintf("%s:%d", p.config.Server, p.config.Port)
+	serverStr := net.JoinHostPort(p.config.Server, fmt.Sprintf("%d", p.config.Port))
 
 	// Connect to the proxy server.
 	d := net.Dialer{Timeout: 10 * time.Second}

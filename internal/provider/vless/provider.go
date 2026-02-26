@@ -77,10 +77,9 @@ func (p *Provider) Connect(ctx context.Context) error {
 	defer p.mu.Unlock()
 
 	p.state = core.TunnelStateConnecting
-	core.Log.Infof("VLESS", "Connecting tunnel %q to %s:%d...", p.name, p.config.Address, p.config.Port)
-
 	// Resolve server address for bypass routes.
-	serverStr := fmt.Sprintf("%s:%d", p.config.Address, p.config.Port)
+	serverStr := net.JoinHostPort(p.config.Address, fmt.Sprintf("%d", p.config.Port))
+	core.Log.Infof("VLESS", "Connecting tunnel %q to %s...", p.name, serverStr)
 	if ap, err := netip.ParseAddrPort(serverStr); err == nil {
 		p.serverAddr = ap
 	} else {

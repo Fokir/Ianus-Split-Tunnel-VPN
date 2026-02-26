@@ -304,7 +304,7 @@ func (c *udpAssociateConn) LocalAddr() net.Addr {
 
 // RemoteAddr returns the target address.
 func (c *udpAssociateConn) RemoteAddr() net.Addr {
-	ap, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", c.targetHost, c.targetPort))
+	ap, err := netip.ParseAddrPort(net.JoinHostPort(c.targetHost, fmt.Sprintf("%d", c.targetPort)))
 	if err != nil {
 		return c.relayAddr
 	}
