@@ -14,6 +14,7 @@ import (
 
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/gateway"
+	"awg-split-tunnel/internal/platform"
 	"awg-split-tunnel/internal/provider"
 	"awg-split-tunnel/internal/provider/amneziawg"
 	"awg-split-tunnel/internal/provider/direct"
@@ -40,9 +41,9 @@ type ControllerDeps struct {
 	Bus       *core.EventBus
 	Flows     *gateway.FlowTable
 	TUNRouter *gateway.TUNRouter
-	RouteMgr  *gateway.RouteManager
-	WFPMgr    *gateway.WFPManager
-	Adapter   *gateway.Adapter
+	RouteMgr  platform.RouteManager
+	WFPMgr    platform.ProcessFilter
+	Adapter   platform.TUNAdapter
 	DNSRouter *gateway.DNSRouter
 
 	// RealNIC info for direct provider and bypass routes.

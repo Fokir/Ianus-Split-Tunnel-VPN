@@ -16,14 +16,12 @@ import (
 )
 
 const (
-	adapterName     = "AWG Gateway"
-	adapterType     = "AWG"
-	ringCapacity    = 0x1000000 // 16 MiB ring buffer (was 8 MiB — reduces overflow under sustained upload)
-	tunIP           = "10.255.0.1"
-	tunPrefixLen    = 24
-	tunInterfaceMTU = 1400
-	tunMetric       = 5
-	maxPacketSize   = 65535 // max IPv4 packet; used for pre-allocated read buffer
+	adapterName  = "AWG Gateway"
+	adapterType  = "AWG"
+	ringCapacity = 0x1000000 // 16 MiB ring buffer (was 8 MiB — reduces overflow under sustained upload)
+	tunIP        = "10.255.0.1"
+	tunPrefixLen = 24
+	tunMetric    = 5
 )
 
 // Adapter wraps a WinTUN adapter with IP configuration.

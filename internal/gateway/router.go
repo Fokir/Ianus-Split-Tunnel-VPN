@@ -1,5 +1,3 @@
-//go:build windows
-
 package gateway
 
 import (
@@ -13,6 +11,7 @@ import (
 	"time"
 
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/platform"
 	"awg-split-tunnel/internal/process"
 	"awg-split-tunnel/internal/provider"
 )
@@ -20,20 +19,20 @@ import (
 // DirectTunnelID is the special tunnel ID for unmatched traffic routed via real NIC.
 const DirectTunnelID = "__direct__"
 
-// TUNRouter reads packets from the WinTUN adapter and performs:
-// - Process identification via GetExtendedTcpTable/UdpTable
+// TUNRouter reads packets from the TUN adapter and performs:
+// - Process identification (platform-specific PID lookup)
 // - Rule matching via RuleEngine
-// - Lazy WFP rule addition via WFPManager
+// - Lazy per-process filtering via ProcessFilter
 // - NAT hairpin redirect to appropriate tunnel proxy
 // - DNS routing via DNSRouter
 type TUNRouter struct {
-	adapter   *Adapter
+	adapter   platform.TUNAdapter
 	flows     *FlowTable
-	procID    *ProcessIdentifier
+	procID    platform.ProcessIdentifier
 	matcher   *process.Matcher
 	rules     *core.RuleEngine
 	registry  *core.TunnelRegistry
-	wfp       *WFPManager
+	wfp       platform.ProcessFilter
 	dnsRouter *DNSRouter
 	ipFilter  atomic.Pointer[IPFilter]
 
@@ -69,13 +68,13 @@ type TUNRouter struct {
 
 // NewTUNRouter creates a TUN router with all dependencies.
 func NewTUNRouter(
-	adapter *Adapter,
+	adapter platform.TUNAdapter,
 	flows *FlowTable,
-	procID *ProcessIdentifier,
+	procID platform.ProcessIdentifier,
 	matcher *process.Matcher,
 	rules *core.RuleEngine,
 	registry *core.TunnelRegistry,
-	wfp *WFPManager,
+	wfp platform.ProcessFilter,
 	dnsRouter *DNSRouter,
 ) *TUNRouter {
 	return &TUNRouter{

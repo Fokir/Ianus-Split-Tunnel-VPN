@@ -10,17 +10,14 @@ import (
 	"unsafe"
 
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/platform"
 
 	"golang.org/x/sys/windows"
 )
 
-// RealNIC holds information about the system's real internet-facing NIC.
-type RealNIC struct {
-	LUID    uint64
-	Index   uint32
-	Gateway netip.Addr
-	LocalIP netip.Addr // NIC's own IPv4 address
-}
+// RealNIC is an alias for platform.RealNIC so gateway code continues to compile
+// while the RouteManager satisfies the platform.RouteManager interface.
+type RealNIC = platform.RealNIC
 
 // RouteManager manages system routing table entries for the TUN gateway.
 type RouteManager struct {

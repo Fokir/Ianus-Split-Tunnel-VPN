@@ -1,5 +1,3 @@
-//go:build windows
-
 package process
 
 import (
@@ -9,15 +7,12 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
-
-	"golang.org/x/sys/windows"
 )
 
 // cachedPath holds a cached process path with pre-computed lowercase variants.
 type cachedPath struct {
-	exePath  string // original full path
-	exeLower string // strings.ToLower(exePath)
+	exePath   string // original full path
+	exeLower  string // strings.ToLower(exePath)
 	baseLower string // filepath.Base(exeLower)
 }
 
@@ -41,7 +36,7 @@ func (m *Matcher) GetExePath(pid uint32) (string, bool) {
 		return cp.exePath, true
 	}
 
-	// Query Windows for the process path.
+	// Query OS for the process path (platform-specific).
 	path, err := queryProcessPath(pid)
 	if err != nil {
 		return "", false
@@ -69,7 +64,7 @@ func (m *Matcher) GetExePathLower(pid uint32) (exePath, exeLower, baseLower stri
 		return cp.exePath, cp.exeLower, cp.baseLower, true
 	}
 
-	// Query Windows for the process path.
+	// Query OS for the process path (platform-specific).
 	path, err := queryProcessPath(pid)
 	if err != nil {
 		return "", "", "", false
@@ -113,7 +108,7 @@ func (m *Matcher) PurgeCache() {
 }
 
 // StartRevalidation periodically checks cached PIDs and removes entries for
-// processes that no longer exist. This prevents stale entries when Windows
+// processes that no longer exist. This prevents stale entries when the OS
 // reuses PIDs for different processes.
 func (m *Matcher) StartRevalidation(ctx context.Context) {
 	go func() {
@@ -261,26 +256,4 @@ func MatchPreprocessed(exeLower, baseLower, pattern, patternLower string) bool {
 
 	// Substring match in exe name.
 	return strings.Contains(baseLower, patternLower)
-}
-
-// queryProcessPath uses Windows API to get the executable path from a PID.
-func queryProcessPath(pid uint32) (string, error) {
-	handle, err := windows.OpenProcess(
-		windows.PROCESS_QUERY_LIMITED_INFORMATION,
-		false,
-		pid,
-	)
-	if err != nil {
-		return "", err
-	}
-	defer windows.CloseHandle(handle)
-
-	var buf [windows.MAX_PATH]uint16
-	size := uint32(len(buf))
-	err = windows.QueryFullProcessImageName(handle, 0, &buf[0], &size)
-	if err != nil {
-		return "", err
-	}
-
-	return windows.UTF16PtrToString((*uint16)(unsafe.Pointer(&buf[0]))), nil
 }
