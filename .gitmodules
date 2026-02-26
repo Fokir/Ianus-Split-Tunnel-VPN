@@ -12,7 +12,7 @@
 	url = https://github.com/google/gopacket.git
 [submodule "refs/amneziawg-go"]
 	path = refs/amneziawg-go
-	url = https://github.com/amnezia-vpn/amneziawg-go.git
+	url = https://github.com/Fokir/amneziawg-go.git
 [submodule "refs/amneziawg-windows-client"]
 	path = refs/amneziawg-windows-client
 	url = https://github.com/amnezia-vpn/amneziawg-windows-client.git
