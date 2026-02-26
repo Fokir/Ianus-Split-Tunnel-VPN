@@ -10,8 +10,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
+
+      - name: Init build-required submodules
+        run: git submodule update --init --depth 1 refs/amneziawg-go refs/tailscale-wf
 
       - uses: actions/setup-go@v5
         with:
@@ -111,8 +113,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
+
+      - name: Init build-required submodules
+        run: git submodule update --init --depth 1 refs/amneziawg-go refs/tailscale-wf
 
       - uses: actions/setup-go@v5
         with:
