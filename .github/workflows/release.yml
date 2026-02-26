@@ -84,6 +84,12 @@ jobs:
           go build -ldflags "$LDFLAGS" -o build/awg-split-tunnel-diag.exe ./cmd/awg-diag/
           cp dll/wintun.dll build/
 
+      - name: Download WebView2 bootstrapper
+        shell: bash
+        run: |
+          curl -fsSL "https://go.microsoft.com/fwlink/p/?LinkId=2124703" \
+            -o ui/build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+
       - name: Build NSIS installer
         shell: bash
         run: |
