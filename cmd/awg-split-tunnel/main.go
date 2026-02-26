@@ -143,7 +143,13 @@ func runVPN(configPath string) error {
 		return fmt.Errorf("failed to create WFP manager: %w", err)
 	}
 
-	// === 4a. Block all IPv6 traffic ===
+	// === 4a. Cleanup conflicting WFP filters from previous sessions ===
+	// Must run BEFORE our rules to prevent conflicts with WinDivert, GearUP, etc.
+	if err := gateway.CleanupConflictingWFP(); err != nil {
+		core.Log.Warnf("WFP", "Pre-startup WFP cleanup: %v", err)
+	}
+
+	// === 4b. Block all IPv6 traffic ===
 	if err := wfpMgr.BlockAllIPv6(); err != nil {
 		core.Log.Warnf("WFP", "Failed to block IPv6: %v", err)
 	}
@@ -270,6 +276,12 @@ func runVPN(configPath string) error {
 		defer gwMu.Unlock()
 		if gwActive {
 			return
+		}
+
+		// Cleanup conflicting WFP filters that may have appeared since startup
+		// (e.g. user launched zapret/GearUP after our service started).
+		if err := gateway.CleanupConflictingWFP(); err != nil {
+			core.Log.Warnf("WFP", "Pre-activation WFP cleanup: %v", err)
 		}
 
 		if err := routeMgr.SetDefaultRoute(); err != nil {
