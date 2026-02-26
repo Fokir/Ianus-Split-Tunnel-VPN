@@ -64,12 +64,15 @@ func NewWFPManager(tunLUID uint64) (*WFPManager, error) {
 		return nil, fmt.Errorf("[WFP] add provider: %w", err)
 	}
 
-	// Register our sublayer.
+	// Register our sublayer with maximum weight to ensure our rules take
+	// precedence over third-party WFP filters (antivirus, firewalls, etc.).
+	// Callout drivers bypass weight-based arbitration, so they must be
+	// detected and stopped separately.
 	if err := sess.AddSublayer(&wf.Sublayer{
 		ID:       awgSublayerID,
 		Name:     "AWG Split Tunnel Rules",
 		Provider: awgProviderID,
-		Weight:   0x0F, // high priority
+		Weight:   0xFFFF, // maximum priority
 	}); err != nil {
 		sess.Close()
 		return nil, fmt.Errorf("[WFP] add sublayer: %w", err)
@@ -637,6 +640,104 @@ func providerIn(pid wf.ProviderID, list []wf.ProviderID) bool {
 		}
 	}
 	return false
+}
+
+// ConflictingWFPProvider describes a third-party WFP provider that has callout
+// rules which may conflict with our TUN routing.
+type ConflictingWFPProvider struct {
+	Name         string // provider name (e.g. "WinDivert")
+	Description  string // provider description
+	CalloutRules int    // number of callout-based rules
+	TotalRules   int    // total rules from this provider
+}
+
+// DetectConflictingWFPCallouts opens a temporary WFP session and enumerates all
+// rules looking for third-party callout-based filters. Callout drivers (like
+// WinDivert, GearUP, npcap) intercept packets at the kernel level and bypass
+// normal WFP weight-based arbitration — they are the primary source of routing
+// conflicts that cannot be resolved by simply increasing our sublayer weight.
+//
+// Returns a list of conflicting providers with callout rules. Returns nil if
+// no conflicts are found.
+func DetectConflictingWFPCallouts() ([]ConflictingWFPProvider, error) {
+	sess, err := wf.New(&wf.Options{
+		Name:        "AWG WFP Conflict Detection",
+		Description: "Temporary session for detecting conflicting WFP callouts",
+		Dynamic:     true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("[WFP] open detection session: %w", err)
+	}
+	defer sess.Close()
+
+	// Build a set of known safe provider IDs to exclude from conflict detection.
+	// We exclude our own provider and zero (unowned system rules).
+	safeProviders := map[wf.ProviderID]bool{
+		awgProviderID:    true,
+		wf.ProviderID{}: true, // unowned / system rules
+	}
+
+	// Enumerate providers to build a name map and identify Microsoft/system providers.
+	providers, err := sess.Providers()
+	if err != nil {
+		return nil, fmt.Errorf("[WFP] enumerate providers: %w", err)
+	}
+	providerNames := make(map[wf.ProviderID]string)
+	providerDescs := make(map[wf.ProviderID]string)
+	for _, p := range providers {
+		providerNames[p.ID] = p.Name
+		providerDescs[p.ID] = p.Description
+		// Mark Microsoft/system providers as safe — they don't conflict with
+		// VPN routing (Windows Firewall, IPsec, etc.).
+		lower := strings.ToLower(p.Name + " " + p.Description)
+		if strings.Contains(lower, "microsoft") ||
+			strings.Contains(lower, "windows") ||
+			p.Name == "" {
+			safeProviders[p.ID] = true
+		}
+	}
+
+	// Enumerate all rules and find callout-based ones from third-party providers.
+	rules, err := sess.Rules()
+	if err != nil {
+		return nil, fmt.Errorf("[WFP] enumerate rules: %w", err)
+	}
+
+	type providerStats struct {
+		calloutRules int
+		totalRules   int
+	}
+	stats := make(map[wf.ProviderID]*providerStats)
+
+	for _, r := range rules {
+		if safeProviders[r.Provider] {
+			continue
+		}
+		if stats[r.Provider] == nil {
+			stats[r.Provider] = &providerStats{}
+		}
+		stats[r.Provider].totalRules++
+		if r.Action == wf.ActionCalloutTerminating ||
+			r.Action == wf.ActionCalloutInspection ||
+			r.Action == wf.ActionCalloutUnknown {
+			stats[r.Provider].calloutRules++
+		}
+	}
+
+	// Build result — only include providers with callout rules.
+	var result []ConflictingWFPProvider
+	for pid, s := range stats {
+		if s.calloutRules > 0 {
+			result = append(result, ConflictingWFPProvider{
+				Name:         providerNames[pid],
+				Description:  providerDescs[pid],
+				CalloutRules: s.calloutRules,
+				TotalRules:   s.totalRules,
+			})
+		}
+	}
+
+	return result, nil
 }
 
 func (w *WFPManager) nextRuleID() wf.RuleID {

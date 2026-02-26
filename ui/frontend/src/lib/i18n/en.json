@@ -324,6 +324,7 @@
     "message": "The following programs may conflict with the VPN client and cause network issues. We recommend stopping them before use.",
     "service": "Service",
     "process": "Process",
+    "wfpCallout": "WFP Driver",
     "stopAll": "Stop all",
     "ignore": "Ignore",
     "stopping": "Stopping...",

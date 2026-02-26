@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/gateway"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
@@ -86,6 +87,31 @@ func CheckConflictingServices() []ConflictingServiceInfo {
 				Type:        "process",
 				Running:     true,
 				Description: p.Description,
+			})
+		}
+	}
+
+	// Auto-detect unknown third-party WFP callout drivers.
+	// This catches conflicts from software we don't know about yet.
+	if callouts, err := gateway.DetectConflictingWFPCallouts(); err == nil {
+		// Deduplicate: skip providers whose name matches already detected services.
+		knownNames := make(map[string]bool)
+		for _, r := range result {
+			knownNames[strings.ToLower(r.DisplayName)] = true
+			knownNames[strings.ToLower(r.Name)] = true
+		}
+		for _, c := range callouts {
+			lowerName := strings.ToLower(c.Name)
+			if knownNames[lowerName] {
+				continue
+			}
+			desc := fmt.Sprintf("Third-party WFP callout driver with %d packet interception rules", c.CalloutRules)
+			result = append(result, ConflictingServiceInfo{
+				Name:        c.Name,
+				DisplayName: c.Name,
+				Type:        "wfp_callout",
+				Running:     true,
+				Description: desc,
 			})
 		}
 	}

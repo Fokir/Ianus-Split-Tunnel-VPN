@@ -74,7 +74,7 @@
           <div class="min-w-0 flex-1">
             <div class="text-sm font-medium text-zinc-200 truncate">{svc.displayName}</div>
             <div class="text-xs text-zinc-500 truncate">
-              {svc.type === 'service' ? $t('conflicting.service') : $t('conflicting.process')}: {svc.name}
+              {svc.type === 'service' ? $t('conflicting.service') : svc.type === 'wfp_callout' ? $t('conflicting.wfpCallout') : $t('conflicting.process')}: {svc.name}
             </div>
           </div>
         </div>
