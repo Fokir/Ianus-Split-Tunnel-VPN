@@ -11,9 +11,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Only init submodules required for build (go.mod replace directives).
+      # Other refs/* submodules are reference-only and may use SSH URLs.
+      - name: Init build-required submodules
+        run: git submodule update --init --depth 1 refs/amneziawg-go refs/tailscale-wf
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      # Create a stub embed directory so ui/ package compiles in CI.
+      - name: Create UI embed stub
+        run: mkdir -p ui/frontend/dist && touch ui/frontend/dist/.gitkeep
 
       - name: Go vet (Windows)
         env:
