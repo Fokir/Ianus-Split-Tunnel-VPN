@@ -134,7 +134,15 @@ domain_rules:
 2. Extract to any directory
 3. Run `awg-split-tunnel.exe`
 
-### macOS (daemon only)
+### macOS — GUI + Daemon
+
+1. Download **[AWG-Split-Tunnel-\*-darwin-universal.dmg](https://github.com/Fokir/Ianus-Split-Tunnel-VPN/releases/latest)** from the latest release
+2. Open the DMG and drag **AWG Split Tunnel** to Applications
+3. The GUI runs as a menu bar app and communicates with the daemon via gRPC
+
+> The daemon must be installed separately (see below). The GUI is a menu bar application — it does not appear in the Dock.
+
+### macOS — Daemon
 
 Download the appropriate tarball from the [latest release](https://github.com/Fokir/Ianus-Split-Tunnel-VPN/releases/latest):
 
@@ -417,7 +425,15 @@ domain_rules:
 2. Распакуйте в любую папку
 3. Запустите `awg-split-tunnel.exe`
 
-### macOS (только daemon)
+### macOS — GUI + Daemon
+
+1. Скачайте **[AWG-Split-Tunnel-\*-darwin-universal.dmg](https://github.com/Fokir/Ianus-Split-Tunnel-VPN/releases/latest)** из последнего релиза
+2. Откройте DMG и перетащите **AWG Split Tunnel** в Applications
+3. GUI работает как приложение в меню баре и связывается с daemon через gRPC
+
+> Daemon нужно установить отдельно (см. ниже). GUI отображается только в меню баре, не в Dock.
+
+### macOS — Daemon
 
 Скачайте подходящий архив из [последнего релиза](https://github.com/Fokir/Ianus-Split-Tunnel-VPN/releases/latest):
 

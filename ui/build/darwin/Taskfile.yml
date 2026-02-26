@@ -32,11 +32,11 @@ tasks:
     internal: true
     cmds:
       - mkdir -p "{{.BIN_DIR}}"
-      # arm64
-      - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64
+      # arm64 (CGO required for Wails v3 WKWebView bridge)
+      - CGO_ENABLED=1 GOOS=darwin GOARCH=arm64
         go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/awg-split-tunnel-gui-arm64"
       # amd64
-      - CGO_ENABLED=0 GOOS=darwin GOARCH=amd64
+      - CGO_ENABLED=1 GOOS=darwin GOARCH=amd64
         go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/awg-split-tunnel-gui-amd64"
       # Universal binary
       - lipo -create -output "{{.BIN_DIR}}/awg-split-tunnel-gui"

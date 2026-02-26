@@ -191,16 +191,122 @@ jobs:
           path: build/awg-split-tunnel-v*-darwin-*.tar.gz
           retention-days: 5
 
-  # build-macos-gui:
-  #   runs-on: macos-14
-  #   steps:
-  #     # Uncomment when macOS GUI is fully implemented and tested.
-  #     # Requires CGO_ENABLED=1 for Wails v3 WKWebView bridge.
-  #     # See ui/main_darwin.go and ui/build/darwin/Taskfile.yml for details.
-  #     - run: echo "macOS GUI build placeholder — enable after GUI implementation"
+  build-macos-gui:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Init build-required submodules
+        run: git submodule update --init --depth 1 refs/amneziawg-go refs/tailscale-wf
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/frontend/package-lock.json
+
+      - name: Extract version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          COMMIT="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "LDFLAGS=-s -w -X main.version=$VERSION -X main.commit=$COMMIT -X main.buildDate=$DATE" >> $GITHUB_ENV
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+
+      - name: Install frontend dependencies
+        working-directory: ui/frontend
+        run: npm ci
+
+      - name: Generate Wails bindings
+        working-directory: ui
+        run: wails3 generate bindings
+
+      - name: Build frontend
+        working-directory: ui/frontend
+        run: npm run build
+
+      - name: Generate icons
+        working-directory: ui/build
+        run: wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico || true
+
+      - name: Build GUI binaries (CGO required for WKWebView)
+        working-directory: ui
+        run: |
+          mkdir -p bin
+          BUILD_FLAGS="-tags production -trimpath -buildvcs=false -ldflags=\"$LDFLAGS\""
+
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+            go build -tags production -trimpath -buildvcs=false -ldflags "$LDFLAGS" \
+            -o bin/awg-split-tunnel-gui-arm64 .
+
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
+            go build -tags production -trimpath -buildvcs=false -ldflags "$LDFLAGS" \
+            -o bin/awg-split-tunnel-gui-amd64 .
+
+          lipo -create -output bin/awg-split-tunnel-gui \
+            bin/awg-split-tunnel-gui-arm64 bin/awg-split-tunnel-gui-amd64
+
+      - name: Create .app bundle
+        working-directory: ui
+        run: |
+          APP="bin/AWG Split Tunnel.app"
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/Resources"
+          cp bin/awg-split-tunnel-gui "$APP/Contents/MacOS/AWG Split Tunnel"
+          cp build/darwin/icons.icns "$APP/Contents/Resources/appicon.icns" 2>/dev/null || true
+          cat > "$APP/Contents/Info.plist" << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>AWG Split Tunnel</string>
+            <key>CFBundleIconFile</key>
+            <string>appicon</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.awg.split-tunnel.gui</string>
+            <key>CFBundleName</key>
+            <string>AWG Split Tunnel</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>13.0</string>
+            <key>LSUIElement</key>
+            <true/>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
+
+      - name: Create DMG
+        working-directory: ui
+        run: |
+          hdiutil create -volname "AWG Split Tunnel" \
+            -srcfolder "bin/AWG Split Tunnel.app" \
+            -ov -format UDZO \
+            "bin/AWG-Split-Tunnel-v${VERSION}-darwin-universal.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-gui-artifacts
+          path: ui/bin/AWG-Split-Tunnel-v*-darwin-*.dmg
+          retention-days: 5
 
   create-release:
-    needs: [build-windows, build-macos]
+    needs: [build-windows, build-macos, build-macos-gui]
     runs-on: ubuntu-latest
     permissions:
       contents: write
