@@ -1,39 +1,31 @@
-//go:build windows
-
 package direct
 
 import (
 	"context"
-	"encoding/binary"
-	"fmt"
 	"net"
 	"net/netip"
-	"syscall"
-	"unsafe"
 
 	"awg-split-tunnel/internal/core"
-)
-
-const (
-	ipUnicastIF   = 31 // IP_UNICAST_IF socket option
-	ipv6UnicastIF = 31 // IPV6_UNICAST_IF socket option
+	"awg-split-tunnel/internal/platform"
 )
 
 // Provider implements TunnelProvider for direct (non-VPN) traffic.
-// Routes traffic through the real NIC using IP_UNICAST_IF socket option
-// and LocalAddr binding, bypassing the TUN adapter's default route.
+// Routes traffic through the real NIC using platform-specific interface binding
+// (IP_UNICAST_IF on Windows, IP_BOUND_IF on macOS), bypassing the TUN adapter's default route.
 type Provider struct {
 	realNICIndex uint32
 	localIP      netip.Addr // real NIC's own IPv4 address
 	state        core.TunnelState
+	binder       platform.InterfaceBinder
 }
 
 // New creates a DirectProvider that binds to the specified real NIC.
-func New(realNICIndex uint32, localIP netip.Addr) *Provider {
+func New(realNICIndex uint32, localIP netip.Addr, binder platform.InterfaceBinder) *Provider {
 	return &Provider{
 		realNICIndex: realNICIndex,
 		localIP:      localIP,
 		state:        core.TunnelStateUp,
+		binder:       binder,
 	}
 }
 
@@ -60,9 +52,9 @@ func (p *Provider) GetAdapterIP() netip.Addr { return netip.Addr{} }
 // DialTCP creates a TCP connection through the real NIC.
 func (p *Provider) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{
-		Control: p.bindToRealNIC,
+		Control: p.binder.BindControl(p.realNICIndex),
 	}
-	// Bind to real NIC's IP for belt-and-suspenders with IP_UNICAST_IF.
+	// Bind to real NIC's IP for belt-and-suspenders with interface binding.
 	if p.localIP.IsValid() {
 		dialer.LocalAddr = &net.TCPAddr{IP: p.localIP.AsSlice()}
 	}
@@ -72,7 +64,7 @@ func (p *Provider) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
 // DialUDP creates a connected UDP socket through the real NIC.
 func (p *Provider) DialUDP(ctx context.Context, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{
-		Control: p.bindToRealNIC,
+		Control: p.binder.BindControl(p.realNICIndex),
 	}
 	if p.localIP.IsValid() {
 		dialer.LocalAddr = &net.UDPAddr{IP: p.localIP.AsSlice()}
@@ -85,27 +77,3 @@ func (p *Provider) Name() string { return "Direct" }
 
 // Protocol returns "direct".
 func (p *Provider) Protocol() string { return "direct" }
-
-// bindToRealNIC sets IP_UNICAST_IF on the raw socket to force traffic through the real NIC.
-// This bypasses the TUN adapter's default route.
-// Reference: refs/amneziawg-go/conn/bind_windows.go:585-601
-func (p *Provider) bindToRealNIC(network, address string, c syscall.RawConn) error {
-	var setErr error
-	err := c.Control(func(fd uintptr) {
-		handle := syscall.Handle(fd)
-
-		// IP_UNICAST_IF needs interface index in network byte order for IPv4.
-		var bytes [4]byte
-		binary.BigEndian.PutUint32(bytes[:], p.realNICIndex)
-		idx := *(*int32)(unsafe.Pointer(&bytes[0]))
-
-		setErr = syscall.SetsockoptInt(handle, syscall.IPPROTO_IP, ipUnicastIF, int(idx))
-	})
-	if err != nil {
-		return fmt.Errorf("[Direct] control: %w", err)
-	}
-	if setErr != nil {
-		return fmt.Errorf("[Direct] IP_UNICAST_IF: %w", setErr)
-	}
-	return nil
-}

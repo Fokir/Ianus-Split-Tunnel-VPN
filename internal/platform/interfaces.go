@@ -29,6 +29,8 @@ type TUNAdapter interface {
 	WritePacket(pkt []byte) error
 	// SetDNS configures DNS servers on the TUN adapter.
 	SetDNS(servers []netip.Addr) error
+	// ClearDNS removes DNS server configuration from the TUN adapter.
+	ClearDNS() error
 	// Close tears down the adapter.
 	Close() error
 }
@@ -42,12 +44,18 @@ type ProcessFilter interface {
 	BlockProcessOnRealNIC(exePath string) error
 	// UnblockProcess removes blocking rules for a process.
 	UnblockProcess(exePath string)
+	// UnblockAllProcesses removes all per-process blocking rules.
+	UnblockAllProcesses()
 	// AddBypassPrefixes adds PERMIT rules for the given IP prefixes (local subnets).
 	AddBypassPrefixes(prefixes []netip.Prefix) error
 	// BlockDNSOnInterface blocks DNS traffic (port 53) on the given interface.
 	BlockDNSOnInterface(ifLUID uint64) error
+	// UnblockDNSOnInterface removes DNS blocking rules.
+	UnblockDNSOnInterface()
 	// PermitDNSForSelf allows DNS traffic for the current process on the given interface.
 	PermitDNSForSelf(ifLUID uint64) error
+	// RemoveDNSPermitForSelf removes DNS self-permit rules.
+	RemoveDNSPermitForSelf()
 	// BlockAllIPv6 blocks all IPv6 traffic.
 	BlockAllIPv6() error
 	// Close tears down the filter session (rules auto-removed on Windows).

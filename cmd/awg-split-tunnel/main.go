@@ -1,17 +1,13 @@
-//go:build windows
-
 package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/netip"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sync"
@@ -21,12 +17,12 @@ import (
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/gateway"
 	"awg-split-tunnel/internal/ipc"
+	"awg-split-tunnel/internal/platform"
 	"awg-split-tunnel/internal/process"
 	"awg-split-tunnel/internal/provider"
 	"awg-split-tunnel/internal/provider/vless"
 	"awg-split-tunnel/internal/service"
 	"awg-split-tunnel/internal/update"
-	"awg-split-tunnel/internal/winsvc"
 )
 
 // Build info — injected via ldflags at compile time.
@@ -36,62 +32,8 @@ var (
 	buildDate = "unknown"
 )
 
-// stopCh is used to signal shutdown from SCM or OS signals.
-var stopCh = make(chan struct{}, 1)
-
-func main() {
-	// Handle subcommands first (install, uninstall, start, stop).
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "install":
-			handleInstall()
-			return
-		case "uninstall":
-			handleUninstall()
-			return
-		case "start":
-			handleStart()
-			return
-		case "stop":
-			handleStop()
-			return
-		}
-	}
-
-	configPath := flag.String("config", "config.yaml", "Path to configuration file")
-	showVersion := flag.Bool("version", false, "Print version and exit")
-	serviceMode := flag.Bool("service", false, "Run as Windows Service (used by SCM)")
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Printf("awg-split-tunnel %s (commit=%s, built=%s)\n", version, commit, buildDate)
-		os.Exit(0)
-	}
-
-	resolvedConfig := resolveRelativeToExe(*configPath)
-
-	// Determine if running as a Windows Service.
-	if *serviceMode || winsvc.IsWindowsService() {
-		runFunc := func() error {
-			return runVPN(resolvedConfig)
-		}
-		stopFunc := func() {
-			close(stopCh)
-		}
-		if err := winsvc.RunService(runFunc, stopFunc); err != nil {
-			log.Fatalf("[Core] Service failed: %v", err)
-		}
-		return
-	}
-
-	// Console mode (development / direct launch).
-	if err := runVPN(resolvedConfig); err != nil {
-		log.Fatalf("[Core] Fatal: %v", err)
-	}
-}
-
 // runVPN contains the full VPN lifecycle. It blocks until shutdown is signalled.
-func runVPN(configPath string) error {
+func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) error {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
 	// === 1. Core components ===
@@ -122,41 +64,42 @@ func runVPN(configPath string) error {
 	// Start periodic PID cache revalidation (detects PID reuse, evicts dead entries).
 	matcher.StartRevalidation(ctx)
 
-	// === 2. Gateway Adapter (WinTUN) ===
-	adapter, err := gateway.NewAdapter()
+	// === 2. Gateway Adapter (TUN) ===
+	adapter, err := plat.NewTUNAdapter()
 	if err != nil {
 		return fmt.Errorf("failed to create gateway adapter: %w", err)
 	}
 
 	// === 3. Discover Real NIC ===
-	routeMgr := gateway.NewRouteManager(adapter.LUID())
+	routeMgr := plat.NewRouteManager(adapter.LUID())
 	realNIC, err := routeMgr.DiscoverRealNIC()
 	if err != nil {
 		adapter.Close()
 		return fmt.Errorf("failed to discover real NIC: %w", err)
 	}
 
-	// === 4. WFP Manager ===
-	wfpMgr, err := gateway.NewWFPManager(adapter.LUID())
+	// === 4. Process Filter (WFP/PF) ===
+	procFilter, err := plat.NewProcessFilter(adapter.LUID())
 	if err != nil {
 		adapter.Close()
-		return fmt.Errorf("failed to create WFP manager: %w", err)
+		return fmt.Errorf("failed to create process filter: %w", err)
 	}
 
-	// === 4a. Cleanup conflicting WFP filters from previous sessions ===
-	// Must run BEFORE our rules to prevent conflicts with WinDivert, GearUP, etc.
-	if err := gateway.CleanupConflictingWFP(); err != nil {
-		core.Log.Warnf("WFP", "Pre-startup WFP cleanup: %v", err)
+	// === 4a. Platform-specific pre-startup (e.g., cleanup conflicting WFP filters) ===
+	if plat.PreStartup != nil {
+		if err := plat.PreStartup(); err != nil {
+			core.Log.Warnf("Core", "Pre-startup cleanup: %v", err)
+		}
 	}
 
 	// === 4b. Block all IPv6 traffic ===
-	if err := wfpMgr.BlockAllIPv6(); err != nil {
-		core.Log.Warnf("WFP", "Failed to block IPv6: %v", err)
+	if err := procFilter.BlockAllIPv6(); err != nil {
+		core.Log.Warnf("Core", "Failed to block IPv6: %v", err)
 	}
 
 	// === 5. Flow Table + Process Identifier ===
 	flows := gateway.NewFlowTable()
-	procID := gateway.NewProcessIdentifier()
+	procID := plat.NewProcessID()
 
 	// === 6. DNS Router ===
 	dnsConfig := gateway.DNSConfig{
@@ -173,7 +116,7 @@ func runVPN(configPath string) error {
 
 	// === 7. TUN Router (not started yet) ===
 	tunRouter := gateway.NewTUNRouter(
-		adapter, flows, procID, matcher, ruleEngine, registry, wfpMgr, dnsRouter,
+		adapter, flows, procID, matcher, ruleEngine, registry, procFilter, dnsRouter,
 	)
 
 	// === 7a. IP/App Filter ===
@@ -184,19 +127,22 @@ func runVPN(configPath string) error {
 			len(cfg.Global.DisallowedIPs), len(cfg.Global.AllowedIPs), len(cfg.Global.DisallowedApps))
 	}
 
-	// === 7b. WFP bypass permits for local/disallowed CIDRs ===
+	// === 7b. Process filter bypass permits for local/disallowed CIDRs ===
 	bypassPrefixes := gateway.GetBypassPrefixes(cfg.Global)
 	if len(bypassPrefixes) > 0 {
-		if err := wfpMgr.AddBypassPrefixes(bypassPrefixes); err != nil {
-			core.Log.Warnf("Core", "Failed to add WFP bypass permits: %v", err)
+		if err := procFilter.AddBypassPrefixes(bypassPrefixes); err != nil {
+			core.Log.Warnf("Core", "Failed to add bypass permits: %v", err)
 		}
 	}
 
 	// === 8. Direct Provider + proxies ===
 	var nextProxyPort uint16 = 30000
 
+	// Create InterfaceBinder for binding sockets to real NIC (direct provider, HTTP client).
+	ifBinder := plat.NewInterfaceBinder()
+
 	// NIC-bound HTTP client — created early so subscriptions can use it too.
-	nicHTTPClient := gateway.NewNICBoundHTTPClient(realNIC.Index, realNIC.LocalIP)
+	nicHTTPClient := gateway.NewNICBoundHTTPClient(realNIC.Index, realNIC.LocalIP, ifBinder)
 
 	// === 8a. Subscriptions: fetch and merge into tunnel list ===
 	subMgr := core.NewSubscriptionManager(cfgManager, bus, nicHTTPClient, vless.ParseURIToTunnelConfig)
@@ -215,20 +161,21 @@ func runVPN(configPath string) error {
 	// === 10a. Create TunnelController and register existing tunnels ===
 	providers := make(map[string]provider.TunnelProvider)
 	tunnelCtrl := service.NewTunnelController(ctx, service.ControllerDeps{
-		Registry:       registry,
-		Bus:            bus,
-		Flows:          flows,
-		TUNRouter:      tunRouter,
-		RouteMgr:       routeMgr,
-		WFPMgr:         wfpMgr,
-		Adapter:        adapter,
-		DNSRouter:      dnsRouter,
-		RealNICIndex:   realNIC.Index,
-		RealNICLocalIP: realNIC.LocalIP,
-		RealNICLUID:    realNIC.LUID,
-		Providers:      providers,
-		Rules:          ruleEngine,
-		Cfg:            cfgManager,
+		Registry:        registry,
+		Bus:             bus,
+		Flows:           flows,
+		TUNRouter:       tunRouter,
+		RouteMgr:        routeMgr,
+		WFPMgr:          procFilter,
+		Adapter:         adapter,
+		DNSRouter:       dnsRouter,
+		RealNICIndex:    realNIC.Index,
+		RealNICLocalIP:  realNIC.LocalIP,
+		RealNICLUID:     realNIC.LUID,
+		InterfaceBinder: ifBinder,
+		Providers:       providers,
+		Rules:           ruleEngine,
+		Cfg:             cfgManager,
 	}, nextProxyPort)
 
 	for _, tcfg := range cfg.Tunnels {
@@ -263,7 +210,7 @@ func runVPN(configPath string) error {
 	}
 
 	// === 11a. Gateway activation controller ===
-	// Routes, DNS interception, and WFP per-process blocking are ONLY active
+	// Routes, DNS interception, and per-process blocking are ONLY active
 	// when at least one VPN tunnel (excluding __direct__) is UP.
 	// This ensures unmatched traffic always flows through the real NIC normally.
 	var (
@@ -278,10 +225,11 @@ func runVPN(configPath string) error {
 			return
 		}
 
-		// Cleanup conflicting WFP filters that may have appeared since startup
-		// (e.g. user launched zapret/GearUP after our service started).
-		if err := gateway.CleanupConflictingWFP(); err != nil {
-			core.Log.Warnf("WFP", "Pre-activation WFP cleanup: %v", err)
+		// Platform-specific pre-activation cleanup (e.g., conflicting WFP filters).
+		if plat.PreStartup != nil {
+			if err := plat.PreStartup(); err != nil {
+				core.Log.Warnf("Core", "Pre-activation cleanup: %v", err)
+			}
 		}
 
 		if err := routeMgr.SetDefaultRoute(); err != nil {
@@ -293,10 +241,10 @@ func runVPN(configPath string) error {
 			if err := adapter.SetDNS([]netip.Addr{adapter.IP()}); err != nil {
 				core.Log.Warnf("DNS", "Failed to set DNS on TUN adapter: %v", err)
 			}
-			if err := wfpMgr.BlockDNSOnInterface(realNIC.LUID); err != nil {
+			if err := procFilter.BlockDNSOnInterface(realNIC.LUID); err != nil {
 				core.Log.Warnf("DNS", "Failed to add DNS leak protection: %v", err)
 			}
-			if err := wfpMgr.PermitDNSForSelf(realNIC.LUID); err != nil {
+			if err := procFilter.PermitDNSForSelf(realNIC.LUID); err != nil {
 				core.Log.Warnf("DNS", "Failed to add DNS self-permit: %v", err)
 			}
 		}
@@ -312,16 +260,16 @@ func runVPN(configPath string) error {
 			return
 		}
 
-		// Remove per-process WFP rules first — they block apps on real NIC.
-		wfpMgr.UnblockAllProcesses()
+		// Remove per-process blocking rules first — they block apps on real NIC.
+		procFilter.UnblockAllProcesses()
 
 		if err := routeMgr.RemoveDefaultRoute(); err != nil {
 			core.Log.Warnf("Route", "Failed to remove default route: %v", err)
 		}
 
 		if hasDNSResolver {
-			wfpMgr.UnblockDNSOnInterface()
-			wfpMgr.RemoveDNSPermitForSelf()
+			procFilter.UnblockDNSOnInterface()
+			procFilter.RemoveDNSPermitForSelf()
 			if err := adapter.ClearDNS(); err != nil {
 				core.Log.Warnf("DNS", "Failed to clear TUN DNS: %v", err)
 			}
@@ -394,11 +342,11 @@ func runVPN(configPath string) error {
 			dnsResolver.FlushCache()
 		}
 		domainTable.Flush()
-		// Flush Windows DNS cache.
-		cmd := exec.Command("ipconfig", "/flushdns")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		if err := cmd.Run(); err != nil {
-			core.Log.Warnf("DNS", "ipconfig /flushdns failed: %v", err)
+		// Flush system DNS cache (platform-specific).
+		if plat.FlushSystemDNS != nil {
+			if err := plat.FlushSystemDNS(); err != nil {
+				core.Log.Warnf("DNS", "System DNS flush failed: %v", err)
+			}
 		}
 		core.Log.Infof("DNS", "All DNS caches flushed")
 		return nil
@@ -430,7 +378,6 @@ func runVPN(configPath string) error {
 	// === 11b. Stats Collector ===
 	statsCollector := service.NewStatsCollector(registry, bus)
 	tunRouter.SetBytesReporter(statsCollector.AddBytes)
-
 
 	// === 12. Start TUN Router ===
 	if err := tunRouter.Start(ctx); err != nil {
@@ -498,15 +445,20 @@ func runVPN(configPath string) error {
 
 	ipcServer := ipc.NewServer(svc)
 	go func() {
-		core.Log.Infof("Core", "IPC server starting on %s", ipc.PipeName)
-		if err := ipcServer.Start(); err != nil {
+		ln, err := plat.IPC.Listener()
+		if err != nil {
+			core.Log.Errorf("Core", "IPC listen error: %v", err)
+			return
+		}
+		core.Log.Infof("Core", "IPC server starting on %s", ln.Addr())
+		if err := ipcServer.Start(ln); err != nil {
 			core.Log.Errorf("Core", "IPC server error: %v", err)
 		}
 	}()
 
 	// --- Wait for shutdown signal ---
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 
 	// Listen for RPC-initiated shutdown (Shutdown RPC publishes this event).
 	reloadCh := make(chan struct{}, 1)
@@ -535,16 +487,11 @@ mainLoop:
 			core.Log.Infof("Core", "OS signal received. Shutting down...")
 			break mainLoop
 		case <-stopCh:
-			core.Log.Infof("Core", "SCM stop signal received. Shutting down...")
+			core.Log.Infof("Core", "Service stop signal received. Shutting down...")
 			break mainLoop
 		case <-reloadCh:
 			core.Log.Infof("Core", "Config reload signal received. Applying configuration...")
-			// Read directly from in-memory config — it is already updated by the
-			// setter that published EventConfigReloaded.  Re-reading from disk
-			// (Load) would race with Save and could overwrite the new config.
 			newCfg := cfgManager.Get()
-			// TODO: Implement actual diffing and applying changes to tunnels.
-			// For now, a simple re-initialization of IP filter and rules.
 			ipFilter = gateway.NewIPFilter(newCfg.Global, newCfg.Tunnels)
 			tunRouter.SetIPFilter(ipFilter)
 			ruleEngine.SetRules(newCfg.Rules)
@@ -561,7 +508,7 @@ mainLoop:
 
 	// === Graceful shutdown (reverse order) ===
 	core.Log.Infof("Core", "Shutting down...")
-	cancel() // Cancel the main context
+	cancel()    // Cancel the main context
 	runCancel() // Cancel the run context
 
 	done := make(chan struct{})
@@ -580,7 +527,7 @@ mainLoop:
 		// Use tunnel controller for graceful shutdown of all tunnels
 		tunnelCtrl.Shutdown()
 
-		wfpMgr.Close()
+		procFilter.Close()
 		routeMgr.Cleanup()
 		adapter.Close()
 
@@ -598,52 +545,6 @@ mainLoop:
 
 	core.Log.Close()
 	return nil
-}
-
-// handleInstall registers the service with the Windows SCM.
-func handleInstall() {
-	fs := flag.NewFlagSet("install", flag.ExitOnError)
-	configPath := fs.String("config", "", "Path to configuration file (optional)")
-	fs.Parse(os.Args[2:])
-
-	exePath, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: cannot determine executable path: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := winsvc.InstallService(exePath, *configPath); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("Service installed successfully.")
-}
-
-// handleUninstall removes the service from the Windows SCM.
-func handleUninstall() {
-	if err := winsvc.UninstallService(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("Service uninstalled successfully.")
-}
-
-// handleStart starts the service via SCM.
-func handleStart() {
-	if err := winsvc.StartService(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("Service started successfully.")
-}
-
-// handleStop stops the service via SCM.
-func handleStop() {
-	if err := winsvc.StopService(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("Service stopped successfully.")
 }
 
 func getStringSetting(settings map[string]any, key, defaultVal string) string {

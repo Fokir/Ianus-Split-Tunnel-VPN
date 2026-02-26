@@ -1,5 +1,3 @@
-//go:build windows
-
 // Package service provides the gRPC service layer for the VPN daemon.
 // It wraps core components (ConfigManager, TunnelRegistry, RuleEngine)
 // and exposes them via the VPNService gRPC interface for GUI communication.

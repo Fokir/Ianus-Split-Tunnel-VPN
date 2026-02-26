@@ -1,5 +1,3 @@
-//go:build windows
-
 package vless
 
 import (
@@ -13,15 +11,13 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/platform"
 
 	xlog "github.com/xtls/xray-core/common/log"
 	xcore "github.com/xtls/xray-core/core"
 )
-
-const ipUnicastIF = 31 // IP_UNICAST_IF socket option
 
 // xrayLogBridge forwards xray-core log messages to our logging system.
 type xrayLogBridge struct{}
@@ -49,8 +45,9 @@ type Provider struct {
 	state  core.TunnelState
 	name   string
 
-	realNICIndex uint32         // real NIC index for DNS resolution bypass
-	serverAddr   netip.AddrPort // resolved server endpoint for bypass routes
+	realNICIndex uint32                  // real NIC index for DNS resolution bypass
+	binder       platform.InterfaceBinder // platform-specific socket binding (optional)
+	serverAddr   netip.AddrPort           // resolved server endpoint for bypass routes
 	instance     *xcore.Instance
 	socksAddr    string // local socks5 proxy address "127.0.0.1:{port}"
 }
@@ -307,30 +304,27 @@ func (p *Provider) SetRealNICIndex(index uint32) {
 	p.realNICIndex = index
 }
 
+// SetInterfaceBinder sets the platform-specific interface binder for DNS resolution bypass.
+func (p *Provider) SetInterfaceBinder(binder platform.InterfaceBinder) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.binder = binder
+}
+
 // resolveViaRealNIC resolves a hostname using a DNS resolver bound to the real
-// NIC interface via IP_UNICAST_IF, bypassing the TUN DNS resolver entirely.
+// NIC interface, bypassing the TUN DNS resolver entirely.
 func (p *Provider) resolveViaRealNIC(ctx context.Context, host string) ([]string, error) {
 	core.Log.Debugf("VLESS", "Resolving %q via real NIC (index=%d)", host, p.realNICIndex)
+
+	var controlFn func(string, string, syscall.RawConn) error
+	if p.binder != nil {
+		controlFn = p.binder.BindControl(p.realNICIndex)
+	}
 
 	resolver := &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			dialer := &net.Dialer{
-				Control: func(_, _ string, c syscall.RawConn) error {
-					var setErr error
-					err := c.Control(func(fd uintptr) {
-						handle := syscall.Handle(fd)
-						var bytes [4]byte
-						binary.BigEndian.PutUint32(bytes[:], p.realNICIndex)
-						idx := *(*int32)(unsafe.Pointer(&bytes[0]))
-						setErr = syscall.SetsockoptInt(handle, syscall.IPPROTO_IP, ipUnicastIF, int(idx))
-					})
-					if err != nil {
-						return fmt.Errorf("control: %w", err)
-					}
-					return setErr
-				},
-			}
+			dialer := &net.Dialer{Control: controlFn}
 			return dialer.DialContext(ctx, network, "8.8.8.8:53")
 		},
 	}

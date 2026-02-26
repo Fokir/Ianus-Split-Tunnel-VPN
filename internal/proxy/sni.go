@@ -1,5 +1,3 @@
-//go:build windows
-
 package proxy
 
 // ExtractSNI parses a TLS ClientHello message and returns the SNI hostname.

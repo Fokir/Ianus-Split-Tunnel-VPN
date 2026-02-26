@@ -10,4 +10,12 @@ type Platform struct {
 	IPC                IPCTransport
 	NewInterfaceBinder func() InterfaceBinder
 	Notifier           Notifier
+
+	// PreStartup runs platform-specific initialization before the main VPN loop
+	// (e.g., cleanup conflicting WFP filters on Windows).
+	PreStartup func() error
+
+	// FlushSystemDNS flushes the system DNS cache
+	// (ipconfig /flushdns on Windows, dscacheutil on macOS).
+	FlushSystemDNS func() error
 }

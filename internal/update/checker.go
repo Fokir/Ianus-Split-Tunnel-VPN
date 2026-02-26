@@ -1,5 +1,3 @@
-//go:build windows
-
 package update
 
 import (
@@ -17,10 +15,6 @@ import (
 // GitHubRepo is the repository path for update checks.
 // TODO: set the real owner before first public release.
 const GitHubRepo = "Fokir/Ianus-Split-Tunnel-VPN"
-
-// AssetPattern matches release assets for Windows amd64.
-const AssetPattern = "awg-split-tunnel-v"
-const AssetSuffix = "-windows-amd64.zip"
 
 // Info holds information about an available update.
 type Info struct {

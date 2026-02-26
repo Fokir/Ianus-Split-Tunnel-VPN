@@ -1,10 +1,7 @@
-//go:build windows
-
 package gateway
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -12,14 +9,11 @@ import (
 	"net/netip"
 	"os"
 	"strings"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/platform"
 )
-
-const ipUnicastIF = 31 // IP_UNICAST_IF socket option
 
 const geositeDownloadURL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
 
@@ -38,26 +32,12 @@ type geositeCategory struct {
 // NewNICBoundHTTPClient creates an HTTP client that binds to the real NIC,
 // bypassing the TUN adapter's default route. This prevents the service's own
 // HTTP traffic from being captured and dropped by the TUN router (selfPID check).
-func NewNICBoundHTTPClient(realNICIndex uint32, localIP netip.Addr) *http.Client {
+func NewNICBoundHTTPClient(realNICIndex uint32, localIP netip.Addr, binder platform.InterfaceBinder) *http.Client {
 	dialer := &net.Dialer{
 		Timeout: 30 * time.Second,
-		Control: func(network, address string, c syscall.RawConn) error {
-			var setErr error
-			err := c.Control(func(fd uintptr) {
-				handle := syscall.Handle(fd)
-				var bytes [4]byte
-				binary.BigEndian.PutUint32(bytes[:], realNICIndex)
-				idx := *(*int32)(unsafe.Pointer(&bytes[0]))
-				setErr = syscall.SetsockoptInt(handle, syscall.IPPROTO_IP, ipUnicastIF, int(idx))
-			})
-			if err != nil {
-				return fmt.Errorf("control: %w", err)
-			}
-			if setErr != nil {
-				return fmt.Errorf("IP_UNICAST_IF: %w", setErr)
-			}
-			return nil
-		},
+	}
+	if binder != nil {
+		dialer.Control = binder.BindControl(realNICIndex)
 	}
 	if localIP.IsValid() {
 		dialer.LocalAddr = &net.TCPAddr{IP: localIP.AsSlice()}

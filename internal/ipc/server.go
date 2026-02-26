@@ -1,9 +1,6 @@
-//go:build windows
-
 package ipc
 
 import (
-	"fmt"
 	"net"
 	"time"
 
@@ -12,7 +9,8 @@ import (
 	vpnapi "awg-split-tunnel/api/gen"
 )
 
-// Server wraps a gRPC server listening on a Named Pipe.
+// Server wraps a gRPC server listening on a platform-specific transport
+// (Named Pipes on Windows, Unix domain sockets on macOS).
 type Server struct {
 	grpc     *grpc.Server
 	listener net.Listener
@@ -25,13 +23,9 @@ func NewServer(svc vpnapi.VPNServiceServer, opts ...grpc.ServerOption) *Server {
 	return &Server{grpc: gs}
 }
 
-// Start opens the Named Pipe and begins serving gRPC requests.
+// Start begins serving gRPC requests on the given listener.
 // Blocks until Stop is called or an error occurs.
-func (s *Server) Start() error {
-	ln, err := PipeListener()
-	if err != nil {
-		return fmt.Errorf("ipc: listen pipe: %w", err)
-	}
+func (s *Server) Start(ln net.Listener) error {
 	s.listener = ln
 	return s.grpc.Serve(ln)
 }

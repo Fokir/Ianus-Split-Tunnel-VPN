@@ -1,5 +1,3 @@
-//go:build windows
-
 package vless
 
 // Register xray-core components required for VLESS + Reality.

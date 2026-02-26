@@ -1,16 +1,8 @@
-//go:build windows
-
 package service
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
-	"strings"
-	"syscall"
 	"time"
 
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -19,7 +11,6 @@ import (
 	vpnapi "awg-split-tunnel/api/gen"
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/gateway"
-	"awg-split-tunnel/internal/update"
 )
 
 // Ensure Service implements VPNServiceServer.
@@ -413,42 +404,6 @@ func (s *Service) StreamStats(req *vpnapi.StatsStreamRequest, stream vpnapi.VPNS
 	}
 }
 
-// ─── Processes ──────────────────────────────────────────────────────
-
-func (s *Service) ListProcesses(_ context.Context, req *vpnapi.ProcessListRequest) (*vpnapi.ProcessListResponse, error) {
-	procs, err := listRunningProcesses(req.NameFilter)
-	if err != nil {
-		return nil, err
-	}
-	return &vpnapi.ProcessListResponse{Processes: procs}, nil
-}
-
-// ─── Autostart ──────────────────────────────────────────────────────
-
-func (s *Service) GetAutostart(_ context.Context, _ *emptypb.Empty) (*vpnapi.AutostartConfig, error) {
-	enabled, _ := isAutostartEnabled()
-	return &vpnapi.AutostartConfig{
-		Enabled:            enabled,
-		RestoreConnections: s.cfg.Get().GUI.RestoreConnections,
-	}, nil
-}
-
-func (s *Service) SetAutostart(_ context.Context, req *vpnapi.SetAutostartRequest) (*vpnapi.SetAutostartResponse, error) {
-	if err := setAutostartEnabled(req.Config.Enabled, req.Config.GuiExePath); err != nil {
-		return &vpnapi.SetAutostartResponse{Success: false, Error: err.Error()}, nil
-	}
-
-	// Persist restore_connections in config.
-	cfg := s.cfg.Get()
-	cfg.GUI.RestoreConnections = req.Config.RestoreConnections
-	s.cfg.SetFromGUI(cfg)
-	if err := s.cfg.Save(); err != nil {
-		return &vpnapi.SetAutostartResponse{Success: false, Error: err.Error()}, nil
-	}
-
-	return &vpnapi.SetAutostartResponse{Success: true}, nil
-}
-
 func (s *Service) RestoreConnections(ctx context.Context, _ *emptypb.Empty) (*vpnapi.ConnectResponse, error) {
 	cfg := s.cfg.Get()
 	if !cfg.GUI.RestoreConnections {
@@ -576,69 +531,6 @@ func (s *Service) RefreshSubscription(ctx context.Context, req *vpnapi.RefreshSu
 	return &vpnapi.RefreshSubscriptionResponse{Success: true, TunnelCount: int32(len(tunnels))}, nil
 }
 
-// ─── Subscription tunnel sync ──────────────────────────────────────
-
-// syncSubscriptionTunnels reconciles the running tunnels for a single
-// subscription with the freshly-fetched list. New tunnels are added via
-// TunnelController; stale ones are removed.
-func (s *Service) syncSubscriptionTunnels(ctx context.Context, subName string, wanted []core.TunnelConfig) {
-	wantedIDs := make(map[string]struct{}, len(wanted))
-	for _, tc := range wanted {
-		wantedIDs[tc.ID] = struct{}{}
-	}
-
-	// Remove tunnels that no longer appear in the subscription.
-	for _, entry := range s.registry.All() {
-		sub, ok := entry.Config.Settings["_subscription"]
-		if !ok {
-			continue
-		}
-		if subStr, _ := sub.(string); subStr == subName {
-			if _, keep := wantedIDs[entry.ID]; !keep {
-				if err := s.ctrl.RemoveTunnel(entry.ID); err != nil {
-					core.Log.Warnf("Core", "Failed to remove stale subscription tunnel %q: %v", entry.ID, err)
-				}
-			}
-		}
-	}
-
-	// Add tunnels that are not yet registered.
-	for _, tc := range wanted {
-		if _, exists := s.registry.Get(tc.ID); exists {
-			continue
-		}
-		if err := s.ctrl.AddTunnel(ctx, tc, nil); err != nil {
-			core.Log.Warnf("Core", "Failed to add subscription tunnel %q: %v", tc.ID, err)
-		}
-	}
-}
-
-// syncAllSubscriptionTunnels refreshes tunnels for every configured
-// subscription using the current cache.
-func (s *Service) syncAllSubscriptionTunnels(ctx context.Context) {
-	subs := s.cfg.GetSubscriptions()
-	for name := range subs {
-		cached := s.subMgr.GetCached(name)
-		s.syncSubscriptionTunnels(ctx, name, cached)
-	}
-}
-
-// removeSubscriptionTunnels removes all running tunnels that belong to
-// the given subscription.
-func (s *Service) removeSubscriptionTunnels(subName string) {
-	for _, entry := range s.registry.All() {
-		sub, ok := entry.Config.Settings["_subscription"]
-		if !ok {
-			continue
-		}
-		if subStr, _ := sub.(string); subStr == subName {
-			if err := s.ctrl.RemoveTunnel(entry.ID); err != nil {
-				core.Log.Warnf("Core", "Failed to remove subscription tunnel %q: %v", entry.ID, err)
-			}
-		}
-	}
-}
-
 // ─── DNS ─────────────────────────────────────────────────────────────
 
 func (s *Service) FlushDNS(_ context.Context, _ *emptypb.Empty) (*vpnapi.ConnectResponse, error) {
@@ -677,138 +569,5 @@ func (s *Service) CheckUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.Ch
 	}, nil
 }
 
-func (s *Service) ApplyUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.ApplyUpdateResponse, error) {
-	if s.updateChecker == nil {
-		return &vpnapi.ApplyUpdateResponse{Success: false, Error: "update checker not initialized"}, nil
-	}
-
-	info := s.updateChecker.GetLatestInfo()
-	if info == nil {
-		return &vpnapi.ApplyUpdateResponse{Success: false, Error: "no update available"}, nil
-	}
-
-	// Download the update.
-	extractDir, err := update.Download(ctx, info, s.httpClient, nil)
-	if err != nil {
-		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("download failed: %v", err)}, nil
-	}
-
-	// Find updater binary in the current install directory.
-	exe, err := os.Executable()
-	if err != nil {
-		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("cannot determine install dir: %v", err)}, nil
-	}
-	installDir := filepath.Dir(exe)
-	updaterPath := filepath.Join(installDir, "awg-split-tunnel-updater.exe")
-
-	if _, err := os.Stat(updaterPath); err != nil {
-		return &vpnapi.ApplyUpdateResponse{Success: false, Error: "updater binary not found"}, nil
-	}
-
-	// Launch updater as a fully detached process.
-	// The updater will stop this service via SCM (clean stop, no recovery actions),
-	// then replace binaries, restart the service, and launch GUI.
-	core.Log.Infof("Update", "Launching updater: %s", updaterPath)
-	cmd := exec.Command(updaterPath,
-		"--install-dir", installDir,
-		"--temp-dir", extractDir,
-		"--start-service",
-		"--launch-gui",
-	)
-	cmd.Dir = installDir
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | 0x00000008, // DETACHED_PROCESS
-	}
-	if err := cmd.Start(); err != nil {
-		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("failed to launch updater: %v", err)}, nil
-	}
-
-	// Do NOT self-terminate the service here. The updater will stop us via SCM,
-	// which ensures a clean stop without triggering recovery actions.
-
-	return &vpnapi.ApplyUpdateResponse{Success: true}, nil
-}
-
-// ─── Conflicting services ──────────────────────────────────────────
-
-func (s *Service) CheckConflictingServices(_ context.Context, _ *emptypb.Empty) (*vpnapi.ConflictingServicesResponse, error) {
-	detected := CheckConflictingServices()
-
-	var services []*vpnapi.ConflictingService
-	for _, d := range detected {
-		services = append(services, &vpnapi.ConflictingService{
-			Name:        d.Name,
-			DisplayName: d.DisplayName,
-			Type:        d.Type,
-			Running:     d.Running,
-			Description: d.Description,
-		})
-	}
-
-	return &vpnapi.ConflictingServicesResponse{Services: services}, nil
-}
-
-func (s *Service) StopConflictingServices(_ context.Context, req *vpnapi.StopConflictingServicesRequest) (*vpnapi.StopConflictingServicesResponse, error) {
-	var stopped, failed []string
-
-	// Stop processes FIRST (winws.exe, goodbyedpi.exe), then driver services
-	// (WinDivert). This order is important because the driver can't be stopped
-	// while user-space processes hold open handles to it.
-	var processes, services []string
-	for _, name := range req.Names {
-		isService := false
-		for _, s := range knownConflictingServices {
-			if strings.EqualFold(s.Name, name) {
-				isService = true
-				break
-			}
-		}
-		if isService {
-			services = append(services, name)
-		} else {
-			processes = append(processes, name)
-		}
-	}
-
-	// Phase 1: kill user-space processes (releases WinDivert handles).
-	for _, name := range processes {
-		if err := StopConflictingService(name); err != nil {
-			core.Log.Warnf("Core", "Failed to stop conflicting process %q: %v", name, err)
-			failed = append(failed, name)
-		} else {
-			stopped = append(stopped, name)
-		}
-	}
-
-	// Phase 2: stop and delete driver services.
-	// killProcessByName already waits for process exit, but add a small extra
-	// delay to ensure kernel handles are fully released.
-	if len(processes) > 0 && len(services) > 0 {
-		time.Sleep(1 * time.Second)
-	}
-	for _, name := range services {
-		if err := StopConflictingService(name); err != nil {
-			core.Log.Warnf("Core", "Failed to stop conflicting service %q: %v", name, err)
-			failed = append(failed, name)
-		} else {
-			stopped = append(stopped, name)
-		}
-	}
-
-	// Phase 3: clean up orphaned WFP filters, sublayers, and providers from
-	// conflicting software (WinDivert, GearUP Booster, etc.).
-	// Even after driver services are deleted, WFP artifacts may linger.
-	if err := gateway.CleanupConflictingWFP(); err != nil {
-		core.Log.Warnf("Core", "Conflicting WFP cleanup: %v", err)
-	}
-
-	resp := &vpnapi.StopConflictingServicesResponse{
-		Success: len(failed) == 0,
-		Stopped: stopped,
-		Failed:  failed,
-	}
-	if len(failed) > 0 {
-		resp.Error = fmt.Sprintf("failed to stop: %v", failed)
-	}
-	return resp, nil
-}
+// ApplyUpdate, CheckConflictingServices, StopConflictingServices —
+// platform-specific, see grpc_handler_windows.go / grpc_handler_darwin.go.

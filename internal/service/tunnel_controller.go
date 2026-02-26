@@ -1,5 +1,3 @@
-//go:build windows
-
 package service
 
 import (
@@ -50,6 +48,9 @@ type ControllerDeps struct {
 	RealNICIndex   uint32
 	RealNICLocalIP netip.Addr
 	RealNICLUID    uint64
+
+	// InterfaceBinder for binding sockets to the real NIC (direct provider).
+	InterfaceBinder platform.InterfaceBinder
 
 	// Providers is a shared map for provider lookup (used by proxies).
 	// The controller manages this map's contents.
@@ -170,10 +171,13 @@ func (tc *TunnelControllerImpl) ConnectTunnel(ctx context.Context, tunnelID stri
 
 	tc.deps.Registry.SetState(tunnelID, core.TunnelStateConnecting, nil)
 
-	// Pass real NIC index to VLESS providers so they can resolve hostnames
-	// through the real NIC, bypassing TUN DNS (10.255.0.1).
+	// Pass real NIC index and binder to VLESS providers so they can resolve
+	// hostnames through the real NIC, bypassing TUN DNS (10.255.0.1).
 	if vp, ok := inst.provider.(*vless.Provider); ok && tc.deps.RealNICIndex > 0 {
 		vp.SetRealNICIndex(tc.deps.RealNICIndex)
+		if tc.deps.InterfaceBinder != nil {
+			vp.SetInterfaceBinder(tc.deps.InterfaceBinder)
+		}
 	}
 
 	if err := inst.provider.Connect(tc.deps.Context); err != nil {
@@ -328,7 +332,7 @@ func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelCo
 	// Create provider.
 	var prov provider.TunnelProvider
 	if cfg.Protocol == "direct" {
-		prov = direct.New(tc.deps.RealNICIndex, tc.deps.RealNICLocalIP)
+		prov = direct.New(tc.deps.RealNICIndex, tc.deps.RealNICLocalIP, tc.deps.InterfaceBinder)
 	} else {
 		var err error
 		prov, err = tc.createProvider(cfg)
