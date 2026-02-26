@@ -64,6 +64,13 @@ jobs:
           rsrc -manifest cmd/awg-split-tunnel-updater/app.manifest -ico "$ICO" -o cmd/awg-split-tunnel-updater/rsrc_windows_amd64.syso
           rsrc -manifest cmd/awg-diag/app.manifest -ico "$ICO" -o cmd/awg-diag/rsrc_windows_amd64.syso
 
+      - name: Download wintun.dll
+        shell: bash
+        run: |
+          curl -fsSL https://www.wintun.net/builds/wintun-0.14.1.zip -o wintun.zip
+          unzip -j wintun.zip "wintun/bin/amd64/wintun.dll" -d dll/
+          rm wintun.zip
+
       - name: Build Go binaries
         shell: bash
         run: |
