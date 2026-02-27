@@ -39,6 +39,13 @@ func enrichProcessList(procs []ProcessInfo) []ProcessInfo {
 		result = append(result, e.proc)
 	}
 
+	// Heuristic: .app bundles are GUI applications on macOS.
+	for i := range result {
+		if strings.Contains(result[i].Path, ".app/Contents/MacOS/") {
+			result[i].HasWindow = true
+		}
+	}
+
 	sort.Slice(result, func(i, j int) bool {
 		return strings.ToLower(result[i].Name) < strings.ToLower(result[j].Name)
 	})

@@ -33,9 +33,9 @@ type NetworkMonitor struct {
 	done     chan struct{}
 	stopped  chan struct{}
 
-	// Debounce: collapse rapid events into one callback.
-	mu         sync.Mutex
-	debounceAt time.Time
+	// Debounce: collapse rapid events into one callback via timer reset.
+	mu    sync.Mutex
+	timer *time.Timer
 }
 
 // NewNetworkMonitor creates a network change monitor.
@@ -64,6 +64,12 @@ func (nm *NetworkMonitor) Start() error {
 // Stop closes the route socket and stops the monitor goroutine.
 func (nm *NetworkMonitor) Stop() error {
 	close(nm.done)
+	// Stop debounce timer to prevent callback after shutdown.
+	nm.mu.Lock()
+	if nm.timer != nil {
+		nm.timer.Stop()
+	}
+	nm.mu.Unlock()
 	// Closing the fd unblocks the Read in the loop goroutine.
 	err := unix.Close(nm.routeFD)
 	<-nm.stopped
@@ -117,29 +123,23 @@ func (nm *NetworkMonitor) isRelevant(msgType byte) bool {
 const debounceDuration = 2 * time.Second
 
 // fireDebounced schedules the onChange callback with a 2-second debounce.
+// Uses time.AfterFunc + Reset to guarantee exactly one callback fires
+// debounceDuration after the LAST event in a burst.
 func (nm *NetworkMonitor) fireDebounced() {
 	nm.mu.Lock()
-	nm.debounceAt = time.Now().Add(debounceDuration)
-	nm.mu.Unlock()
+	defer nm.mu.Unlock()
 
-	go func() {
-		time.Sleep(debounceDuration)
-
-		nm.mu.Lock()
-		remaining := time.Until(nm.debounceAt)
-		nm.mu.Unlock()
-
-		// If another event extended the debounce window, this goroutine yields.
-		if remaining > 50*time.Millisecond {
-			return
-		}
-
-		select {
-		case <-nm.done:
-			return
-		default:
-			core.Log.Debugf("Gateway", "Network change detected, firing callback")
-			nm.onChange()
-		}
-	}()
+	if nm.timer == nil {
+		nm.timer = time.AfterFunc(debounceDuration, func() {
+			select {
+			case <-nm.done:
+				return
+			default:
+				core.Log.Debugf("Gateway", "Network change detected, firing callback")
+				nm.onChange()
+			}
+		})
+	} else {
+		nm.timer.Reset(debounceDuration)
+	}
 }

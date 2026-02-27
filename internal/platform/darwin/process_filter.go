@@ -75,20 +75,42 @@ func NewProcessFilter() (*ProcessFilter, error) {
 // ensureAnchorReference loads a temporary PF config that includes
 // our anchor reference alongside the original /etc/pf.conf rules.
 // Does not modify /etc/pf.conf on disk — only the running config.
+// The anchor is inserted among filtering rules (before the first "anchor" line)
+// to respect PF rule ordering: options, normalization, queueing, translation, filtering.
 func (f *ProcessFilter) ensureAnchorReference() error {
 	orig, err := os.ReadFile("/etc/pf.conf")
 	if err != nil {
 		return fmt.Errorf("read pf.conf: %w", err)
 	}
 
+	content := string(orig)
+
 	// Skip if already referenced (e.g. from a previous un-cleaned run).
-	if strings.Contains(string(orig), pfAnchorRoot) {
+	if strings.Contains(content, pfAnchorRoot) {
 		return nil
 	}
 
-	// Prepend our anchor so "quick" rules in it evaluate first.
-	combined := fmt.Sprintf("anchor \"%s/*\"\n%s", pfAnchorRoot, string(orig))
+	// Insert our anchor before the first plain "anchor" line (filtering section),
+	// preserving PF rule ordering (scrub-anchor etc. come before filtering anchors).
+	anchorLine := fmt.Sprintf("anchor \"%s/*\"", pfAnchorRoot)
+	lines := strings.Split(content, "\n")
+	var result []string
+	inserted := false
 
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Insert before the first plain "anchor" line (filtering section).
+		if !inserted && strings.HasPrefix(trimmed, "anchor ") {
+			result = append(result, anchorLine)
+			inserted = true
+		}
+		result = append(result, line)
+	}
+	if !inserted {
+		result = append(result, anchorLine)
+	}
+
+	combined := strings.Join(result, "\n")
 	cmd := exec.Command("pfctl", "-f", "-")
 	cmd.Stdin = strings.NewReader(combined)
 	out, err := cmd.CombinedOutput()
