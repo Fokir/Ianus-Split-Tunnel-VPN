@@ -47,7 +47,7 @@ echo "  Architecture: $ARCH ($SUFFIX)"
 # ── Fetch latest release tag ─────────────────────────────────────────
 echo "  Fetching latest release..."
 LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+    | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')
 
 if [[ -z "$LATEST_TAG" ]]; then
     echo "Error: Could not determine latest release."
