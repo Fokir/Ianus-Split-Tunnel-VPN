@@ -204,3 +204,63 @@ func clampTCPMSS(pkt []byte, tpOff int) {
 		pos += optLen
 	}
 }
+
+// buildUDPPacket constructs a complete IPv4/UDP packet from scratch.
+// Used by the TUN router's in-band DNS hijack to write DNS responses back to TUN.
+func buildUDPPacket(srcIP, dstIP [4]byte, srcPort, dstPort uint16, payload []byte) []byte {
+	const ipHdrLen = 20
+	const udpHdrLen = 8
+	totalLen := ipHdrLen + udpHdrLen + len(payload)
+
+	pkt := make([]byte, totalLen)
+
+	// === IPv4 header ===
+	pkt[0] = 0x45                                             // Version=4, IHL=5 (20 bytes)
+	binary.BigEndian.PutUint16(pkt[2:], uint16(totalLen))     // Total length
+	pkt[8] = 64                                               // TTL
+	pkt[9] = protoUDP                                         // Protocol
+	copy(pkt[12:16], srcIP[:])                                // Source IP
+	copy(pkt[16:20], dstIP[:])                                // Destination IP
+
+	// IP header checksum.
+	var ipSum uint32
+	for i := 0; i < ipHdrLen; i += 2 {
+		ipSum += uint32(binary.BigEndian.Uint16(pkt[i:]))
+	}
+	binary.BigEndian.PutUint16(pkt[10:], ^checksumFold(ipSum))
+
+	// === UDP header ===
+	binary.BigEndian.PutUint16(pkt[ipHdrLen:], srcPort)
+	binary.BigEndian.PutUint16(pkt[ipHdrLen+2:], dstPort)
+	binary.BigEndian.PutUint16(pkt[ipHdrLen+4:], uint16(udpHdrLen+len(payload)))
+	// UDP checksum = 0 (optional for IPv4, RFC 768).
+	// Set to 0 initially; will compute below.
+
+	// === Payload ===
+	copy(pkt[ipHdrLen+udpHdrLen:], payload)
+
+	// === UDP checksum (pseudo-header + header + payload) ===
+	var udpSum uint32
+	// Pseudo-header: srcIP, dstIP, zero, protocol, UDP length.
+	udpSum += uint32(binary.BigEndian.Uint16(srcIP[:2]))
+	udpSum += uint32(binary.BigEndian.Uint16(srcIP[2:]))
+	udpSum += uint32(binary.BigEndian.Uint16(dstIP[:2]))
+	udpSum += uint32(binary.BigEndian.Uint16(dstIP[2:]))
+	udpSum += uint32(protoUDP)
+	udpLen := uint16(udpHdrLen + len(payload))
+	udpSum += uint32(udpLen)
+	// UDP header + payload (checksum field is 0 during calculation).
+	for i := ipHdrLen; i+1 < totalLen; i += 2 {
+		udpSum += uint32(binary.BigEndian.Uint16(pkt[i:]))
+	}
+	if totalLen%2 == 1 {
+		udpSum += uint32(pkt[totalLen-1]) << 8
+	}
+	ck := ^checksumFold(udpSum)
+	if ck == 0 {
+		ck = 0xFFFF // RFC 768: checksum 0 means "no checksum", use 0xFFFF instead.
+	}
+	binary.BigEndian.PutUint16(pkt[ipHdrLen+6:], ck)
+
+	return pkt
+}

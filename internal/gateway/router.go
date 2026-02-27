@@ -33,8 +33,10 @@ type TUNRouter struct {
 	rules     *core.RuleEngine
 	registry  *core.TunnelRegistry
 	wfp       platform.ProcessFilter
-	dnsRouter *DNSRouter
-	ipFilter  atomic.Pointer[IPFilter]
+	dnsRouter    *DNSRouter
+	dnsResolver  *DNSResolver // for in-band DNS hijack (macOS: utun packets to tunIP:53)
+	dnsHijackSem chan struct{} // limits concurrent hijack goroutines
+	ipFilter     atomic.Pointer[IPFilter]
 
 	tunIP   [4]byte       // 10.255.0.1 in network byte order
 	selfPID uint32        // current process PID (loop prevention)
@@ -164,6 +166,15 @@ func (r *TUNRouter) SetFakeIPPool(pool *FakeIPPool) {
 			}
 		})
 	}
+}
+
+// SetDNSResolver installs a DNS resolver for in-band DNS hijacking.
+// On macOS, packets to tunIP:53 go through TUN instead of being delivered
+// to the socket-based resolver. This allows the TUN router to intercept
+// those packets and resolve them directly.
+func (r *TUNRouter) SetDNSResolver(resolver *DNSResolver) {
+	r.dnsResolver = resolver
+	r.dnsHijackSem = make(chan struct{}, 64) // max 64 concurrent DNS hijacks
 }
 
 // Start begins the packet processing loop.
@@ -591,6 +602,14 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 		return
 	}
 
+	// In-band DNS hijack: on macOS, packets to our TUN IP port 53 arrive
+	// through the TUN device instead of being delivered to the local socket.
+	// Process them directly via the DNS resolver and write the response back.
+	if m.dstIP == r.tunIP && m.dstP == 53 && r.dnsResolver != nil {
+		r.hijackDNS(pkt, m)
+		return
+	}
+
 	// Resolve effective dst IP for raw flow lookup (FakeIP → real IP).
 	effectiveDstIP := m.dstIP
 	if r.fakeIPPool != nil && r.fakeIPPool.IsFakeIP(m.dstIP) {
@@ -718,6 +737,47 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	tunSetUDPPort(pkt, m.tpOff+2, udpProxyPort, m.tpOff+6)
 
 	r.writePacket(pkt)
+}
+
+// hijackDNS intercepts a DNS query packet destined for tunIP:53 and resolves
+// it in-band via the DNS resolver. The response is written back to TUN as a
+// raw IP/UDP packet. Runs asynchronously to avoid blocking the packet loop.
+func (r *TUNRouter) hijackDNS(pkt []byte, m pktMeta) {
+	// Extract DNS payload from UDP.
+	udpPayloadOff := m.tpOff + minUDPHdr
+	if udpPayloadOff >= len(pkt) {
+		return
+	}
+	query := make([]byte, len(pkt)-udpPayloadOff)
+	copy(query, pkt[udpPayloadOff:])
+
+	if len(query) < 12 {
+		return // too small for DNS header
+	}
+
+	srcIP := m.srcIP
+	srcPort := m.srcP
+
+	select {
+	case r.dnsHijackSem <- struct{}{}:
+		go func() {
+			defer func() { <-r.dnsHijackSem }()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			resp := r.dnsResolver.Resolve(ctx, query)
+			if resp == nil {
+				return
+			}
+
+			// Build response: src=tunIP:53, dst=originalSrc:originalSrcPort.
+			respPkt := buildUDPPacket(r.tunIP, srcIP, 53, srcPort, resp)
+			r.writePacket(respPkt)
+		}()
+	default:
+		// Too many concurrent DNS hijacks — drop (client will retry).
+	}
 }
 
 func (r *TUNRouter) handleUDPProxyResponse(pkt []byte, m pktMeta) {

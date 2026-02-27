@@ -217,15 +217,22 @@ func (r *DNSResolver) udpLoop(ctx context.Context) {
 }
 
 func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAddr *net.UDPAddr) {
+	resp := r.Resolve(ctx, query)
+	if resp != nil {
+		r.udpConn.WriteToUDP(resp, clientAddr)
+	}
+}
+
+// Resolve processes a raw DNS query and returns the response bytes.
+// This is the core DNS resolution logic used by both the socket listener
+// (via handleUDPQuery) and the TUN router's in-band DNS hijack.
+func (r *DNSResolver) Resolve(ctx context.Context, query []byte) []byte {
 	name := extractDNSName(query)
 
 	// Block AAAA (IPv6) queries — return empty NOERROR response.
 	// IPv6 is disabled in the VPN stack; forwarding AAAA would leak IPv6 addresses.
 	if isAAAAQuery(query) {
-		if resp := makeEmptyResponse(query); resp != nil {
-			r.udpConn.WriteToUDP(resp, clientAddr)
-		}
-		return
+		return makeEmptyResponse(query)
 	}
 
 	// Domain-based routing: intercept before cache/forwarding.
@@ -243,10 +250,7 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 			switch domainResult.Action {
 			case core.DomainBlock:
 				core.Log.Debugf("DNS", "%s blocked by domain rule (UDP)", name)
-				if nxd := makeNXDomain(query); nxd != nil {
-					r.udpConn.WriteToUDP(nxd, clientAddr)
-				}
-				return
+				return makeNXDomain(query)
 			case core.DomainDirect:
 				routeTunnelID = DirectTunnelID
 			case core.DomainRoute:
@@ -261,13 +265,12 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 		if err == nil {
 			queryID := getDNSTransactionID(query)
 			if cached, ok := r.cache.Get(queryID, qName, qtype, qclass); ok {
-				r.udpConn.WriteToUDP(cached, clientAddr)
 				core.Log.Debugf("DNS", "%s cache hit (UDP)", name)
 				// Record IPs from cached response too.
 				if domainResult.Matched && r.domainTable != nil {
 					r.recordDomainIPs(cached, name, routeTunnelID, domainResult.Action)
 				}
-				return
+				return cached
 			}
 		}
 	}
@@ -281,14 +284,13 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 			resp = r.rewriteResponseWithFakeIP(resp, name, routeTunnelID, domainResult.Action)
 		}
 		r.cacheStore(query, resp)
-		r.udpConn.WriteToUDP(resp, clientAddr)
 		if name != "" {
 			core.Log.Debugf("DNS", "%s → %s via %s (UDP, route=%s)", name, server, usedTunnel, routeTunnelID)
 		}
 		if domainResult.Matched && r.domainTable != nil {
 			r.recordDomainIPs(resp, name, routeTunnelID, domainResult.Action)
 		}
-		return
+		return resp
 	}
 
 	// Fallback: try direct provider.
@@ -296,11 +298,10 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 		resp, server, err = r.forwardUDP(ctx, DirectTunnelID, query)
 		if err == nil {
 			r.cacheStore(query, resp)
-			r.udpConn.WriteToUDP(resp, clientAddr)
 			if name != "" {
 				core.Log.Debugf("DNS", "%s → %s via direct/fallback (UDP)", name, server)
 			}
-			return
+			return resp
 		}
 	}
 
@@ -309,18 +310,14 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 	resp, err = r.forwardRawUDP(ctx, query)
 	if err == nil {
 		r.cacheStore(query, resp)
-		r.udpConn.WriteToUDP(resp, clientAddr)
 		if name != "" {
 			core.Log.Debugf("DNS", "%s → raw fallback (UDP)", name)
 		}
-		return
+		return resp
 	}
 
 	core.Log.Warnf("DNS", "All tunnels/servers failed for %s (UDP): %v", name, err)
-	// Send SERVFAIL response.
-	if sf := makeServFail(query); sf != nil {
-		r.udpConn.WriteToUDP(sf, clientAddr)
-	}
+	return makeServFail(query)
 }
 
 func (r *DNSResolver) forwardUDP(ctx context.Context, tunnelID string, query []byte) ([]byte, netip.Addr, error) {

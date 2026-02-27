@@ -207,6 +207,11 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 		} else {
 			hasDNSResolver = true
 		}
+		// Enable in-band DNS hijack in the TUN router. On macOS, packets to
+		// the TUN IP (10.255.0.1:53) go through the TUN device instead of
+		// being delivered to the socket-based resolver. The TUN router
+		// intercepts these and calls Resolve() directly.
+		tunRouter.SetDNSResolver(dnsResolver)
 	}
 
 	// === 11a. Gateway activation controller ===
