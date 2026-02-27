@@ -90,6 +90,12 @@ export function setNotificationPreferences(enabled, tunnelErrors, updates) {
   return BindingService.SetNotificationPreferences(enabled, tunnelErrors, updates);
 }
 
+// ─── Platform ──────────────────────────────────────────────────────
+
+export function getPlatform() {
+  return BindingService.GetPlatform();
+}
+
 // ─── Processes ──────────────────────────────────────────────────────
 
 export function listProcesses(nameFilter = '') {

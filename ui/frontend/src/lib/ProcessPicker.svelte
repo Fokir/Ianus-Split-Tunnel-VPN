@@ -25,6 +25,7 @@
   let allProcesses = [];
   let filter = '';
   let loading = false;
+  let loadError = '';
 
   $: filtered = allProcesses.filter(p =>
     !filter ||
@@ -39,10 +40,12 @@
 
   async function loadProcesses() {
     loading = true;
+    loadError = '';
     try {
       allProcesses = await api.listProcesses('') || [];
-    } catch (_) {
+    } catch (e) {
       allProcesses = [];
+      loadError = e?.message || String(e);
     } finally {
       loading = false;
     }
@@ -71,6 +74,15 @@
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
         </svg>
         {$t('rules.loadingProcesses')}
+      </div>
+    {:else if loadError}
+      <div class="py-4 text-center space-y-2">
+        <div class="text-xs text-red-400">{$t('rules.processLoadError')}</div>
+        <div class="text-[10px] text-zinc-600 font-mono break-all px-2">{loadError}</div>
+        <button
+          class="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+          on:click={loadProcesses}
+        >{$t('rules.retry')}</button>
       </div>
     {:else if filtered.length === 0}
       <div class="text-xs text-zinc-500 py-4 text-center">{$t('rules.noProcesses')}</div>

@@ -1029,6 +1029,8 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// Look up PID by source port.
 	pid, err := r.procID.FindPIDByPort(srcPort, isUDP)
 	if err != nil {
+		core.Log.Debugf("Router", "PID lookup failed for port %d (UDP=%v): %v → pass",
+			srcPort, isUDP, err)
 		return "", 0, flowPass, 0, fb
 	}
 
@@ -1041,6 +1043,7 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// Get exe path with pre-cached lowercase variants (zero alloc on cache hit).
 	exePath, exeLower, baseLower, ok := r.matcher.GetExePathLower(pid)
 	if !ok {
+		core.Log.Debugf("Router", "exe path unknown for PID %d (port %d) → pass", pid, srcPort)
 		return "", 0, flowPass, 0, fb
 	}
 
@@ -1084,6 +1087,8 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// connection-level fallback in the proxy layer.
 	result, currentRuleIdx := r.rules.MatchPreLoweredFrom(exeLower, baseLower, 0)
 	if !result.Matched {
+		core.Log.Debugf("Router", "no rule match for %s (base=%s, PID=%d, dst=%d.%d.%d.%d) → pass",
+			exeLower, baseLower, pid, dstIP[0], dstIP[1], dstIP[2], dstIP[3])
 		return "", 0, flowPass, 0, fb
 	}
 

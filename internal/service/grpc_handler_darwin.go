@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"google.golang.org/protobuf/types/known/emptypb"
 
@@ -17,8 +18,10 @@ import (
 func (s *Service) ListProcesses(_ context.Context, req *vpnapi.ProcessListRequest) (*vpnapi.ProcessListResponse, error) {
 	procs, err := listRunningProcesses(req.NameFilter)
 	if err != nil {
+		log.Printf("[Service] ListProcesses error: %v", err)
 		return nil, err
 	}
+	log.Printf("[Service] ListProcesses: filter=%q, found %d processes", req.NameFilter, len(procs))
 	return &vpnapi.ProcessListResponse{Processes: procs}, nil
 }
 

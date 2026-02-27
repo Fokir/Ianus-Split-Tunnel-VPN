@@ -3,7 +3,7 @@
 package service
 
 import (
-	"encoding/binary"
+	"log"
 	"path/filepath"
 	"strings"
 	"unsafe"
@@ -15,29 +15,32 @@ import (
 
 // proc_info syscall constants (from XNU bsd/sys/proc_info.h).
 const (
-	sysProcInfo         = 336 // SYS_PROC_INFO
-	procInfoCallList    = 1   // PROC_INFO_CALL_LISTPIDS
-	procInfoCallPIDInfo = 2   // PROC_INFO_CALL_PIDINFO
-	procAllPIDs         = 1   // PROC_ALL_PIDS
-	procPIDPathInfo     = 11  // PROC_PIDPATHINFO
-	procPIDPathMaxSz    = 4096
+	sysProcInfo         = 336  // SYS_PROC_INFO
+	procInfoCallPIDInfo = 2    // PROC_INFO_CALL_PIDINFO
+	procPIDPathInfo     = 11   // PROC_PIDPATHINFO
+	procPIDPathMaxSz    = 4096 // PROC_PIDPATHINFO_MAXSIZE
 )
 
 // listRunningProcesses enumerates running processes, optionally filtered by name substring.
-// Uses raw proc_info syscalls — no CGO required.
+// Uses sysctl("kern.proc.all") for PID enumeration (proven approach from gopsutil)
+// and proc_pidpath syscall for executable path resolution.
 func listRunningProcesses(nameFilter string) ([]*vpnapi.ProcessInfo, error) {
 	pids, err := listAllPIDsForLister()
 	if err != nil {
+		log.Printf("[ProcessLister] listAllPIDsForLister failed: %v", err)
 		return nil, err
 	}
+	log.Printf("[ProcessLister] enumerated %d PIDs", len(pids))
 
 	filterLower := strings.ToLower(nameFilter)
 	pathBuf := make([]byte, procPIDPathMaxSz)
 	var result []*vpnapi.ProcessInfo
+	pathFails := 0
 
 	for _, pid := range pids {
 		path := pidPath(uint32(pid), pathBuf)
 		if path == "" {
+			pathFails++
 			continue
 		}
 
@@ -53,6 +56,7 @@ func listRunningProcesses(nameFilter string) ([]*vpnapi.ProcessInfo, error) {
 		})
 	}
 
+	log.Printf("[ProcessLister] resolved %d processes (%d PIDs had no path)", len(result), pathFails)
 	return result, nil
 }
 
@@ -74,41 +78,19 @@ func pidPath(pid uint32, buf []byte) string {
 	return unix.ByteSliceToString(buf[:n])
 }
 
-// listAllPIDsForLister returns all process IDs on the system.
+// listAllPIDsForLister returns all process IDs on the system using
+// sysctl("kern.proc.all"). This is the standard approach used by gopsutil
+// and other tools — it returns typed KinfoProc structures and handles
+// buffer management automatically via golang.org/x/sys/unix.
 func listAllPIDsForLister() ([]int, error) {
-	// First call: determine buffer size.
-	n, _, errno := unix.Syscall6(
-		sysProcInfo,
-		uintptr(procInfoCallList),
-		uintptr(procAllPIDs),
-		0, 0, 0, 0,
-	)
-	if errno != 0 {
-		return nil, errno
-	}
-	if n <= 0 {
-		return nil, unix.ESRCH
+	kprocs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	if err != nil {
+		return nil, err
 	}
 
-	// Allocate 2x to handle race with new processes.
-	bufSize := int(n) * 2
-	buf := make([]byte, bufSize)
-	n, _, errno = unix.Syscall6(
-		sysProcInfo,
-		uintptr(procInfoCallList),
-		uintptr(procAllPIDs),
-		0, 0,
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(bufSize),
-	)
-	if errno != 0 {
-		return nil, errno
-	}
-
-	numPIDs := int(n) / 4
-	pids := make([]int, 0, numPIDs)
-	for i := 0; i < numPIDs; i++ {
-		pid := int32(binary.LittleEndian.Uint32(buf[i*4 : i*4+4]))
+	pids := make([]int, 0, len(kprocs))
+	for i := range kprocs {
+		pid := int32(kprocs[i].Proc.P_pid)
 		if pid > 0 {
 			pids = append(pids, int(pid))
 		}

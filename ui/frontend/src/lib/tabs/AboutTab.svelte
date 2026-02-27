@@ -4,6 +4,10 @@
   import * as api from '../api.js';
   import ErrorAlert from '../ErrorAlert.svelte';
   import { t } from '../i18n';
+  import { platform } from '../stores/platform.js';
+
+  const platformLabels = { windows: 'Windows', darwin: 'macOS', linux: 'Linux' };
+  $: platformLabel = platformLabels[$platform] || $platform;
 
   let version = '';
   let uptime = '';
@@ -121,7 +125,7 @@
     </div>
     <div class="flex items-center justify-between px-4 py-3 bg-zinc-800/40 border border-zinc-700/40 rounded-lg">
       <span class="text-sm text-zinc-400">{$t('about.platform')}</span>
-      <span class="text-sm text-zinc-200">Windows</span>
+      <span class="text-sm text-zinc-200">{platformLabel}</span>
     </div>
   </div>
 

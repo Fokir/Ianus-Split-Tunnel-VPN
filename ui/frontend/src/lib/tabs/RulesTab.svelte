@@ -6,8 +6,15 @@
   import ProcessPicker from '../ProcessPicker.svelte';
   import { t } from '../i18n';
   import { tabDirty } from '../stores/dirty.js';
+  import { isMac } from '../stores/platform.js';
 
   $: $tabDirty = dirty || ipsDirty || appsDirty;
+
+  // Platform-aware placeholder examples.
+  $: appExclusionPlaceholder = $isMac ? 'chrome, /Applications/Games/*' : 'chrome.exe, C:\\Games\\*';
+  $: rulePatternPlaceholder = $isMac
+    ? 'chrome, firefox*, regex:^.*/games/.*$'
+    : 'chrome.exe, firefox*, regex:^.*\\\\games\\\\.*$';
   onDestroy(() => tabDirty.set(false));
 
   let rules = [];
@@ -768,7 +775,7 @@
                 type="text"
                 bind:value={entry.pattern}
                 on:input={markAppsDirty}
-                placeholder="chrome.exe, C:\Games\*"
+                placeholder={appExclusionPlaceholder}
                 class="flex-1 px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50 font-mono"
               />
               <button
@@ -855,7 +862,7 @@
               id="rule-pattern"
               type="text"
               bind:value={modalRule.pattern}
-              placeholder="chrome.exe, firefox*, regex:^.*\\games\\.*$"
+              placeholder={rulePatternPlaceholder}
               class="flex-1 px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50"
             />
             <button

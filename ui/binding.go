@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -47,6 +48,12 @@ func NewBindingService(client *ipc.Client) *BindingService {
 // Shutdown cancels all background streaming goroutines.
 func (b *BindingService) Shutdown() {
 	b.cancel()
+}
+
+// GetPlatform returns the OS identifier ("windows", "darwin", etc.)
+// so the frontend can adapt UI hints and examples per platform.
+func (b *BindingService) GetPlatform() string {
+	return runtime.GOOS
 }
 
 // ─── Service status ─────────────────────────────────────────────────
