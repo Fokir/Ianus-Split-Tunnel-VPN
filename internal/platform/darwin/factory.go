@@ -1,7 +1,7 @@
 //go:build darwin
 
 // Package darwin provides macOS-specific platform implementations for daemon mode:
-// utun TUN adapter, PF packet filter, route management, proc_info PID lookup,
+// utun TUN adapter, PF packet filter, route management, sysctl pcblist_n PID lookup,
 // IP_BOUND_IF socket binding, Unix domain socket IPC, osascript notifications.
 package darwin
 
