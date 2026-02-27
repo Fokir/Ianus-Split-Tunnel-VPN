@@ -48,7 +48,7 @@ func setupTray(app *application.App, mainWindow *application.WebviewWindow, bind
 
 	menu.AddSeparator()
 
-	// Exit — close GUI; daemon continues running in background.
+	// Exit — stop daemon and close GUI.
 	menu.Add("Выйти").OnClick(func(_ *application.Context) {
 		binding.Shutdown()
 		_, _ = binding.client.Service.Shutdown(context.Background(), &emptypb.Empty{})
