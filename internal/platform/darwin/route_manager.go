@@ -104,6 +104,8 @@ func (rm *RouteManager) RealNICInfo() platform.RealNIC { return rm.realNIC }
 
 // SetDefaultRoute adds split default routes (0/1 + 128/1) through the utun adapter.
 // These are more specific than 0/0, capturing all traffic into the TUN.
+// Additionally adds interface-scoped routes for the real NIC so that sockets
+// bound via IP_BOUND_IF (DirectProvider) can still route through the physical interface.
 func (rm *RouteManager) SetDefaultRoute() error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -124,6 +126,24 @@ func (rm *RouteManager) SetDefaultRoute() error {
 			return fmt.Errorf("[Route] add %s: %w", prefix, err)
 		}
 		rm.defaultRoutes = append(rm.defaultRoutes, delArgs)
+	}
+
+	// Add interface-scoped routes for the real NIC so that sockets bound
+	// to the physical interface via IP_BOUND_IF can still route traffic.
+	// Without these, macOS kernel returns EHOSTUNREACH for bound sockets
+	// because the unscoped split routes point to utun, not en0.
+	if rm.realNIC.Gateway.IsValid() && rm.realIfName != "" {
+		gw := rm.realNIC.Gateway.String()
+		for _, prefix := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
+			addArgs := []string{"-n", "add", "-net", prefix, gw, "-ifscope", rm.realIfName}
+			delArgs := []string{"-n", "delete", "-net", prefix, "-ifscope", rm.realIfName}
+
+			if err := routeExec(addArgs, true); err != nil {
+				core.Log.Warnf("Route", "scoped route %s via %s: %v", prefix, rm.realIfName, err)
+			} else {
+				rm.defaultRoutes = append(rm.defaultRoutes, delArgs)
+			}
+		}
 	}
 
 	core.Log.Infof("Route", "Default routes set via %s", rm.tunIfName)

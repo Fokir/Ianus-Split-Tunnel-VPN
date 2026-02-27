@@ -368,6 +368,13 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 			// Update realNIC reference.
 			realNIC = newNIC
 
+			// Re-apply default routes (including interface-scoped routes for real NIC).
+			// Scoped routes reference the real gateway and may become stale on network change.
+			routeMgr.RemoveDefaultRoute()
+			if err := routeMgr.SetDefaultRoute(); err != nil {
+				core.Log.Warnf("Route", "Re-apply default routes: %v", err)
+			}
+
 			// Re-apply bypass routes for all connected VPN tunnels.
 			for _, entry := range registry.All() {
 				if entry.ID == gateway.DirectTunnelID || entry.State != core.TunnelStateUp {
