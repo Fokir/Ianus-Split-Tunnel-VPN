@@ -57,6 +57,9 @@ type TUNRouter struct {
 	domainTable  *DomainTable
 	geoipMatcher atomic.Pointer[GeoIPMatcher]
 
+	// FakeIP pool for synthetic IP resolution (nil if disabled).
+	fakeIPPool *FakeIPPool
+
 	// Server endpoint routing: VPN server IP → owning tunnel ID.
 	// Traffic to a server IP is routed through its tunnel (e.g. admin panels).
 	serverEPMu sync.RWMutex
@@ -148,6 +151,19 @@ func (r *TUNRouter) SetDomainTable(dt *DomainTable) {
 // SetGeoIPMatcher atomically swaps the GeoIP matcher for IP-based country routing.
 func (r *TUNRouter) SetGeoIPMatcher(m *GeoIPMatcher) {
 	r.geoipMatcher.Store(m)
+}
+
+// SetFakeIPPool sets the FakeIP pool for synthetic IP resolution.
+func (r *TUNRouter) SetFakeIPPool(pool *FakeIPPool) {
+	r.fakeIPPool = pool
+	// Wire cleanup hook: decrement FakeIP flow count when raw flows expire.
+	if pool != nil {
+		r.flows.SetRawFlowCleanupHook(func(entry *RawFlowEntry) {
+			if entry.FakeIP != [4]byte{} {
+				pool.DecrementFlows(entry.FakeIP)
+			}
+		})
+	}
 }
 
 // Start begins the packet processing loop.
@@ -381,18 +397,38 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 		// tunnelID and proxyPort already set
 	}
 
+	// Resolve FakeIP → real IP for packet rewriting and dial.
+	var fakeIP [4]byte
+	var realDstIP [4]byte
+	effectiveDstIP := m.dstIP
+	if r.fakeIPPool != nil && r.fakeIPPool.IsFakeIP(m.dstIP) {
+		if fEntry, ok := r.fakeIPPool.Lookup(m.dstIP); ok && len(fEntry.RealIPs) > 0 {
+			fakeIP = m.dstIP
+			realDstIP = fEntry.RealIPs[0]
+			effectiveDstIP = realDstIP
+		}
+	}
+
 	// Raw forwarding path: non-direct tunnels with a raw forwarder.
 	if tunnelID != DirectTunnelID {
 		if rf, vpnIP, ok := r.getRawForwarder(tunnelID); ok {
 			basePrio, isAuto := mapRulePriority(rulePrio)
 			prio := resolvePriority(basePrio, isAuto, pkt, protoTCP, m.tpOff, m.srcP, m.dstP)
-			r.flows.InsertRawFlow(protoTCP, m.dstIP, m.srcP, &RawFlowEntry{
+			// Key raw flow by effective (real) dst IP so inbound lookups match.
+			r.flows.InsertRawFlow(protoTCP, effectiveDstIP, m.srcP, &RawFlowEntry{
 				LastActivity: r.flows.NowSec(),
 				TunnelID:     tunnelID,
 				VpnIP:        vpnIP,
 				Priority:     prio,
 				IsAuto:       isAuto,
+				FakeIP:       fakeIP,
+				RealDstIP:    realDstIP,
 			})
+			// FakeIP: rewrite packet dst from FakeIP to real IP before forwarding.
+			if fakeIP != [4]byte{} {
+				tunOverwriteDstIP(pkt, realDstIP, m.tpOff+16)
+				r.fakeIPPool.IncrementFlows(fakeIP)
+			}
 			r.handleRawOutbound(pkt, m, tunnelID, vpnIP, rf, protoTCP, prio)
 			return
 		}
@@ -406,7 +442,7 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 	dstIP := netip.AddrFrom4(m.dstIP)
 
 	// Create NAT entry with fallback context for connection-level fallback.
-	r.flows.InsertTCP(dstIP, m.srcP, &NATEntry{
+	natEntry := &NATEntry{
 		LastActivity:    r.flows.NowSec(),
 		OriginalDstIP:   dstIP,
 		OriginalDstPort: m.dstP,
@@ -416,7 +452,12 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 		ExeLower:        fb.exeLower,
 		BaseLower:       fb.baseLower,
 		RuleIdx:         fb.ruleIdx,
-	})
+	}
+	// FakeIP: set resolved real IP for proxy dial.
+	if fakeIP != [4]byte{} {
+		natEntry.ResolvedDstIP = netip.AddrFrom4(realDstIP)
+	}
+	r.flows.InsertTCP(dstIP, m.srcP, natEntry)
 
 	// Hairpin: swap IPs, rewrite dst port to proxy port.
 	tunSwapIPs(pkt)
@@ -468,23 +509,35 @@ func (r *TUNRouter) handleTCPProxyResponse(pkt []byte, m pktMeta) {
 }
 
 func (r *TUNRouter) handleTCPExisting(pkt []byte, m pktMeta) {
+	// Resolve effective dst IP for raw flow lookup (FakeIP → real IP).
+	effectiveDstIP := m.dstIP
+	if r.fakeIPPool != nil && r.fakeIPPool.IsFakeIP(m.dstIP) {
+		if fEntry, ok := r.fakeIPPool.Lookup(m.dstIP); ok && len(fEntry.RealIPs) > 0 {
+			effectiveDstIP = fEntry.RealIPs[0]
+		}
+	}
+
 	// Check raw flow table first.
-	if rawEntry, ok := r.flows.GetRawFlow(protoTCP, m.dstIP, m.srcP); ok {
+	if rawEntry, ok := r.flows.GetRawFlow(protoTCP, effectiveDstIP, m.srcP); ok {
 		atomic.StoreInt64(&rawEntry.LastActivity, r.flows.NowSec())
 
 		// RST: clean up raw flow.
 		if m.flags&tcpRST != 0 {
-			r.flows.DeleteRawFlow(protoTCP, m.dstIP, m.srcP)
+			r.flows.DeleteRawFlow(protoTCP, effectiveDstIP, m.srcP)
 		}
 
 		if rf, vpnIP, ok := r.getRawForwarder(rawEntry.TunnelID); ok {
+			// FakeIP: rewrite dst from FakeIP to real IP for existing flows.
+			if rawEntry.FakeIP != [4]byte{} {
+				tunOverwriteDstIP(pkt, rawEntry.RealDstIP, m.tpOff+16)
+			}
 			// Per-packet TCP control boost (SYN/FIN/RST bypass bulk queue).
 			prio := boostTCPControl(pkt, m.tpOff, rawEntry.Priority)
 			r.handleRawOutbound(pkt, m, rawEntry.TunnelID, vpnIP, rf, protoTCP, prio)
 			return
 		}
 		// Forwarder gone — delete stale raw flow and fall through.
-		r.flows.DeleteRawFlow(protoTCP, m.dstIP, m.srcP)
+		r.flows.DeleteRawFlow(protoTCP, effectiveDstIP, m.srcP)
 	}
 
 	// Check proxy NAT table.
@@ -538,15 +591,27 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 		return
 	}
 
+	// Resolve effective dst IP for raw flow lookup (FakeIP → real IP).
+	effectiveDstIP := m.dstIP
+	if r.fakeIPPool != nil && r.fakeIPPool.IsFakeIP(m.dstIP) {
+		if fEntry, ok := r.fakeIPPool.Lookup(m.dstIP); ok && len(fEntry.RealIPs) > 0 {
+			effectiveDstIP = fEntry.RealIPs[0]
+		}
+	}
+
 	// Fast path: existing raw flow.
-	if rawEntry, ok := r.flows.GetRawFlow(protoUDP, m.dstIP, m.srcP); ok {
+	if rawEntry, ok := r.flows.GetRawFlow(protoUDP, effectiveDstIP, m.srcP); ok {
 		atomic.StoreInt64(&rawEntry.LastActivity, r.flows.NowSec())
 		if rf, vpnIP, ok := r.getRawForwarder(rawEntry.TunnelID); ok {
+			// FakeIP: rewrite dst from FakeIP to real IP for existing flows.
+			if rawEntry.FakeIP != [4]byte{} {
+				tunOverwriteDstIP(pkt, rawEntry.RealDstIP, m.tpOff+6)
+			}
 			r.handleRawOutbound(pkt, m, rawEntry.TunnelID, vpnIP, rf, protoUDP, rawEntry.Priority)
 			return
 		}
 		// Forwarder gone — delete stale raw flow and fall through.
-		r.flows.DeleteRawFlow(protoUDP, m.dstIP, m.srcP)
+		r.flows.DeleteRawFlow(protoUDP, effectiveDstIP, m.srcP)
 	}
 
 	// Fast path: existing proxy NAT entry.
@@ -591,18 +656,35 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 		// Already set
 	}
 
+	// Resolve FakeIP → real IP for new UDP flows.
+	var fakeIP [4]byte
+	var realDstIP [4]byte
+	if effectiveDstIP != m.dstIP {
+		// Already resolved above.
+		fakeIP = m.dstIP
+		realDstIP = effectiveDstIP
+	}
+
 	// Raw forwarding for new UDP flows on non-direct tunnels.
 	if tunnelID != DirectTunnelID {
 		if rf, vpnIP, ok := r.getRawForwarder(tunnelID); ok {
 			basePrio, isAuto := mapRulePriority(rulePrio)
 			prio := resolvePriority(basePrio, isAuto, pkt, protoUDP, m.tpOff, m.srcP, m.dstP)
-			r.flows.InsertRawFlow(protoUDP, m.dstIP, m.srcP, &RawFlowEntry{
+			// Key raw flow by effective (real) dst IP so inbound lookups match.
+			r.flows.InsertRawFlow(protoUDP, effectiveDstIP, m.srcP, &RawFlowEntry{
 				LastActivity: r.flows.NowSec(),
 				TunnelID:     tunnelID,
 				VpnIP:        vpnIP,
 				Priority:     prio,
 				IsAuto:       isAuto,
+				FakeIP:       fakeIP,
+				RealDstIP:    realDstIP,
 			})
+			// FakeIP: rewrite packet dst from FakeIP to real IP before forwarding.
+			if fakeIP != [4]byte{} {
+				tunOverwriteDstIP(pkt, realDstIP, m.tpOff+6)
+				r.fakeIPPool.IncrementFlows(fakeIP)
+			}
 			r.handleRawOutbound(pkt, m, tunnelID, vpnIP, rf, protoUDP, prio)
 			return
 		}
@@ -614,7 +696,7 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	}
 
 	// Create NAT entry with fallback context for connection-level fallback.
-	r.flows.InsertUDP(dstIP, m.srcP, &UDPNATEntry{
+	udpNATEntry := &UDPNATEntry{
 		LastActivity:    r.flows.NowSec(),
 		OriginalDstIP:   dstIP,
 		OriginalDstPort: m.dstP,
@@ -624,7 +706,12 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 		ExeLower:        fb.exeLower,
 		BaseLower:       fb.baseLower,
 		RuleIdx:         fb.ruleIdx,
-	})
+	}
+	// FakeIP: set resolved real IP for proxy dial.
+	if fakeIP != [4]byte{} {
+		udpNATEntry.ResolvedDstIP = netip.AddrFrom4(realDstIP)
+	}
+	r.flows.InsertUDP(dstIP, m.srcP, udpNATEntry)
 
 	// Hairpin.
 	tunSwapIPs(pkt)
@@ -808,6 +895,29 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// deliver these packets either — drop them to avoid futile proxy timeouts.
 	if f != nil && f.IsLocalBypassIP(dstIP) {
 		return "", 0, flowDrop, 0, fb
+	}
+
+	// FakeIP routing: highest priority for domain-based routing.
+	// IsFakeIP is lock-free arithmetic — safe for hot path.
+	if r.fakeIPPool != nil && r.fakeIPPool.IsFakeIP(dstIP) {
+		if entry, ok := r.fakeIPPool.Lookup(dstIP); ok {
+			switch entry.Action {
+			case core.DomainBlock:
+				return "", 0, flowDrop, 0, fb
+			case core.DomainDirect:
+				return "", 0, flowPass, 0, fb
+			case core.DomainRoute:
+				if regEntry, ok := r.registry.Get(entry.TunnelID); ok && regEntry.State == core.TunnelStateUp {
+					if isUDP {
+						if port, ok := r.registry.GetUDPProxyPort(entry.TunnelID); ok {
+							return entry.TunnelID, port, flowRoute, core.PriorityAuto, fb
+						}
+					}
+					return entry.TunnelID, regEntry.ProxyPort, flowRoute, core.PriorityAuto, fb
+				}
+				// Tunnel down — fall through to process rules.
+			}
+		}
 	}
 
 	// Domain-based routing: IP→tunnel from DNS resolution.
@@ -1155,6 +1265,12 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 
 	// Rewrite dst IP from VPN IP to TUN IP (10.255.0.1).
 	tunOverwriteDstIP(pkt, r.tunIP, transportCkOff)
+
+	// FakeIP: rewrite src IP from real server IP to FakeIP so client sees
+	// responses from the FakeIP it connected to.
+	if rawEntry.FakeIP != [4]byte{} {
+		tunOverwriteSrcIP(pkt, rawEntry.FakeIP, transportCkOff)
+	}
 
 	// Write to TUN adapter — this copies into WinTUN ring buffer.
 	r.writePacket(pkt)

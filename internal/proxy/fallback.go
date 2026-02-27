@@ -69,7 +69,7 @@ func (fd *FallbackDialer) DialTCPWithFallback(ctx context.Context, info core.NAT
 		return nil, "", fmt.Errorf("no provider for tunnel %q", info.TunnelID)
 	}
 
-	conn, err := prov.DialTCP(ctx, info.OriginalDst)
+	conn, err := prov.DialTCP(ctx, info.DialDst())
 	if err == nil {
 		return conn, info.TunnelID, nil
 	}
@@ -80,7 +80,7 @@ func (fd *FallbackDialer) DialTCPWithFallback(ctx context.Context, info core.NAT
 	}
 
 	core.Log.Warnf("Proxy", "TCP dial %s via %s failed (%v), applying fallback=%s",
-		info.OriginalDst, info.TunnelID, err, info.Fallback)
+		info.DialDst(), info.TunnelID, err, info.Fallback)
 
 	return fd.applyFallbackTCP(ctx, info, err)
 }
@@ -92,7 +92,7 @@ func (fd *FallbackDialer) DialUDPWithFallback(ctx context.Context, info core.NAT
 		return nil, "", fmt.Errorf("no provider for tunnel %q", info.TunnelID)
 	}
 
-	conn, err := prov.DialUDP(ctx, info.OriginalDst)
+	conn, err := prov.DialUDP(ctx, info.DialDst())
 	if err == nil {
 		return conn, info.TunnelID, nil
 	}
@@ -102,7 +102,7 @@ func (fd *FallbackDialer) DialUDPWithFallback(ctx context.Context, info core.NAT
 	}
 
 	core.Log.Warnf("Proxy", "UDP dial %s via %s failed (%v), applying fallback=%s",
-		info.OriginalDst, info.TunnelID, err, info.Fallback)
+		info.DialDst(), info.TunnelID, err, info.Fallback)
 
 	return fd.applyFallbackUDP(ctx, info, err)
 }
@@ -114,14 +114,14 @@ func (fd *FallbackDialer) applyFallbackTCP(ctx context.Context, info core.NATInf
 		return nil, "", fmt.Errorf("dial failed, fallback=%s: %w", info.Fallback, originalErr)
 
 	case core.PolicyAllowDirect:
-		return fd.dialDirectTCP(ctx, info.OriginalDst, originalErr)
+		return fd.dialDirectTCP(ctx, info.DialDst(), originalErr)
 
 	case core.PolicyFailover:
 		return fd.failoverDialTCP(ctx, info, originalErr)
 
 	default:
 		// Unknown policy — treat as allow_direct for safety.
-		return fd.dialDirectTCP(ctx, info.OriginalDst, originalErr)
+		return fd.dialDirectTCP(ctx, info.DialDst(), originalErr)
 	}
 }
 
@@ -132,13 +132,13 @@ func (fd *FallbackDialer) applyFallbackUDP(ctx context.Context, info core.NATInf
 		return nil, "", fmt.Errorf("dial failed, fallback=%s: %w", info.Fallback, originalErr)
 
 	case core.PolicyAllowDirect:
-		return fd.dialDirectUDP(ctx, info.OriginalDst, originalErr)
+		return fd.dialDirectUDP(ctx, info.DialDst(), originalErr)
 
 	case core.PolicyFailover:
 		return fd.failoverDialUDP(ctx, info, originalErr)
 
 	default:
-		return fd.dialDirectUDP(ctx, info.OriginalDst, originalErr)
+		return fd.dialDirectUDP(ctx, info.DialDst(), originalErr)
 	}
 }
 
@@ -198,11 +198,11 @@ func (fd *FallbackDialer) failoverDialTCP(ctx context.Context, info core.NATInfo
 		}
 
 		dialCtx, cancel := context.WithTimeout(ctx, fallbackDialTimeout)
-		conn, err := prov.DialTCP(dialCtx, info.OriginalDst)
+		conn, err := prov.DialTCP(dialCtx, info.DialDst())
 		cancel()
 
 		if err == nil {
-			core.Log.Infof("Proxy", "TCP failover to tunnel %s succeeded for %s", result.TunnelID, info.OriginalDst)
+			core.Log.Infof("Proxy", "TCP failover to tunnel %s succeeded for %s", result.TunnelID, info.DialDst())
 			return conn, result.TunnelID, nil
 		}
 
@@ -210,14 +210,14 @@ func (fd *FallbackDialer) failoverDialTCP(ctx context.Context, info core.NATInfo
 			return nil, "", err
 		}
 
-		core.Log.Warnf("Proxy", "TCP failover dial %s via %s also failed: %v", info.OriginalDst, result.TunnelID, err)
+		core.Log.Warnf("Proxy", "TCP failover dial %s via %s also failed: %v", info.DialDst(), result.TunnelID, err)
 
 		// Check this rule's fallback policy.
 		switch result.Fallback {
 		case core.PolicyBlock, core.PolicyDrop:
 			return nil, "", fmt.Errorf("failover dial failed, fallback=%s: %w", result.Fallback, err)
 		case core.PolicyAllowDirect:
-			return fd.dialDirectTCP(ctx, info.OriginalDst, err)
+			return fd.dialDirectTCP(ctx, info.DialDst(), err)
 		case core.PolicyFailover:
 			continue // try next rule
 		}
@@ -243,11 +243,11 @@ func (fd *FallbackDialer) failoverDialUDP(ctx context.Context, info core.NATInfo
 		}
 
 		dialCtx, cancel := context.WithTimeout(ctx, fallbackDialTimeout)
-		conn, err := prov.DialUDP(dialCtx, info.OriginalDst)
+		conn, err := prov.DialUDP(dialCtx, info.DialDst())
 		cancel()
 
 		if err == nil {
-			core.Log.Infof("Proxy", "UDP failover to tunnel %s succeeded for %s", result.TunnelID, info.OriginalDst)
+			core.Log.Infof("Proxy", "UDP failover to tunnel %s succeeded for %s", result.TunnelID, info.DialDst())
 			return conn, result.TunnelID, nil
 		}
 
@@ -255,13 +255,13 @@ func (fd *FallbackDialer) failoverDialUDP(ctx context.Context, info core.NATInfo
 			return nil, "", err
 		}
 
-		core.Log.Warnf("Proxy", "UDP failover dial %s via %s also failed: %v", info.OriginalDst, result.TunnelID, err)
+		core.Log.Warnf("Proxy", "UDP failover dial %s via %s also failed: %v", info.DialDst(), result.TunnelID, err)
 
 		switch result.Fallback {
 		case core.PolicyBlock, core.PolicyDrop:
 			return nil, "", fmt.Errorf("failover dial failed, fallback=%s: %w", result.Fallback, err)
 		case core.PolicyAllowDirect:
-			return fd.dialDirectUDP(ctx, info.OriginalDst, err)
+			return fd.dialDirectUDP(ctx, info.DialDst(), err)
 		case core.PolicyFailover:
 			continue
 		}

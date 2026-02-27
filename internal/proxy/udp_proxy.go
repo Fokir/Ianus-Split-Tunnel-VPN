@@ -192,7 +192,7 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 			core.Log.Errorf("Proxy", "UDP no provider for tunnel %q, dropping", info.TunnelID)
 			return
 		}
-		tunnelConn, err = prov.DialUDP(ctx, info.OriginalDst)
+		tunnelConn, err = prov.DialUDP(ctx, info.DialDst())
 	}
 
 	if err != nil {

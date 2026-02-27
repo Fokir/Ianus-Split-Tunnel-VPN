@@ -63,6 +63,9 @@ type DNSResolver struct {
 	domainMatcher atomic.Pointer[DomainMatcher]
 	domainTable   *DomainTable
 
+	// FakeIP pool for synthetic IP allocation (nil if disabled).
+	fakeIPPool *FakeIPPool
+
 	// Goroutine limiters to prevent resource exhaustion under DNS flood.
 	udpSem chan struct{} // limits concurrent UDP handlers
 	tcpSem chan struct{} // limits concurrent TCP handlers
@@ -105,6 +108,11 @@ func (r *DNSResolver) SetDomainMatcher(m *DomainMatcher) {
 // SetDomainTable sets the domain table for recording resolved IPs.
 func (r *DNSResolver) SetDomainTable(dt *DomainTable) {
 	r.domainTable = dt
+}
+
+// SetFakeIPPool sets the FakeIP pool for DNS response rewriting.
+func (r *DNSResolver) SetFakeIPPool(pool *FakeIPPool) {
+	r.fakeIPPool = pool
 }
 
 // Start begins listening for DNS queries on UDP and TCP.
@@ -267,6 +275,11 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 	// Forward DNS query through all configured VPN tunnels in parallel.
 	resp, server, usedTunnel, err := r.forwardUDPAll(ctx, tunnelIDs, query)
 	if err == nil {
+		// FakeIP rewriting: for domain-matched queries, rewrite A records to FakeIP
+		// BEFORE caching so cache hits also return FakeIPs.
+		if domainResult.Matched && domainResult.Action != core.DomainBlock {
+			resp = r.rewriteResponseWithFakeIP(resp, name, routeTunnelID, domainResult.Action)
+		}
 		r.cacheStore(query, resp)
 		r.udpConn.WriteToUDP(resp, clientAddr)
 		if name != "" {
@@ -584,6 +597,11 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 			return
 		}
 	} else {
+		// FakeIP rewriting: for domain-matched queries, rewrite A records to FakeIP
+		// BEFORE caching so cache hits also return FakeIPs.
+		if domainResult.Matched && domainResult.Action != core.DomainBlock {
+			resp = r.rewriteResponseWithFakeIP(resp, name, routeTunnelID, domainResult.Action)
+		}
 		r.cacheStore(query, resp)
 		if name != "" {
 			core.Log.Debugf("DNS", "%s → %s via %s (TCP, route=%s)", name, server, usedTunnel, routeTunnelID)
@@ -1018,4 +1036,124 @@ func (r *DNSResolver) recordDomainIPs(resp []byte, domain string, tunnelID strin
 	if recorded > 0 {
 		core.Log.Debugf("DNS", "Recorded %d IPs for %s → %s (%s)", recorded, domain, tunnelID, action)
 	}
+}
+
+// rewriteResponseWithFakeIP rewrites A-record IPs in a DNS response to a FakeIP,
+// records the FakeIP in the DomainTable, and returns the modified response.
+// Returns the original response unchanged if FakeIP allocation fails.
+func (r *DNSResolver) rewriteResponseWithFakeIP(resp []byte, domain string, tunnelID string, action core.DomainAction) []byte {
+	if r.fakeIPPool == nil || len(resp) < 12 {
+		return resp
+	}
+
+	ancount := int(binary.BigEndian.Uint16(resp[6:8]))
+	if ancount == 0 {
+		return resp
+	}
+
+	// First pass: extract real IPs from A records.
+	var realIPs [][4]byte
+	pos := 12
+	// Skip QNAME.
+	for pos < len(resp) {
+		labelLen := int(resp[pos])
+		if labelLen == 0 {
+			pos++
+			break
+		}
+		if labelLen >= 0xC0 {
+			pos += 2
+			break
+		}
+		pos += 1 + labelLen
+	}
+	pos += 4 // skip QTYPE + QCLASS
+
+	// Collect A record positions and IPs.
+	type aRecordPos struct {
+		rdataOff int
+		ttlOff   int
+	}
+	var aPositions []aRecordPos
+
+	scanPos := pos
+	for i := 0; i < ancount && scanPos < len(resp); i++ {
+		if scanPos >= len(resp) {
+			break
+		}
+		if resp[scanPos]&0xC0 == 0xC0 {
+			scanPos += 2
+		} else {
+			for scanPos < len(resp) {
+				labelLen := int(resp[scanPos])
+				if labelLen == 0 {
+					scanPos++
+					break
+				}
+				if labelLen >= 0xC0 {
+					scanPos += 2
+					break
+				}
+				scanPos += 1 + labelLen
+			}
+		}
+
+		if scanPos+10 > len(resp) {
+			break
+		}
+
+		rrType := binary.BigEndian.Uint16(resp[scanPos : scanPos+2])
+		rdLength := int(binary.BigEndian.Uint16(resp[scanPos+8 : scanPos+10]))
+		ttlOff := scanPos + 4
+		scanPos += 10
+
+		if scanPos+rdLength > len(resp) {
+			break
+		}
+
+		if rrType == 1 && rdLength == 4 { // A record
+			var ip [4]byte
+			copy(ip[:], resp[scanPos:scanPos+4])
+			realIPs = append(realIPs, ip)
+			aPositions = append(aPositions, aRecordPos{rdataOff: scanPos, ttlOff: ttlOff})
+		}
+
+		scanPos += rdLength
+	}
+
+	if len(realIPs) == 0 {
+		return resp
+	}
+
+	// Allocate FakeIP for this domain.
+	fakeIP, err := r.fakeIPPool.AllocateForDomain(domain, realIPs, tunnelID, action)
+	if err != nil {
+		core.Log.Warnf("DNS", "FakeIP allocation failed for %s: %v (using real IPs)", domain, err)
+		return resp
+	}
+
+	// Clone response for in-place modification.
+	modified := make([]byte, len(resp))
+	copy(modified, resp)
+
+	// Rewrite all A records to the FakeIP and set long TTL.
+	for _, ap := range aPositions {
+		copy(modified[ap.rdataOff:ap.rdataOff+4], fakeIP[:])
+		binary.BigEndian.PutUint32(modified[ap.ttlOff:ap.ttlOff+4], 3600) // 1 hour TTL
+	}
+
+	// Record FakeIP in DomainTable (never expires — ExpiresAt=0).
+	if r.domainTable != nil {
+		r.domainTable.Insert(fakeIP, &DomainEntry{
+			TunnelID:  tunnelID,
+			Action:    action,
+			Domain:    domain,
+			ExpiresAt: 0, // never expires
+		})
+	}
+
+	core.Log.Debugf("DNS", "FakeIP: %s → %d.%d.%d.%d (real: %d IPs, tunnel=%s, action=%s)",
+		domain, fakeIP[0], fakeIP[1], fakeIP[2], fakeIP[3], len(realIPs), tunnelID, action)
+
+	return modified
 }

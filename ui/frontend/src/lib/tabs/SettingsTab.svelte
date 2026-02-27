@@ -19,6 +19,7 @@
 
   // DNS cache section expanded
   let dnsCacheExpanded = false;
+  let fakeipExpanded = false;
 
   // Auto-update toggle (persisted in localStorage)
   let autoUpdateEnabled = localStorage.getItem('autoUpdateEnabled') !== 'false';
@@ -59,6 +60,7 @@
         config.dns.servers = ['1.1.1.1', '8.8.8.8', '8.8.4.4', '9.9.9.9'];
       }
       if (!config.dns.cache) config.dns.cache = { enabled: true, max_size: 10000, max_ttl: '5m', min_ttl: '30s', neg_ttl: '60s' };
+      if (!config.dns.fakeip) config.dns.fakeip = { enabled: true, cidr: '' };
       if (!config.logging) config.logging = { level: 'INFO', file_logging_enabled: false };
       if (config.logging.file_logging_enabled === undefined) config.logging.file_logging_enabled = false;
       if (!config.reconnect) config.reconnect = { enabled: true, interval: '10s', max_retries: 0 };
@@ -522,6 +524,50 @@
                 class="w-full px-3 py-1.5 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:border-blue-500/50"
               />
             </div>
+          </div>
+        </div>
+      {/if}
+    </section>
+
+    <!-- FakeIP -->
+    <section class="space-y-3">
+      <button
+        class="flex items-center gap-2 text-sm font-medium text-zinc-400 uppercase tracking-wider hover:text-zinc-300 transition-colors"
+        on:click={() => fakeipExpanded = !fakeipExpanded}
+      >
+        <svg class="w-3.5 h-3.5 transition-transform {fakeipExpanded ? 'rotate-90' : ''}" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
+        </svg>
+        {$t('settings.fakeip')}
+      </button>
+      {#if fakeipExpanded}
+        <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4 space-y-3">
+          <label class="flex items-center justify-between cursor-pointer">
+            <div>
+              <div class="text-sm text-zinc-200">{$t('settings.fakeipEnabled')}</div>
+              <div class="text-xs text-zinc-500">{$t('settings.fakeipHint')}</div>
+            </div>
+            <input
+              type="checkbox"
+              bind:checked={config.dns.fakeip.enabled}
+              on:change={markDirty}
+              class="w-9 h-5 bg-zinc-700 rounded-full appearance-none relative cursor-pointer
+                     checked:bg-blue-600 transition-colors
+                     after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4
+                     after:bg-white after:rounded-full after:transition-transform
+                     checked:after:translate-x-4"
+            />
+          </label>
+          <div>
+            <label for="fakeip-cidr" class="block text-xs font-medium text-zinc-400 mb-1">{$t('settings.fakeipCidr')}</label>
+            <input
+              id="fakeip-cidr"
+              type="text"
+              bind:value={config.dns.fakeip.cidr}
+              on:input={markDirty}
+              placeholder="198.18.0.0/15"
+              class="w-full px-3 py-1.5 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50"
+            />
           </div>
         </div>
       {/if}

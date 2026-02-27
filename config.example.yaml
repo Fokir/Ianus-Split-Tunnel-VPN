@@ -109,6 +109,14 @@ dns:
   #   max_ttl: "5m"      # Maximum TTL cap
   #   neg_ttl: "60s"     # NXDOMAIN cache TTL
 
+  # FakeIP: synthetic IP allocation for domain-based routing (optional).
+  # When enabled, DNS responses for domain-matched queries are rewritten
+  # to use IPs from the configured CIDR range (RFC 2544 benchmark range).
+  # This prevents browser DNS cache from breaking domain routing rules.
+  # fakeip:
+  #   enabled: true           # Enable FakeIP rewriting
+  #   cidr: "198.18.0.0/15"   # FakeIP address pool (default: 198.18.0.0/15)
+
 # Logging configuration (optional).
 # Controls log verbosity globally and per-component.
 # Levels: debug, info, warn, error, off (default: info).

@@ -90,11 +90,17 @@ message DNSCacheConfig {
   string neg_ttl = 5;         // duration string, e.g. "60s"
 }
 
+message FakeIPConfig {
+  bool enabled = 1;
+  string cidr = 2;                   // default "198.18.0.0/15"
+}
+
 message DNSConfig {
   string tunnel_id = 1;              // deprecated: use tunnel_ids
   repeated string servers = 2;
   DNSCacheConfig cache = 3;
   repeated string tunnel_ids = 4;    // tunnels for parallel DNS resolution
+  FakeIPConfig fakeip = 5;
 }
 
 // ─── Global filter config ───────────────────────────────────────────

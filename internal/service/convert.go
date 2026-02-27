@@ -233,6 +233,10 @@ func configToProto(c core.Config) *vpnapi.AppConfig {
 				MaxTtl:  c.DNS.Cache.MaxTTL,
 				NegTtl:  c.DNS.Cache.NegTTL,
 			},
+			Fakeip: &vpnapi.FakeIPConfig{
+				Enabled: c.DNS.FakeIP.Enabled == nil || *c.DNS.FakeIP.Enabled,
+				Cidr:    c.DNS.FakeIP.CIDR,
+			},
 		},
 		Logging: &vpnapi.LogConfig{
 			Level:              c.Logging.Level,
@@ -288,6 +292,13 @@ func configFromProto(pc *vpnapi.AppConfig) core.Config {
 				MinTTL:  pc.Dns.Cache.MinTtl,
 				MaxTTL:  pc.Dns.Cache.MaxTtl,
 				NegTTL:  pc.Dns.Cache.NegTtl,
+			}
+		}
+		if pc.Dns.Fakeip != nil {
+			fakeipEnabled := pc.Dns.Fakeip.Enabled
+			cfg.DNS.FakeIP = core.FakeIPConfig{
+				Enabled: &fakeipEnabled,
+				CIDR:    pc.Dns.Fakeip.Cidr,
 			}
 		}
 	}

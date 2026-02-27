@@ -213,7 +213,7 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 			core.Log.Errorf("Proxy", "No provider for tunnel %q, closing", info.TunnelID)
 			return
 		}
-		remoteConn, err = prov.DialTCP(ctx, info.OriginalDst)
+		remoteConn, err = prov.DialTCP(ctx, info.DialDst())
 	}
 
 	if err != nil {

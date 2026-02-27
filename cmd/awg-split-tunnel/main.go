@@ -421,6 +421,26 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 		dnsResolver.SetDomainTable(domainTable)
 	}
 	tunRouter.SetDomainTable(domainTable)
+
+	// FakeIP pool: synthetic IPs for domain-based routing (prevents browser DNS cache issues).
+	var fakeIPPool *gateway.FakeIPPool
+	if cfg.DNS.FakeIP.Enabled == nil || *cfg.DNS.FakeIP.Enabled {
+		cidr := cfg.DNS.FakeIP.CIDR
+		if cidr == "" {
+			cidr = "198.18.0.0/15"
+		}
+		var err error
+		fakeIPPool, err = gateway.NewFakeIPPool(cidr)
+		if err != nil {
+			core.Log.Errorf("DNS", "Failed to create FakeIP pool: %v", err)
+		} else {
+			if dnsResolver != nil {
+				dnsResolver.SetFakeIPPool(fakeIPPool)
+			}
+			tunRouter.SetFakeIPPool(fakeIPPool)
+			core.Log.Infof("DNS", "FakeIP pool active: %s", cidr)
+		}
+	}
 	if domainMatcher != nil && !domainMatcher.IsEmpty() {
 		core.Log.Infof("DNS", "Domain matcher active: %d rules", len(cfg.DomainRules))
 	}
@@ -439,6 +459,9 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 	}
 
 	dnsFlush := func() error {
+		if fakeIPPool != nil {
+			fakeIPPool.Flush()
+		}
 		if dnsResolver != nil {
 			dnsResolver.FlushCache()
 		}
@@ -457,6 +480,9 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 		m := buildDomainMatcher(rules, geositeFilePath, nicHTTPClient)
 		if dnsResolver != nil {
 			dnsResolver.SetDomainMatcher(m)
+		}
+		if fakeIPPool != nil {
+			fakeIPPool.Flush()
 		}
 		domainTable.Flush()
 

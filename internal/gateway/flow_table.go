@@ -41,6 +41,9 @@ type NATEntry struct {
 	ExeLower  string // pre-lowered exe path for failover re-matching
 	BaseLower string // pre-lowered exe basename
 	RuleIdx   int    // index of matched rule in RuleEngine
+
+	// FakeIP: real IP for dial when OriginalDstIP is a FakeIP.
+	ResolvedDstIP netip.Addr
 }
 
 // UDPNATEntry maps a redirected UDP flow back to its original destination.
@@ -56,6 +59,9 @@ type UDPNATEntry struct {
 	ExeLower  string
 	BaseLower string
 	RuleIdx   int
+
+	// FakeIP: real IP for dial when OriginalDstIP is a FakeIP.
+	ResolvedDstIP netip.Addr
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +75,8 @@ type RawFlowEntry struct {
 	VpnIP        [4]byte // cached VPN IP for fast src IP rewrite
 	Priority     byte    // cached QoS priority (PrioHigh/PrioNormal/PrioLow)
 	IsAuto       bool    // true when rule priority was "auto" (per-packet classification)
+	FakeIP       [4]byte // original FakeIP dst (zero if not FakeIP)
+	RealDstIP    [4]byte // real IP destination (for FakeIP rewriting)
 }
 
 // rawFlowKey is a compact key: proto(1) + dstIP(4) + srcPort(2) = 7 bytes.
@@ -148,6 +156,9 @@ type FlowTable struct {
 
 	// Cached Unix timestamp (seconds), updated every 250ms.
 	nowSec atomic.Int64
+
+	// Hook called before removing stale raw flows (e.g. for FakeIP flow counting).
+	rawFlowCleanupHook func(*RawFlowEntry)
 
 	// wg tracks background goroutines (cleanup loops, timestamp updater).
 	wg sync.WaitGroup
@@ -250,14 +261,22 @@ func (ft *FlowTable) LookupNAT(addrKey string) (core.NATInfo, bool) {
 	}
 
 	dst := netip.AddrPortFrom(entry.OriginalDstIP, entry.OriginalDstPort)
-	return core.NATInfo{
+	info := core.NATInfo{
 		OriginalDst: dst.String(),
 		TunnelID:    entry.TunnelID,
 		Fallback:    entry.Fallback,
 		ExeLower:    entry.ExeLower,
 		BaseLower:   entry.BaseLower,
 		RuleIdx:     entry.RuleIdx,
-	}, true
+	}
+
+	// If FakeIP resolved a real destination, provide it for dial.
+	if entry.ResolvedDstIP.IsValid() {
+		resolved := netip.AddrPortFrom(entry.ResolvedDstIP, entry.OriginalDstPort)
+		info.ResolvedDst = resolved.String()
+	}
+
+	return info, true
 }
 
 // ---------------------------------------------------------------------------
@@ -301,14 +320,22 @@ func (ft *FlowTable) LookupUDPNAT(addrKey string) (core.NATInfo, bool) {
 	}
 
 	dst := netip.AddrPortFrom(entry.OriginalDstIP, entry.OriginalDstPort)
-	return core.NATInfo{
+	info := core.NATInfo{
 		OriginalDst: dst.String(),
 		TunnelID:    entry.TunnelID,
 		Fallback:    entry.Fallback,
 		ExeLower:    entry.ExeLower,
 		BaseLower:   entry.BaseLower,
 		RuleIdx:     entry.RuleIdx,
-	}, true
+	}
+
+	// If FakeIP resolved a real destination, provide it for dial.
+	if entry.ResolvedDstIP.IsValid() {
+		resolved := netip.AddrPortFrom(entry.ResolvedDstIP, entry.OriginalDstPort)
+		info.ResolvedDst = resolved.String()
+	}
+
+	return info, true
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +440,11 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 					if len(stale) > 0 {
 						shard.mu.Lock()
 						for _, key := range stale {
+							if hook := ft.rawFlowCleanupHook; hook != nil {
+								if entry, ok := shard.m[key]; ok {
+									hook(entry)
+								}
+							}
 							delete(shard.m, key)
 						}
 						shard.mu.Unlock()
@@ -428,6 +460,12 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// SetRawFlowCleanupHook sets a callback invoked before removing stale raw flows.
+// Used by FakeIP to decrement active flow counts on eviction.
+func (ft *FlowTable) SetRawFlowCleanupHook(hook func(*RawFlowEntry)) {
+	ft.rawFlowCleanupHook = hook
 }
 
 // ---------------------------------------------------------------------------

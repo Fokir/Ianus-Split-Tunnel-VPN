@@ -78,11 +78,22 @@ func (p FallbackPolicy) String() string {
 // through alternative tunnels according to the rule's fallback policy.
 type NATInfo struct {
 	OriginalDst string
+	ResolvedDst string // real IP:port for dial when OriginalDst contains a FakeIP
 	TunnelID    string
 	Fallback    FallbackPolicy
 	ExeLower    string  // pre-lowered exe path for failover re-matching
 	BaseLower   string  // pre-lowered exe basename for failover re-matching
 	RuleIdx     int     // index of matched rule in RuleEngine, for failover chain
+}
+
+// DialDst returns the destination address to use for dialing.
+// If ResolvedDst is set (FakeIP case), it returns the real IP.
+// Otherwise returns the original destination.
+func (info NATInfo) DialDst() string {
+	if info.ResolvedDst != "" {
+		return info.ResolvedDst
+	}
+	return info.OriginalDst
 }
 
 func ParseFallbackPolicy(s string) (FallbackPolicy, error) {
@@ -238,6 +249,18 @@ type DNSRouteConfig struct {
 	Servers []string `yaml:"servers,omitempty"`
 	// Cache configures DNS response caching.
 	Cache DNSCacheYAMLConfig `yaml:"cache,omitempty"`
+	// FakeIP configures synthetic IP allocation for domain-matched DNS responses.
+	FakeIP FakeIPConfig `yaml:"fakeip,omitempty"`
+}
+
+// FakeIPConfig configures FakeIP allocation for domain-based routing.
+// When enabled, DNS responses for domain-matched queries are rewritten
+// to use synthetic IPs from the configured CIDR range. This ensures
+// routing decisions remain correct even when browsers cache DNS results.
+type FakeIPConfig struct {
+	// Enabled controls whether FakeIP is active (default true).
+	Enabled *bool  `yaml:"enabled,omitempty"`
+	CIDR    string `yaml:"cidr,omitempty"` // default "198.18.0.0/15"
 }
 
 // DNSCacheYAMLConfig holds DNS cache settings from YAML config.
