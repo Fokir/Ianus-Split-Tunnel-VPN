@@ -4,6 +4,7 @@ package darwin
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -36,6 +37,9 @@ type NetworkMonitor struct {
 	// Debounce: collapse rapid events into one callback via timer reset.
 	mu    sync.Mutex
 	timer *time.Timer
+
+	// Suppress prevents callbacks while we modify routes ourselves.
+	suppressed atomic.Bool
 }
 
 // NewNetworkMonitor creates a network change monitor.
@@ -122,10 +126,21 @@ func (nm *NetworkMonitor) isRelevant(msgType byte) bool {
 
 const debounceDuration = 2 * time.Second
 
+// Suppress prevents onChange callbacks from firing. Used during gateway
+// activation/deactivation to avoid feedback loops from our own route changes.
+func (nm *NetworkMonitor) Suppress() { nm.suppressed.Store(true) }
+
+// Resume re-enables onChange callbacks after a Suppress call.
+func (nm *NetworkMonitor) Resume() { nm.suppressed.Store(false) }
+
 // fireDebounced schedules the onChange callback with a 2-second debounce.
 // Uses time.AfterFunc + Reset to guarantee exactly one callback fires
 // debounceDuration after the LAST event in a burst.
 func (nm *NetworkMonitor) fireDebounced() {
+	if nm.suppressed.Load() {
+		return
+	}
+
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
 
@@ -135,6 +150,9 @@ func (nm *NetworkMonitor) fireDebounced() {
 			case <-nm.done:
 				return
 			default:
+				if nm.suppressed.Load() {
+					return
+				}
 				core.Log.Debugf("Gateway", "Network change detected, firing callback")
 				nm.onChange()
 			}

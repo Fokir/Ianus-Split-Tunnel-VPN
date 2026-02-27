@@ -300,6 +300,9 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 		core.Log.Infof("Core", "Gateway deactivated (no VPN tunnels)")
 	}
 
+	// Declared early so event handler closure can reference it (assigned below).
+	var netMon platform.NetworkMonitor
+
 	// Subscribe to tunnel state changes — activate/deactivate gateway dynamically.
 	bus.Subscribe(core.EventTunnelStateChanged, func(e core.Event) {
 		payload, ok := e.Payload.(core.TunnelStatePayload)
@@ -324,9 +327,44 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 		gwMu.Unlock()
 
 		if vpnUp > 0 && !wasActive {
+			// Suppress network monitor during activation to prevent feedback loop
+			// from our own route modifications generating PF_ROUTE events.
+			if netMon != nil {
+				netMon.Suppress()
+			}
+			// Add bypass routes BEFORE default routes to prevent a window
+			// where VPN encrypted traffic gets misrouted through TUN.
+			for _, entry := range registry.All() {
+				if entry.ID == gateway.DirectTunnelID || entry.State != core.TunnelStateUp {
+					continue
+				}
+				for _, ep := range tunnelCtrl.GetServerEndpoints(entry.ID) {
+					if err := routeMgr.AddBypassRoute(ep.Addr()); err != nil {
+						core.Log.Warnf("Route", "Pre-activation bypass route for %s: %v", ep.Addr(), err)
+					}
+				}
+			}
 			activateGateway()
+			// Resume after delay to absorb the cascade of PF_ROUTE events.
+			if netMon != nil {
+				time.AfterFunc(3*time.Second, func() {
+					if netMon != nil {
+						netMon.Resume()
+					}
+				})
+			}
 		} else if vpnUp == 0 && wasActive {
+			if netMon != nil {
+				netMon.Suppress()
+			}
 			deactivateGateway()
+			if netMon != nil {
+				time.AfterFunc(3*time.Second, func() {
+					if netMon != nil {
+						netMon.Resume()
+					}
+				})
+			}
 		} else if vpnUp > 0 && wasActive && cfgManager.Get().Global.KillSwitch {
 			// VPN endpoint list may have changed — refresh kill switch rules.
 			var vpnEndpoints []netip.Addr
@@ -345,7 +383,6 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 	})
 
 	// === 11d. Network Monitor (detect network changes — macOS) ===
-	var netMon platform.NetworkMonitor
 	if plat.NewNetworkMonitor != nil {
 		onChange := func() {
 			core.Log.Infof("Core", "Network change detected")
@@ -359,13 +396,25 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 
 			gwMu.Lock()
 			isActive := gwActive
+			oldGW := realNIC.Gateway
+			oldIdx := realNIC.Index
+			oldIP := realNIC.LocalIP
 			gwMu.Unlock()
 
 			if !isActive {
 				return
 			}
 
-			// Update realNIC reference.
+			// Skip if NIC hasn't actually changed — prevents feedback loop
+			// where our own route modifications trigger PF_ROUTE events.
+			if newNIC.Gateway == oldGW && newNIC.Index == oldIdx && newNIC.LocalIP == oldIP {
+				core.Log.Debugf("Core", "Network event ignored (NIC unchanged)")
+				return
+			}
+
+			// NIC actually changed — proceed with full re-application.
+			core.Log.Infof("Core", "NIC changed: gw=%s→%s idx=%d→%d ip=%s→%s",
+				oldGW, newNIC.Gateway, oldIdx, newNIC.Index, oldIP, newNIC.LocalIP)
 			realNIC = newNIC
 
 			// Re-apply default routes (including interface-scoped routes for real NIC).

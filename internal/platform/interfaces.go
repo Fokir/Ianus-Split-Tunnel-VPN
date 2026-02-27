@@ -115,6 +115,10 @@ type NetworkMonitor interface {
 	Start() error
 	// Stop stops the monitor.
 	Stop() error
+	// Suppress temporarily disables onChange callbacks (e.g. during our own route changes).
+	Suppress()
+	// Resume re-enables onChange callbacks after Suppress.
+	Resume()
 }
 
 // Notifier sends system notifications.

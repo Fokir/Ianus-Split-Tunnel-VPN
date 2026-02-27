@@ -247,6 +247,12 @@ func (a *TUNAdapter) SetDNS(servers []netip.Addr) error {
 		saveDNSBackup(a.primaryService, a.savedDNS)
 	}
 
+	// Skip if DNS is already set correctly — avoids unnecessary
+	// mDNSResponder restart that disrupts in-flight DNS queries.
+	if dnsAlreadyCorrect(currentDNSServers(a.primaryService), servers) {
+		return nil
+	}
+
 	args := []string{"-setdnsservers", a.primaryService}
 	for _, s := range servers {
 		args = append(args, s.String())
@@ -383,6 +389,20 @@ func currentDNSServers(service string) []string {
 		}
 	}
 	return servers
+}
+
+// dnsAlreadyCorrect returns true if the current DNS servers match desired,
+// preventing unnecessary networksetup calls and mDNSResponder restarts.
+func dnsAlreadyCorrect(current []string, desired []netip.Addr) bool {
+	if len(current) != len(desired) {
+		return false
+	}
+	for i, addr := range desired {
+		if current[i] != addr.String() {
+			return false
+		}
+	}
+	return true
 }
 
 // dnsBackupData is persisted to disk so DNS can be restored after a crash.
