@@ -3,40 +3,44 @@
 package process
 
 import (
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
 // proc_pidpath syscall constants (from XNU bsd/sys/proc_info.h).
+// Buffer size 1024 = PROC_PIDPATHINFO_SIZE (MAXPATHLEN), matching sing-box and mihomo.
 const (
-	sysProcInfo          = 336 // SYS_PROC_INFO
-	procInfoCallPIDInfo  = 2   // PROC_INFO_CALL_PIDINFO
-	procPIDPathInfo      = 11  // PROC_PIDPATHINFO
-	procPIDPathInfoMaxSz = 4096
+	procInfoCallPIDInfo  = 2    // PROC_INFO_CALL_PIDINFO
+	procPIDPathInfo      = 0xb  // PROC_PIDPATHINFO
+	procPIDPathInfoSize  = 1024 // PROC_PIDPATHINFO_SIZE = MAXPATHLEN
 )
 
 // queryProcessPath retrieves the executable path for a PID using the
 // proc_pidpath equivalent via raw syscall (no CGO required).
 //
-// Calls: syscall6(SYS_PROC_INFO=336, PROC_INFO_CALL_PIDINFO=2, pid, PROC_PIDPATHINFO=11, 0, buf, 4096)
+// Implementation matches sing-box/mihomo: uses syscall.SYS_PROC_INFO,
+// 1024-byte buffer, and reads the path from the buffer directly
+// (ignoring the syscall return value, relying on null-terminated string).
 func queryProcessPath(pid uint32) (string, error) {
-	buf := make([]byte, procPIDPathInfoMaxSz)
-	n, _, errno := unix.Syscall6(
-		sysProcInfo,
-		uintptr(procInfoCallPIDInfo),
+	buf := make([]byte, procPIDPathInfoSize)
+	_, _, errno := syscall.Syscall6(
+		syscall.SYS_PROC_INFO,
+		procInfoCallPIDInfo,
 		uintptr(pid),
-		uintptr(procPIDPathInfo),
-		0, // arg
+		procPIDPathInfo,
+		0,
 		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(procPIDPathInfoMaxSz),
+		procPIDPathInfoSize,
 	)
 	if errno != 0 {
 		return "", errno
 	}
-	if n == 0 {
+	// Path is null-terminated in the buffer; ByteSliceToString finds the null.
+	path := unix.ByteSliceToString(buf)
+	if path == "" {
 		return "", unix.ESRCH
 	}
-	// n = bytes written; result is a null-terminated C string.
-	return unix.ByteSliceToString(buf[:n]), nil
+	return path, nil
 }

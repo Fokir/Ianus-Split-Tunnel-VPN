@@ -6,6 +6,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -14,11 +15,11 @@ import (
 )
 
 // proc_info syscall constants (from XNU bsd/sys/proc_info.h).
+// Buffer size 1024 = PROC_PIDPATHINFO_SIZE (MAXPATHLEN), matching sing-box and mihomo.
 const (
-	sysProcInfo         = 336  // SYS_PROC_INFO
-	procInfoCallPIDInfo = 2    // PROC_INFO_CALL_PIDINFO
-	procPIDPathInfo     = 11   // PROC_PIDPATHINFO
-	procPIDPathMaxSz    = 4096 // PROC_PIDPATHINFO_MAXSIZE
+	procInfoCallPIDInfoSvc = 2    // PROC_INFO_CALL_PIDINFO
+	procPIDPathInfoSvc     = 0xb  // PROC_PIDPATHINFO
+	procPIDPathBufSize     = 1024 // PROC_PIDPATHINFO_SIZE = MAXPATHLEN
 )
 
 // listRunningProcesses enumerates running processes, optionally filtered by name substring.
@@ -33,7 +34,7 @@ func listRunningProcesses(nameFilter string) ([]*vpnapi.ProcessInfo, error) {
 	log.Printf("[ProcessLister] enumerated %d PIDs", len(pids))
 
 	filterLower := strings.ToLower(nameFilter)
-	pathBuf := make([]byte, procPIDPathMaxSz)
+	pathBuf := make([]byte, procPIDPathBufSize)
 	var result []*vpnapi.ProcessInfo
 	pathFails := 0
 
@@ -63,19 +64,19 @@ func listRunningProcesses(nameFilter string) ([]*vpnapi.ProcessInfo, error) {
 // pidPath retrieves the executable path for a PID via proc_pidpath syscall.
 // Returns empty string on error (permission denied, zombie, etc.).
 func pidPath(pid uint32, buf []byte) string {
-	n, _, errno := unix.Syscall6(
-		sysProcInfo,
-		uintptr(procInfoCallPIDInfo),
+	_, _, errno := syscall.Syscall6(
+		syscall.SYS_PROC_INFO,
+		procInfoCallPIDInfoSvc,
 		uintptr(pid),
-		uintptr(procPIDPathInfo),
+		procPIDPathInfoSvc,
 		0,
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(len(buf)),
 	)
-	if errno != 0 || n == 0 {
+	if errno != 0 {
 		return ""
 	}
-	return unix.ByteSliceToString(buf[:n])
+	return unix.ByteSliceToString(buf)
 }
 
 // listAllPIDsForLister returns all process IDs on the system using
