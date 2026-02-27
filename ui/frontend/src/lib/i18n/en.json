@@ -78,7 +78,8 @@
     "confirmRemove": "Remove tunnel \"{name}\"?",
     "confirmRemoveHint": "This action cannot be undone",
     "yes": "Yes",
-    "no": "No"
+    "no": "No",
+    "clickToRename": "Double-click to rename"
   },
   "subscriptions": {
     "title": "Subscriptions",
@@ -111,7 +112,10 @@
     "error": "Error",
     "refresh": "Refresh",
     "remove": "Remove",
-    "failedToLoad": "Failed to load subscriptions"
+    "failedToLoad": "Failed to load subscriptions",
+    "editTitle": "Edit Subscription",
+    "edit": "Edit",
+    "saveBtn": "Save"
   },
   "rules": {
     "title": "Routing rules",

@@ -39,6 +39,16 @@ func (s *Service) syncSubscriptionTunnels(ctx context.Context, subName string, w
 			core.Log.Warnf("Core", "Failed to add subscription tunnel %q: %v", tc.ID, err)
 		}
 	}
+
+	// Restore custom display names from gui.tunnel_names.
+	customNames := s.cfg.GetAllTunnelNames()
+	if len(customNames) > 0 {
+		for _, tc := range wanted {
+			if name, ok := customNames[tc.ID]; ok && name != "" {
+				s.registry.SetName(tc.ID, name)
+			}
+		}
+	}
 }
 
 // syncAllSubscriptionTunnels refreshes tunnels for every configured

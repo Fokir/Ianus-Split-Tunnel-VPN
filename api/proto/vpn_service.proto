@@ -370,6 +370,25 @@ message RefreshSubscriptionResponse {
   int32 tunnel_count = 3;
 }
 
+message UpdateSubscriptionRequest {
+  SubscriptionConfig config = 1;    // name must match existing subscription
+}
+
+message UpdateSubscriptionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message RenameTunnelRequest {
+  string tunnel_id = 1;
+  string name = 2;                  // new display name
+}
+
+message RenameTunnelResponse {
+  bool success = 1;
+  string error = 2;
+}
+
 // -- Service status --
 
 message ServiceStatus {
@@ -458,6 +477,7 @@ service VPNService {
   rpc Disconnect(DisconnectRequest) returns (DisconnectResponse);
   rpc RestartTunnel(ConnectRequest) returns (ConnectResponse);
   rpc SaveTunnelOrder(SaveTunnelOrderRequest) returns (SaveTunnelOrderResponse);
+  rpc RenameTunnel(RenameTunnelRequest) returns (RenameTunnelResponse);
 
   // -- Rules --
   rpc ListRules(google.protobuf.Empty) returns (RuleListResponse);
@@ -490,6 +510,7 @@ service VPNService {
   rpc AddSubscription(AddSubscriptionRequest) returns (AddSubscriptionResponse);
   rpc RemoveSubscription(RemoveSubscriptionRequest) returns (RemoveSubscriptionResponse);
   rpc RefreshSubscription(RefreshSubscriptionRequest) returns (RefreshSubscriptionResponse);
+  rpc UpdateSubscription(UpdateSubscriptionRequest) returns (UpdateSubscriptionResponse);
 
   // -- Connection restore --
   rpc RestoreConnections(google.protobuf.Empty) returns (ConnectResponse);

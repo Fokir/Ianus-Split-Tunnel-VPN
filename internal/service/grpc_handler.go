@@ -55,6 +55,9 @@ func (s *Service) ListTunnels(_ context.Context, _ *emptypb.Empty) (*vpnapi.Tunn
 		orderMap[id] = i
 	}
 
+	// Load custom display names overlay.
+	customNames := s.cfg.GetAllTunnelNames()
+
 	for _, e := range entries {
 		ts := tunnelEntryToProto(e, s.ctrl, s.geoResolver)
 		// Override sort_index from the global order list.
@@ -64,6 +67,10 @@ func (s *Service) ListTunnels(_ context.Context, _ *emptypb.Empty) (*vpnapi.Tunn
 			// Tunnels not in the order list go to the end
 			// (same base index; stable tiebreak by ID below).
 			ts.SortIndex = int32(len(orderList))
+		}
+		// Apply custom display name overlay.
+		if customName, ok := customNames[e.ID]; ok && customName != "" {
+			ts.Config.Name = customName
 		}
 		tunnels = append(tunnels, ts)
 	}
@@ -165,6 +172,35 @@ func (s *Service) SaveTunnelOrder(_ context.Context, req *vpnapi.SaveTunnelOrder
 		return &vpnapi.SaveTunnelOrderResponse{Success: false, Error: err.Error()}, nil
 	}
 	return &vpnapi.SaveTunnelOrderResponse{Success: true}, nil
+}
+
+func (s *Service) RenameTunnel(_ context.Context, req *vpnapi.RenameTunnelRequest) (*vpnapi.RenameTunnelResponse, error) {
+	if req.TunnelId == "" {
+		return &vpnapi.RenameTunnelResponse{Success: false, Error: "tunnel_id is required"}, nil
+	}
+
+	// Update registry (in-memory).
+	if !s.registry.SetName(req.TunnelId, req.Name) {
+		return &vpnapi.RenameTunnelResponse{Success: false, Error: "tunnel not found"}, nil
+	}
+
+	// Persist custom name in gui.tunnel_names.
+	s.cfg.SetTunnelName(req.TunnelId, req.Name)
+
+	// For manual tunnels, also update tunnels[].name in config.
+	cfg := s.cfg.Get()
+	for i, t := range cfg.Tunnels {
+		if t.ID == req.TunnelId {
+			cfg.Tunnels[i].Name = req.Name
+			s.cfg.SetQuiet(cfg)
+			break
+		}
+	}
+
+	if err := s.cfg.Save(); err != nil {
+		return &vpnapi.RenameTunnelResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &vpnapi.RenameTunnelResponse{Success: true}, nil
 }
 
 // ─── Rules ──────────────────────────────────────────────────────────
@@ -529,6 +565,26 @@ func (s *Service) RefreshSubscription(ctx context.Context, req *vpnapi.RefreshSu
 	}
 	s.syncSubscriptionTunnels(ctx, req.Name, tunnels)
 	return &vpnapi.RefreshSubscriptionResponse{Success: true, TunnelCount: int32(len(tunnels))}, nil
+}
+
+func (s *Service) UpdateSubscription(_ context.Context, req *vpnapi.UpdateSubscriptionRequest) (*vpnapi.UpdateSubscriptionResponse, error) {
+	if req.Config == nil || req.Config.Name == "" {
+		return &vpnapi.UpdateSubscriptionResponse{Success: false, Error: "name is required"}, nil
+	}
+
+	subs := s.cfg.GetSubscriptions()
+	if _, ok := subs[req.Config.Name]; !ok {
+		return &vpnapi.UpdateSubscriptionResponse{Success: false, Error: "subscription not found"}, nil
+	}
+
+	_, sub := subscriptionConfigFromProto(req.Config)
+	subs[req.Config.Name] = sub
+	s.cfg.SetSubscriptions(subs)
+	if err := s.cfg.Save(); err != nil {
+		return &vpnapi.UpdateSubscriptionResponse{Success: false, Error: err.Error()}, nil
+	}
+
+	return &vpnapi.UpdateSubscriptionResponse{Success: true}, nil
 }
 
 // ─── DNS ─────────────────────────────────────────────────────────────

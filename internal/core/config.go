@@ -311,10 +311,11 @@ type ReconnectConfig struct {
 
 // GUIConfig holds GUI-specific settings.
 type GUIConfig struct {
-	RestoreConnections bool            `yaml:"restore_connections,omitempty"`
-	ActiveTunnels      []string        `yaml:"active_tunnels,omitempty"`
-	TunnelOrder        []string        `yaml:"tunnel_order,omitempty"` // display order for all tunnels (incl. subscription)
-	Reconnect          ReconnectConfig `yaml:"reconnect,omitempty"`
+	RestoreConnections bool              `yaml:"restore_connections,omitempty"`
+	ActiveTunnels      []string          `yaml:"active_tunnels,omitempty"`
+	TunnelOrder        []string          `yaml:"tunnel_order,omitempty"` // display order for all tunnels (incl. subscription)
+	TunnelNames        map[string]string `yaml:"tunnel_names,omitempty"` // custom display names: tunnelID → name
+	Reconnect          ReconnectConfig   `yaml:"reconnect,omitempty"`
 }
 
 // SubscriptionConfig holds configuration for a VLESS subscription URL.
@@ -525,6 +526,44 @@ func (cm *ConfigManager) GetTunnelOrder() []string {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	return cm.config.GUI.TunnelOrder
+}
+
+// SetTunnelName stores a custom display name for the given tunnel ID.
+func (cm *ConfigManager) SetTunnelName(tunnelID, name string) {
+	cm.mu.Lock()
+	if cm.config.GUI.TunnelNames == nil {
+		cm.config.GUI.TunnelNames = make(map[string]string)
+	}
+	if name == "" {
+		delete(cm.config.GUI.TunnelNames, tunnelID)
+	} else {
+		cm.config.GUI.TunnelNames[tunnelID] = name
+	}
+	cm.mu.Unlock()
+}
+
+// GetTunnelName returns the custom display name for the given tunnel ID (empty if not set).
+func (cm *ConfigManager) GetTunnelName(tunnelID string) string {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	if cm.config.GUI.TunnelNames == nil {
+		return ""
+	}
+	return cm.config.GUI.TunnelNames[tunnelID]
+}
+
+// GetAllTunnelNames returns a copy of all custom tunnel names.
+func (cm *ConfigManager) GetAllTunnelNames() map[string]string {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	if cm.config.GUI.TunnelNames == nil {
+		return nil
+	}
+	out := make(map[string]string, len(cm.config.GUI.TunnelNames))
+	for k, v := range cm.config.GUI.TunnelNames {
+		out[k] = v
+	}
+	return out
 }
 
 // SetFromGUI replaces the entire config with values from the GUI.

@@ -102,6 +102,18 @@ func (tr *TunnelRegistry) SetState(id string, state TunnelState, err error) {
 	}
 }
 
+// SetName updates the display name of the tunnel in-place. Returns false if tunnel not found.
+func (tr *TunnelRegistry) SetName(id, name string) bool {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	entry, ok := tr.tunnels[id]
+	if !ok {
+		return false
+	}
+	entry.Config.Name = name
+	return true
+}
+
 // GetState returns the current state of a tunnel.
 func (tr *TunnelRegistry) GetState(id string) TunnelState {
 	tr.mu.RLock()

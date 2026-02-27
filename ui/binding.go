@@ -245,6 +245,22 @@ func (b *BindingService) SaveTunnelOrder(tunnelIDs []string) error {
 	return nil
 }
 
+// RenameTunnel sets a custom display name for a tunnel.
+func (b *BindingService) RenameTunnel(tunnelID, name string) error {
+	resp, err := b.client.Service.RenameTunnel(context.Background(), &vpnapi.RenameTunnelRequest{
+		TunnelId: tunnelID,
+		Name:     name,
+	})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	b.emitTunnelsChanged()
+	return nil
+}
+
 // ─── Rules ──────────────────────────────────────────────────────────
 
 type RuleInfo struct {
@@ -802,6 +818,34 @@ func (b *BindingService) RefreshAllSubscriptions() (*RefreshResult, error) {
 		return &RefreshResult{TunnelCount: resp.TunnelCount}, errors.New(resp.Error)
 	}
 	return &RefreshResult{TunnelCount: resp.TunnelCount}, nil
+}
+
+type UpdateSubscriptionParams struct {
+	Name            string `json:"name"`
+	URL             string `json:"url"`
+	RefreshInterval string `json:"refreshInterval"`
+	UserAgent       string `json:"userAgent"`
+	Prefix          string `json:"prefix"`
+}
+
+// UpdateSubscription updates an existing subscription's configuration.
+func (b *BindingService) UpdateSubscription(params UpdateSubscriptionParams) error {
+	resp, err := b.client.Service.UpdateSubscription(context.Background(), &vpnapi.UpdateSubscriptionRequest{
+		Config: &vpnapi.SubscriptionConfig{
+			Name:            params.Name,
+			Url:             params.URL,
+			RefreshInterval: params.RefreshInterval,
+			UserAgent:       params.UserAgent,
+			Prefix:          params.Prefix,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	return nil
 }
 
 // ─── Updates ─────────────────────────────────────────────────────────

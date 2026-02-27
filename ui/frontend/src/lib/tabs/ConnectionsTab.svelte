@@ -66,6 +66,11 @@
   let vlessXhttpHost = '';
   let vlessXhttpMode = 'auto';
 
+  // Inline rename
+  let renamingId = '';
+  let renameValue = '';
+  let renameInput;
+
   // Delete confirmation
   let confirmRemoveId = '';
 
@@ -352,6 +357,46 @@
     }
   }
 
+  async function startRename(tunnel) {
+    renamingId = tunnel.id;
+    renameValue = tunnel.name || tunnel.id;
+    await tick();
+    if (renameInput) {
+      renameInput.focus();
+      renameInput.select();
+    }
+  }
+
+  async function saveRename() {
+    if (!renamingId) return;
+    const trimmed = renameValue.trim();
+    if (trimmed) {
+      try {
+        await api.renameTunnel(renamingId, trimmed);
+        await refresh();
+      } catch (e) {
+        error = e.message;
+      }
+    }
+    renamingId = '';
+    renameValue = '';
+  }
+
+  function cancelRename() {
+    renamingId = '';
+    renameValue = '';
+  }
+
+  function handleRenameKeydown(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveRename();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelRename();
+    }
+  }
+
   function protocolLabel(proto) {
     switch (proto) {
       case 'amneziawg': return 'AWG';
@@ -502,10 +547,24 @@
               </span>
               <!-- Status dot -->
               <span class="w-2 h-2 rounded-full shrink-0 {stateDot(tunnel.state)}"></span>
-              <!-- Name -->
-              <span class="text-sm font-medium text-zinc-200 truncate">
-                {tunnel.name || tunnel.id}
-              </span>
+              <!-- Name (double-click to rename) -->
+              {#if renamingId === tunnel.id}
+                <input
+                  bind:this={renameInput}
+                  bind:value={renameValue}
+                  on:blur={saveRename}
+                  on:keydown={handleRenameKeydown}
+                  class="text-sm font-medium text-zinc-200 bg-zinc-700 border border-blue-500 rounded px-1.5 py-0.5 outline-none min-w-[80px] max-w-[200px]"
+                />
+              {:else}
+                <span
+                  class="text-sm font-medium text-zinc-200 truncate cursor-default"
+                  on:dblclick={() => startRename(tunnel)}
+                  title={$t('connections.clickToRename')}
+                >
+                  {tunnel.name || tunnel.id}
+                </span>
+              {/if}
               <!-- Protocol badge -->
               <span class="px-1.5 py-0.5 text-[0.625rem] font-medium rounded bg-zinc-700/60 text-zinc-400 shrink-0 leading-none">
                 {protocolLabel(tunnel.protocol)}

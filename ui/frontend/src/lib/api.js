@@ -48,6 +48,10 @@ export function saveTunnelOrder(tunnelIds) {
   return BindingService.SaveTunnelOrder(tunnelIds);
 }
 
+export function renameTunnel(tunnelID, name) {
+  return BindingService.RenameTunnel(tunnelID, name);
+}
+
 // ─── Rules ──────────────────────────────────────────────────────────
 
 export function listRules() {
@@ -138,6 +142,10 @@ export function refreshSubscription(name) {
 
 export function refreshAllSubscriptions() {
   return BindingService.RefreshAllSubscriptions();
+}
+
+export function updateSubscription(params) {
+  return BindingService.UpdateSubscription(params);
 }
 
 // ─── Stats streaming ──────────────────────────────────────────────

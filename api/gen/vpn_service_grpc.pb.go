@@ -31,6 +31,7 @@ const (
 	VPNService_Disconnect_FullMethodName               = "/awg.vpn.v1.VPNService/Disconnect"
 	VPNService_RestartTunnel_FullMethodName            = "/awg.vpn.v1.VPNService/RestartTunnel"
 	VPNService_SaveTunnelOrder_FullMethodName          = "/awg.vpn.v1.VPNService/SaveTunnelOrder"
+	VPNService_RenameTunnel_FullMethodName             = "/awg.vpn.v1.VPNService/RenameTunnel"
 	VPNService_ListRules_FullMethodName                = "/awg.vpn.v1.VPNService/ListRules"
 	VPNService_SaveRules_FullMethodName                = "/awg.vpn.v1.VPNService/SaveRules"
 	VPNService_ListDomainRules_FullMethodName          = "/awg.vpn.v1.VPNService/ListDomainRules"
@@ -49,6 +50,7 @@ const (
 	VPNService_AddSubscription_FullMethodName          = "/awg.vpn.v1.VPNService/AddSubscription"
 	VPNService_RemoveSubscription_FullMethodName       = "/awg.vpn.v1.VPNService/RemoveSubscription"
 	VPNService_RefreshSubscription_FullMethodName      = "/awg.vpn.v1.VPNService/RefreshSubscription"
+	VPNService_UpdateSubscription_FullMethodName       = "/awg.vpn.v1.VPNService/UpdateSubscription"
 	VPNService_RestoreConnections_FullMethodName       = "/awg.vpn.v1.VPNService/RestoreConnections"
 	VPNService_FlushDNS_FullMethodName                 = "/awg.vpn.v1.VPNService/FlushDNS"
 	VPNService_CheckUpdate_FullMethodName              = "/awg.vpn.v1.VPNService/CheckUpdate"
@@ -74,6 +76,7 @@ type VPNServiceClient interface {
 	Disconnect(ctx context.Context, in *DisconnectRequest, opts ...grpc.CallOption) (*DisconnectResponse, error)
 	RestartTunnel(ctx context.Context, in *ConnectRequest, opts ...grpc.CallOption) (*ConnectResponse, error)
 	SaveTunnelOrder(ctx context.Context, in *SaveTunnelOrderRequest, opts ...grpc.CallOption) (*SaveTunnelOrderResponse, error)
+	RenameTunnel(ctx context.Context, in *RenameTunnelRequest, opts ...grpc.CallOption) (*RenameTunnelResponse, error)
 	// -- Rules --
 	ListRules(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*RuleListResponse, error)
 	SaveRules(ctx context.Context, in *SaveRulesRequest, opts ...grpc.CallOption) (*SaveRulesResponse, error)
@@ -99,6 +102,7 @@ type VPNServiceClient interface {
 	AddSubscription(ctx context.Context, in *AddSubscriptionRequest, opts ...grpc.CallOption) (*AddSubscriptionResponse, error)
 	RemoveSubscription(ctx context.Context, in *RemoveSubscriptionRequest, opts ...grpc.CallOption) (*RemoveSubscriptionResponse, error)
 	RefreshSubscription(ctx context.Context, in *RefreshSubscriptionRequest, opts ...grpc.CallOption) (*RefreshSubscriptionResponse, error)
+	UpdateSubscription(ctx context.Context, in *UpdateSubscriptionRequest, opts ...grpc.CallOption) (*UpdateSubscriptionResponse, error)
 	// -- Connection restore --
 	RestoreConnections(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConnectResponse, error)
 	// -- DNS --
@@ -223,6 +227,16 @@ func (c *vPNServiceClient) SaveTunnelOrder(ctx context.Context, in *SaveTunnelOr
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SaveTunnelOrderResponse)
 	err := c.cc.Invoke(ctx, VPNService_SaveTunnelOrder_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) RenameTunnel(ctx context.Context, in *RenameTunnelRequest, opts ...grpc.CallOption) (*RenameTunnelResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenameTunnelResponse)
+	err := c.cc.Invoke(ctx, VPNService_RenameTunnel_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -427,6 +441,16 @@ func (c *vPNServiceClient) RefreshSubscription(ctx context.Context, in *RefreshS
 	return out, nil
 }
 
+func (c *vPNServiceClient) UpdateSubscription(ctx context.Context, in *UpdateSubscriptionRequest, opts ...grpc.CallOption) (*UpdateSubscriptionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateSubscriptionResponse)
+	err := c.cc.Invoke(ctx, VPNService_UpdateSubscription_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *vPNServiceClient) RestoreConnections(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConnectResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ConnectResponse)
@@ -504,6 +528,7 @@ type VPNServiceServer interface {
 	Disconnect(context.Context, *DisconnectRequest) (*DisconnectResponse, error)
 	RestartTunnel(context.Context, *ConnectRequest) (*ConnectResponse, error)
 	SaveTunnelOrder(context.Context, *SaveTunnelOrderRequest) (*SaveTunnelOrderResponse, error)
+	RenameTunnel(context.Context, *RenameTunnelRequest) (*RenameTunnelResponse, error)
 	// -- Rules --
 	ListRules(context.Context, *emptypb.Empty) (*RuleListResponse, error)
 	SaveRules(context.Context, *SaveRulesRequest) (*SaveRulesResponse, error)
@@ -529,6 +554,7 @@ type VPNServiceServer interface {
 	AddSubscription(context.Context, *AddSubscriptionRequest) (*AddSubscriptionResponse, error)
 	RemoveSubscription(context.Context, *RemoveSubscriptionRequest) (*RemoveSubscriptionResponse, error)
 	RefreshSubscription(context.Context, *RefreshSubscriptionRequest) (*RefreshSubscriptionResponse, error)
+	UpdateSubscription(context.Context, *UpdateSubscriptionRequest) (*UpdateSubscriptionResponse, error)
 	// -- Connection restore --
 	RestoreConnections(context.Context, *emptypb.Empty) (*ConnectResponse, error)
 	// -- DNS --
@@ -581,6 +607,9 @@ func (UnimplementedVPNServiceServer) RestartTunnel(context.Context, *ConnectRequ
 }
 func (UnimplementedVPNServiceServer) SaveTunnelOrder(context.Context, *SaveTunnelOrderRequest) (*SaveTunnelOrderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SaveTunnelOrder not implemented")
+}
+func (UnimplementedVPNServiceServer) RenameTunnel(context.Context, *RenameTunnelRequest) (*RenameTunnelResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenameTunnel not implemented")
 }
 func (UnimplementedVPNServiceServer) ListRules(context.Context, *emptypb.Empty) (*RuleListResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListRules not implemented")
@@ -635,6 +664,9 @@ func (UnimplementedVPNServiceServer) RemoveSubscription(context.Context, *Remove
 }
 func (UnimplementedVPNServiceServer) RefreshSubscription(context.Context, *RefreshSubscriptionRequest) (*RefreshSubscriptionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RefreshSubscription not implemented")
+}
+func (UnimplementedVPNServiceServer) UpdateSubscription(context.Context, *UpdateSubscriptionRequest) (*UpdateSubscriptionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateSubscription not implemented")
 }
 func (UnimplementedVPNServiceServer) RestoreConnections(context.Context, *emptypb.Empty) (*ConnectResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RestoreConnections not implemented")
@@ -869,6 +901,24 @@ func _VPNService_SaveTunnelOrder_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(VPNServiceServer).SaveTunnelOrder(ctx, req.(*SaveTunnelOrderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_RenameTunnel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameTunnelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).RenameTunnel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_RenameTunnel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).RenameTunnel(ctx, req.(*RenameTunnelRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1183,6 +1233,24 @@ func _VPNService_RefreshSubscription_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VPNService_UpdateSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateSubscriptionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).UpdateSubscription(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_UpdateSubscription_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).UpdateSubscription(ctx, req.(*UpdateSubscriptionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _VPNService_RestoreConnections_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -1343,6 +1411,10 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _VPNService_SaveTunnelOrder_Handler,
 		},
 		{
+			MethodName: "RenameTunnel",
+			Handler:    _VPNService_RenameTunnel_Handler,
+		},
+		{
 			MethodName: "ListRules",
 			Handler:    _VPNService_ListRules_Handler,
 		},
@@ -1405,6 +1477,10 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RefreshSubscription",
 			Handler:    _VPNService_RefreshSubscription_Handler,
+		},
+		{
+			MethodName: "UpdateSubscription",
+			Handler:    _VPNService_UpdateSubscription_Handler,
 		},
 		{
 			MethodName: "RestoreConnections",

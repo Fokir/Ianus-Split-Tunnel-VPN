@@ -8,8 +8,9 @@
   let loading = true;
   let error = '';
 
-  // Add modal state
+  // Add/Edit modal state
   let showAddModal = false;
+  let editMode = false;
   let addName = '';
   let addUrl = '';
   let addRefreshInterval = '6h';
@@ -39,11 +40,24 @@
   }
 
   function openAddModal() {
+    editMode = false;
     addName = '';
     addUrl = '';
     addRefreshInterval = '6h';
     addUserAgent = '';
     addPrefix = '';
+    addSaving = false;
+    addModalError = '';
+    showAddModal = true;
+  }
+
+  function openEditModal(sub) {
+    editMode = true;
+    addName = sub.name;
+    addUrl = sub.url;
+    addRefreshInterval = sub.refreshInterval || '';
+    addUserAgent = sub.userAgent || '';
+    addPrefix = sub.prefix || '';
     addSaving = false;
     addModalError = '';
     showAddModal = true;
@@ -59,13 +73,23 @@
     addSaving = true;
     addModalError = '';
     try {
-      const result = await api.addSubscription({
-        name: addName.trim(),
-        url: addUrl.trim(),
-        refreshInterval: addRefreshInterval.trim(),
-        userAgent: addUserAgent.trim(),
-        prefix: addPrefix.trim(),
-      });
+      if (editMode) {
+        await api.updateSubscription({
+          name: addName.trim(),
+          url: addUrl.trim(),
+          refreshInterval: addRefreshInterval.trim(),
+          userAgent: addUserAgent.trim(),
+          prefix: addPrefix.trim(),
+        });
+      } else {
+        await api.addSubscription({
+          name: addName.trim(),
+          url: addUrl.trim(),
+          refreshInterval: addRefreshInterval.trim(),
+          userAgent: addUserAgent.trim(),
+          prefix: addPrefix.trim(),
+        });
+      }
       showAddModal = false;
       await refresh();
     } catch (e) {
@@ -188,6 +212,16 @@
             </div>
 
             <div class="flex items-center gap-1 shrink-0 ml-3">
+              <!-- Edit button -->
+              <button
+                class="p-1.5 rounded-md text-zinc-400 hover:text-blue-400 hover:bg-zinc-700/50 transition-colors"
+                title={$t('subscriptions.edit')}
+                on:click={() => openEditModal(sub)}
+              >
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 000-1.41l-2.34-2.34a.996.996 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+                </svg>
+              </button>
               <!-- Refresh button -->
               <button
                 class="p-1.5 rounded-md text-zinc-400 hover:text-green-400 hover:bg-zinc-700/50 transition-colors disabled:opacity-50"
@@ -230,7 +264,7 @@
     role="presentation">
     <div class="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4 max-h-[85vh] overflow-y-auto">
       <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-700">
-        <h3 class="text-base font-semibold text-zinc-100">{$t('subscriptions.addTitle')}</h3>
+        <h3 class="text-base font-semibold text-zinc-100">{editMode ? $t('subscriptions.editTitle') : $t('subscriptions.addTitle')}</h3>
         <button class="text-zinc-400 hover:text-zinc-200" on:click={closeAddModal}>
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
@@ -242,8 +276,8 @@
         {/if}
         <div>
           <label for="sub-name" class="block text-xs font-medium text-zinc-400 mb-1">{$t('subscriptions.nameLabel')}</label>
-          <input id="sub-name" type="text" bind:value={addName} placeholder="my-provider"
-            class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none" />
+          <input id="sub-name" type="text" bind:value={addName} placeholder="my-provider" disabled={editMode}
+            class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" />
         </div>
         <div>
           <label for="sub-url" class="block text-xs font-medium text-zinc-400 mb-1">{$t('subscriptions.urlLabel')}</label>
@@ -288,7 +322,7 @@
           disabled={addSaving || !addName.trim() || !addUrl.trim()}
           on:click={saveSubscription}
         >
-          {addSaving ? $t('subscriptions.savingBtn') : $t('subscriptions.addRefresh')}
+          {addSaving ? $t('subscriptions.savingBtn') : (editMode ? $t('subscriptions.saveBtn') : $t('subscriptions.addRefresh'))}
         </button>
       </div>
     </div>
