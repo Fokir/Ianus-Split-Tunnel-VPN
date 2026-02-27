@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
 # AWG Split Tunnel — One-line installer for macOS
 # Usage: curl -fsSL https://raw.githubusercontent.com/Fokir/Ianus-Split-Tunnel-VPN/master/scripts/install-macos.sh | sudo bash
+#   Options: --no-gui  Skip GUI application installation (daemon only)
 #
 # What this script does:
 #   1. Detects your Mac's architecture (Apple Silicon / Intel)
 #   2. Downloads the latest release tarball from GitHub
 #   3. Extracts it to a temporary directory
 #   4. Runs the install-daemon.sh script (installs binary + LaunchDaemon)
-#   5. Cleans up the temporary files
+#   5. Downloads and installs the GUI application from DMG (unless --no-gui)
+#   6. Cleans up the temporary files
 
 set -euo pipefail
+
+INSTALL_GUI=true
+for arg in "$@"; do
+    case "$arg" in
+        --no-gui) INSTALL_GUI=false ;;
+    esac
+done
 
 REPO="Fokir/Ianus-Split-Tunnel-VPN"
 
@@ -81,7 +90,37 @@ fi
 chmod +x "$INSTALL_SCRIPT"
 bash "$INSTALL_SCRIPT"
 
+# ── Install GUI (DMG) ───────────────────────────────────────────────
+if [[ "$INSTALL_GUI" == "true" ]]; then
+    DMG_NAME="AWG-Split-Tunnel-${LATEST_TAG}-darwin-universal.dmg"
+    DMG_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${DMG_NAME}"
+    DMG_PATH="${TMPDIR_INSTALL}/${DMG_NAME}"
+    MOUNT_POINT="${TMPDIR_INSTALL}/dmg-mount"
+
+    echo "  Downloading GUI (${DMG_NAME})..."
+    curl -fSL --progress-bar -o "$DMG_PATH" "$DMG_URL"
+
+    echo "  Installing GUI to /Applications..."
+    mkdir -p "$MOUNT_POINT"
+    hdiutil attach "$DMG_PATH" -nobrowse -quiet -mountpoint "$MOUNT_POINT"
+
+    APP_BUNDLE="$(find "$MOUNT_POINT" -maxdepth 1 -name '*.app' -print -quit)"
+    if [[ -z "$APP_BUNDLE" ]]; then
+        hdiutil detach "$MOUNT_POINT" -quiet
+        echo "Warning: No .app bundle found in DMG, skipping GUI installation."
+    else
+        rm -rf "/Applications/$(basename "$APP_BUNDLE")"
+        cp -R "$APP_BUNDLE" /Applications/
+        xattr -cr "/Applications/$(basename "$APP_BUNDLE")"
+        hdiutil detach "$MOUNT_POINT" -quiet
+        echo "  GUI installed: /Applications/$(basename "$APP_BUNDLE")"
+    fi
+fi
+
 echo ""
-echo "Installation complete! Edit your config and restart:"
-echo "  sudo nano /etc/awg-split-tunnel/config.yaml"
-echo "  sudo launchctl kickstart -k system/com.awg.split-tunnel"
+echo "Installation complete!"
+if [[ "$INSTALL_GUI" == "true" ]]; then
+    echo "  GUI: open /Applications/AWG\\ Split\\ Tunnel.app"
+fi
+echo "  Config: sudo nano /etc/awg-split-tunnel/config.yaml"
+echo "  Restart daemon: sudo launchctl kickstart -k system/com.awg.split-tunnel"

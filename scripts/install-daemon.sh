@@ -49,6 +49,7 @@ fi
 echo "  Copying binary to ${INSTALL_DIR}/${BINARY_NAME}..."
 cp "$SOURCE_BINARY" "${INSTALL_DIR}/${BINARY_NAME}"
 chmod 755 "${INSTALL_DIR}/${BINARY_NAME}"
+xattr -cr "${INSTALL_DIR}/${BINARY_NAME}"
 
 # ── Create config directory ──────────────────────────────────────────
 mkdir -p "$CONFIG_DIR"
