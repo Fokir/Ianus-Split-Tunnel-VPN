@@ -4,6 +4,7 @@ package darwin
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/netip"
@@ -45,6 +46,11 @@ var writeBufPool = sync.Pool{
 	},
 }
 
+// dnsBackupFile is used to persist original DNS servers across crashes.
+// If the daemon is killed (SIGKILL) before ClearDNS runs, the next startup
+// can detect this file and restore original DNS.
+const dnsBackupFile = "/tmp/awg-split-tunnel-dns-backup"
+
 // TUNAdapter implements platform.TUNAdapter using macOS utun interfaces.
 // Created via kernel control socket (AF_SYSTEM, SYSPROTO_CONTROL).
 type TUNAdapter struct {
@@ -57,6 +63,7 @@ type TUNAdapter struct {
 	// DNS state: cached primary service and saved servers for restore.
 	primaryService string
 	savedDNS       []string
+	dnsSaved       bool // true after first SetDNS, prevents overwrite by ReapplyDNS
 }
 
 // NewTUNAdapter creates a macOS utun TUN adapter with IP 10.255.0.1/24, MTU 1400.
@@ -223,6 +230,8 @@ func (a *TUNAdapter) WritePacket(pkt []byte) error {
 
 // SetDNS configures system DNS to use the given servers via networksetup.
 // Saves the current DNS configuration for later restore by ClearDNS.
+// Only captures original DNS on the first call; subsequent calls (e.g. from
+// ReapplyDNS on the same service) preserve the original savedDNS.
 func (a *TUNAdapter) SetDNS(servers []netip.Addr) error {
 	if len(servers) == 0 {
 		return nil
@@ -231,8 +240,12 @@ func (a *TUNAdapter) SetDNS(servers []netip.Addr) error {
 		return fmt.Errorf("no primary network service available for DNS configuration")
 	}
 
-	// Save current DNS for restore.
-	a.savedDNS = currentDNSServers(a.primaryService)
+	// Only save original DNS on first call to prevent overwriting with our own TUN DNS.
+	if !a.dnsSaved {
+		a.savedDNS = currentDNSServers(a.primaryService)
+		a.dnsSaved = true
+		saveDNSBackup(a.primaryService, a.savedDNS)
+	}
 
 	args := []string{"-setdnsservers", a.primaryService}
 	for _, s := range servers {
@@ -268,6 +281,8 @@ func (a *TUNAdapter) ClearDNS() error {
 	}
 
 	a.savedDNS = nil
+	a.dnsSaved = false
+	removeDNSBackup()
 	_ = flushSystemDNS()
 	core.Log.Infof("DNS", "System DNS restored on service %q", a.primaryService)
 	return nil
@@ -275,6 +290,8 @@ func (a *TUNAdapter) ClearDNS() error {
 
 // ReapplyDNS re-detects the primary network service and re-applies DNS configuration.
 // Useful after a network change (WiFi→Ethernet) when the primary service may have changed.
+// When the service changes, clears DNS on the old service first, then resets dnsSaved
+// so SetDNS will capture the original DNS from the new service.
 func (a *TUNAdapter) ReapplyDNS(servers []netip.Addr) error {
 	newSvc, err := primaryNetworkService()
 	if err != nil {
@@ -283,7 +300,12 @@ func (a *TUNAdapter) ReapplyDNS(servers []netip.Addr) error {
 
 	if newSvc != a.primaryService {
 		core.Log.Infof("DNS", "Primary network service changed: %q → %q", a.primaryService, newSvc)
+		// Restore DNS on the old service before switching.
+		if err := a.ClearDNS(); err != nil {
+			core.Log.Warnf("DNS", "Failed to clear DNS on old service %q: %v", a.primaryService, err)
+		}
 		a.primaryService = newSvc
+		// dnsSaved is now false (reset by ClearDNS), so SetDNS will save from new service.
 	}
 
 	return a.SetDNS(servers)
@@ -361,4 +383,58 @@ func currentDNSServers(service string) []string {
 		}
 	}
 	return servers
+}
+
+// dnsBackupData is persisted to disk so DNS can be restored after a crash.
+type dnsBackupData struct {
+	Service string   `json:"service"`
+	Servers []string `json:"servers,omitempty"`
+}
+
+// saveDNSBackup writes the original DNS configuration to a temp file.
+func saveDNSBackup(service string, servers []string) {
+	data, err := json.Marshal(dnsBackupData{Service: service, Servers: servers})
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(dnsBackupFile, data, 0600)
+}
+
+// removeDNSBackup deletes the DNS backup file after successful restore.
+func removeDNSBackup() {
+	_ = os.Remove(dnsBackupFile)
+}
+
+// RestoreDNSFromBackup checks for a stale DNS backup file (left by a previous crash)
+// and restores the original DNS configuration. Should be called early at startup.
+func RestoreDNSFromBackup() {
+	data, err := os.ReadFile(dnsBackupFile)
+	if err != nil {
+		return // No backup file — clean startup.
+	}
+
+	var backup dnsBackupData
+	if err := json.Unmarshal(data, &backup); err != nil {
+		os.Remove(dnsBackupFile)
+		return
+	}
+
+	core.Log.Warnf("DNS", "Found stale DNS backup (previous crash?). Restoring DNS on service %q", backup.Service)
+
+	args := []string{"-setdnsservers", backup.Service}
+	if len(backup.Servers) > 0 {
+		args = append(args, backup.Servers...)
+	} else {
+		args = append(args, "empty")
+	}
+
+	out, err := exec.Command("networksetup", args...).CombinedOutput()
+	if err != nil {
+		core.Log.Warnf("DNS", "Failed to restore DNS from backup: %s: %v", strings.TrimSpace(string(out)), err)
+	} else {
+		_ = flushSystemDNS()
+		core.Log.Infof("DNS", "DNS restored from crash backup on service %q", backup.Service)
+	}
+
+	os.Remove(dnsBackupFile)
 }

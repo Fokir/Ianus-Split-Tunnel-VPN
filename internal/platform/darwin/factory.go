@@ -38,7 +38,8 @@ func NewPlatform() *platform.Platform {
 		},
 
 		PreStartup: func() error {
-			// No pre-startup cleanup needed on macOS (no WFP conflicts).
+			// Restore DNS if a previous daemon crash left it pointing at the TUN adapter.
+			RestoreDNSFromBackup()
 			return nil
 		},
 

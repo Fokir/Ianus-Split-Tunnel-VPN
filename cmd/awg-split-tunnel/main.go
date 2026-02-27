@@ -690,6 +690,11 @@ mainLoop:
 		// Use tunnel controller for graceful shutdown of all tunnels
 		tunnelCtrl.Shutdown()
 
+		// Explicitly deactivate gateway (restore DNS, routes, kill switch)
+		// before closing the adapter. Don't rely on async event propagation
+		// from tunnelCtrl.Shutdown — it may race with adapter.Close.
+		deactivateGateway()
+
 		procFilter.Close()
 		routeMgr.Cleanup()
 		adapter.Close()
