@@ -58,6 +58,13 @@ func TestScanPortPIDs_NonEmpty(t *testing.T) {
 	}
 }
 
+func TestPcbStructSize(t *testing.T) {
+	if pcbStructSize != 384 && pcbStructSize != 408 {
+		t.Errorf("unexpected pcbStructSize=%d, want 384 or 408", pcbStructSize)
+	}
+	t.Logf("pcbStructSize=%d (detected from kern.osrelease)", pcbStructSize)
+}
+
 func TestParsePCBList_BothProtocols(t *testing.T) {
 	m, err := scanPortPIDs()
 	if err != nil {
@@ -72,6 +79,7 @@ func TestParsePCBList_BothProtocols(t *testing.T) {
 			hasTCP = true
 		}
 	}
+	t.Logf("scanPortPIDs: %d entries (TCP=%v, UDP=%v)", len(m), hasTCP, hasUDP)
 	if !hasTCP {
 		t.Log("warning: no TCP entries found")
 	}

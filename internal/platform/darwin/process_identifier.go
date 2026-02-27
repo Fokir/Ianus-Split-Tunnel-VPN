@@ -5,23 +5,34 @@ package darwin
 import (
 	"encoding/binary"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-// pcblist_n item kinds (from XNU bsd/sys/socketvar.h).
-const (
-	xsoSocket = 0x001 // XSO_SOCKET — contains PID
-	xsoInpcb  = 0x010 // XSO_INPCB — contains port numbers
-)
+// pcbStructSize is the per-entry size in pcblist_n output (xinpcb_n + xsocket_n + sockbufs).
+// Varies by macOS version: 408 on macOS 13+ (Darwin 22.x), 384 on macOS 12 and earlier.
+// Reference: mihomo (Clash Meta) and sing-box use identical size detection.
+var pcbStructSize = func() int {
+	release, _ := unix.Sysctl("kern.osrelease")
+	major, _, _ := strings.Cut(release, ".")
+	n, _ := strconv.ParseInt(major, 10, 64)
+	if n >= 22 { // macOS 13 Ventura+ (Darwin 22.x)
+		return 408
+	}
+	return 384 // macOS 12 and earlier
+}()
 
-// pcblist_n parsing offsets (from XNU kernel headers).
+// pcblist_n parsing constants (from XNU kernel headers, verified against mihomo/sing-box).
 const (
-	xinpgenSize  = 24 // sizeof(xinpgen) — header/trailer marker
-	offInpLport  = 18 // inp_lport in xinpcb_n (big-endian uint16)
-	offSoLastPID = 68 // so_last_pid in xsocket_n (native-endian int32)
+	xinpgenSize   = 24  // sizeof(xinpgen) — header/trailer
+	tcpEntryExtra = 208 // sizeof(xtcpcb_n) — appended to each TCP entry
+	offInpLport   = 18  // inp_lport in xinpcb_n (big-endian uint16)
+	offSoBase     = 104 // xsocket_n starts at this offset within each entry
+	offSoLastPID  = 68  // so_last_pid within xsocket_n (native-endian int32)
 )
 
 // portKey identifies a network port + protocol pair.
@@ -100,45 +111,30 @@ func scanPortPIDs() (map[portKey]uint32, error) {
 
 // parsePCBList parses a pcblist_n sysctl buffer into port->PID entries.
 //
-// Buffer layout: xinpgen header | (xinpcb_n, xsocket_n, [xtcpcb_n])* | xinpgen trailer.
-// Each sub-item starts with xi_len (uint32) and xi_kind (uint32), allowing
-// kind-based iteration that works across all macOS versions without hardcoded struct sizes.
+// Buffer layout: xinpgen (24B) | fixed-size entries | xinpgen trailer (24B).
+// Each entry is a monolithic block: xinpcb_n + xsocket_n + sockbufs (pcbStructSize bytes),
+// plus xtcpcb_n (208 bytes) for TCP. Stride is constant for a given protocol and macOS version.
+//
+// Offsets within each entry (verified against mihomo and sing-box):
+//   - inp_lport:   byte 18  (big-endian uint16)
+//   - xsocket_n:   byte 104 (start of embedded socket structure)
+//   - so_last_pid: byte 104+68 = 172 (native-endian int32)
 func parsePCBList(buf []byte, isUDP bool, result map[portKey]uint32) {
-	// Skip xinpgen header.
-	pos := xinpgenSize
-	if pos >= len(buf) {
-		return
+	entrySize := pcbStructSize
+	if !isUDP {
+		entrySize += tcpEntryExtra
 	}
 
-	var currentPort uint16
+	pidOff := offSoBase + offSoLastPID // 104 + 68 = 172
 
-	for pos+8 <= len(buf) {
-		itemLen := int(binary.LittleEndian.Uint32(buf[pos : pos+4]))
-		itemKind := binary.LittleEndian.Uint32(buf[pos+4 : pos+8])
+	// Skip xinpgen header; stop when remaining bytes can't fit a full entry
+	// (the 24-byte trailer is always smaller than any entry).
+	for pos := xinpgenSize; pos+entrySize <= len(buf); pos += entrySize {
+		localPort := binary.BigEndian.Uint16(buf[pos+offInpLport : pos+offInpLport+2])
+		pid := binary.LittleEndian.Uint32(buf[pos+pidOff : pos+pidOff+4])
 
-		if itemLen < 8 || pos+itemLen > len(buf) {
-			break
+		if localPort != 0 && pid != 0 {
+			result[portKey{localPort, isUDP}] = pid
 		}
-		// Trailer: xinpgen is 24 bytes; no data struct is that small.
-		if itemLen <= xinpgenSize {
-			break
-		}
-
-		switch itemKind {
-		case xsoInpcb: // xinpcb_n — extract local port.
-			if itemLen >= offInpLport+2 {
-				currentPort = binary.BigEndian.Uint16(buf[pos+offInpLport : pos+offInpLport+2])
-			}
-		case xsoSocket: // xsocket_n — extract PID, pair with preceding port.
-			if currentPort != 0 && itemLen >= offSoLastPID+4 {
-				pid := binary.LittleEndian.Uint32(buf[pos+offSoLastPID : pos+offSoLastPID+4])
-				if pid != 0 {
-					result[portKey{currentPort, isUDP}] = pid
-				}
-			}
-			currentPort = 0
-		}
-
-		pos += itemLen
 	}
 }
