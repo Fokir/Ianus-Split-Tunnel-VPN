@@ -25,3 +25,6 @@
 [submodule "refs/WireSockUI"]
 	path = refs/WireSockUI
 	url = git@github.com:wiresock/WireSockUI.git
+[submodule "refs/gopsutil"]
+	path = refs/gopsutil
+	url = https://github.com/shirou/gopsutil
