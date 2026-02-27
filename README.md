@@ -144,6 +144,22 @@ domain_rules:
 
 ### macOS — Daemon
 
+**One-line install** (auto-detects architecture, downloads latest release, installs daemon):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Fokir/Ianus-Split-Tunnel-VPN/master/scripts/install-macos.sh | sudo bash
+```
+
+Then edit your config and restart:
+
+```bash
+sudo nano /etc/awg-split-tunnel/config.yaml
+sudo launchctl kickstart -k system/com.awg.split-tunnel
+```
+
+<details>
+<summary>Manual install</summary>
+
 Download the appropriate tarball from the [latest release](https://github.com/Fokir/Ianus-Split-Tunnel-VPN/releases/latest):
 
 | File | Architecture |
@@ -165,6 +181,8 @@ sudo nano /etc/awg-split-tunnel/config.yaml
 # Restart after config changes
 sudo launchctl kickstart -k system/com.awg.split-tunnel
 ```
+
+</details>
 
 **Manage the daemon:**
 
@@ -435,6 +453,22 @@ domain_rules:
 
 ### macOS — Daemon
 
+**Установка одной командой** (автоопределение архитектуры, скачивание последнего релиза, установка daemon):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Fokir/Ianus-Split-Tunnel-VPN/master/scripts/install-macos.sh | sudo bash
+```
+
+Затем отредактируйте конфиг и перезапустите:
+
+```bash
+sudo nano /etc/awg-split-tunnel/config.yaml
+sudo launchctl kickstart -k system/com.awg.split-tunnel
+```
+
+<details>
+<summary>Ручная установка</summary>
+
 Скачайте подходящий архив из [последнего релиза](https://github.com/Fokir/Ianus-Split-Tunnel-VPN/releases/latest):
 
 | Файл | Архитектура |
@@ -456,6 +490,8 @@ sudo nano /etc/awg-split-tunnel/config.yaml
 # Перезапустить после изменения конфига
 sudo launchctl kickstart -k system/com.awg.split-tunnel
 ```
+
+</details>
 
 **Управление daemon:**
 
