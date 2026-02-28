@@ -411,6 +411,7 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 			core.Log.Infof("Core", "Network change detected")
 
 			// Re-discover real NIC (gateway may have changed).
+			// DiscoverRealNIC updates routeMgr's internal copy atomically.
 			newNIC, err := routeMgr.DiscoverRealNIC()
 			if err != nil {
 				core.Log.Warnf("Route", "Failed to re-discover NIC after network change: %v", err)
@@ -422,6 +423,9 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 			oldGW := realNIC.Gateway
 			oldIdx := realNIC.Index
 			oldIP := realNIC.LocalIP
+			if isActive {
+				realNIC = newNIC
+			}
 			gwMu.Unlock()
 
 			if !isActive {
@@ -438,7 +442,6 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 			// NIC actually changed — proceed with full re-application.
 			core.Log.Infof("Core", "NIC changed: gw=%s→%s idx=%d→%d ip=%s→%s",
 				oldGW, newNIC.Gateway, oldIdx, newNIC.Index, oldIP, newNIC.LocalIP)
-			realNIC = newNIC
 
 			// Re-apply default routes (including interface-scoped routes for real NIC).
 			// Scoped routes reference the real gateway and may become stale on network change.
@@ -447,7 +450,8 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 				core.Log.Warnf("Route", "Re-apply default routes: %v", err)
 			}
 
-			// Re-apply bypass routes for all connected VPN tunnels.
+			// Clear old bypass routes (they reference the old gateway) and re-add.
+			routeMgr.ClearBypassRoutes()
 			for _, entry := range registry.All() {
 				if entry.ID == gateway.DirectTunnelID || entry.State != core.TunnelStateUp {
 					continue
@@ -459,19 +463,16 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 				}
 			}
 
-			// Re-apply DNS on new primary network service.
+			// Re-apply DNS configuration.
 			if hasDNSResolver {
-				type dnsReapplier interface {
-					ReapplyDNS(servers []netip.Addr) error
+				if err := adapter.SetDNS([]netip.Addr{adapter.IP()}); err != nil {
+					core.Log.Warnf("DNS", "Re-set DNS: %v", err)
 				}
-				if r, ok := adapter.(dnsReapplier); ok {
-					if err := r.ReapplyDNS([]netip.Addr{adapter.IP()}); err != nil {
-						core.Log.Warnf("DNS", "ReapplyDNS: %v", err)
-					}
-				} else {
-					if err := adapter.SetDNS([]netip.Addr{adapter.IP()}); err != nil {
-						core.Log.Warnf("DNS", "Re-set DNS: %v", err)
-					}
+			}
+			// Flush system DNS cache so stale entries from old NIC are purged.
+			if plat.FlushSystemDNS != nil {
+				if err := plat.FlushSystemDNS(); err != nil {
+					core.Log.Warnf("DNS", "System DNS flush after network change: %v", err)
 				}
 			}
 

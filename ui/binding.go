@@ -892,12 +892,24 @@ func (b *BindingService) ApplyUpdate() error {
 	return nil
 }
 
-// StartUpdateNotifier starts a background goroutine that periodically checks
-// for updates and emits a "update-available" Wails event when found.
+// StartUpdateNotifier starts a background goroutine that checks for updates
+// shortly after startup and then once per hour. The daemon's Checker.Start()
+// also polls GitHub on its own interval and caches the result — this goroutine
+// picks up the cached result via gRPC without generating extra API calls in
+// most cases.
 func (b *BindingService) StartUpdateNotifier() {
 	go func() {
 		app := application.Get()
-		ticker := time.NewTicker(5 * time.Minute)
+
+		// Initial check after a short delay (daemon Checker needs ~30 s to warm up).
+		select {
+		case <-time.After(45 * time.Second):
+		case <-b.ctx.Done():
+			return
+		}
+		b.emitUpdateIfAvailable(app)
+
+		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
 
 		for {
@@ -905,19 +917,23 @@ func (b *BindingService) StartUpdateNotifier() {
 			case <-b.ctx.Done():
 				return
 			case <-ticker.C:
-				result, err := b.CheckUpdate()
-				if err != nil || !result.Available {
-					continue
-				}
-				b.notifMgr.NotifyUpdateAvailable(result.Version)
-				app.Event.Emit("update-available", map[string]interface{}{
-					"version":      result.Version,
-					"releaseNotes": result.ReleaseNotes,
-					"assetSize":    result.AssetSize,
-				})
+				b.emitUpdateIfAvailable(app)
 			}
 		}
 	}()
+}
+
+func (b *BindingService) emitUpdateIfAvailable(app *application.App) {
+	result, err := b.CheckUpdate()
+	if err != nil || !result.Available {
+		return
+	}
+	b.notifMgr.NotifyUpdateAvailable(result.Version)
+	app.Event.Emit("update-available", map[string]interface{}{
+		"version":      result.Version,
+		"releaseNotes": result.ReleaseNotes,
+		"assetSize":    result.AssetSize,
+	})
 }
 
 // ─── Conflicting services ──────────────────────────────────────────

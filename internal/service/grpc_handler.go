@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"time"
 
@@ -612,7 +613,8 @@ func (s *Service) CheckUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.Ch
 
 	info, err := s.updateChecker.CheckNow(ctx)
 	if err != nil {
-		return &vpnapi.CheckUpdateResponse{Available: false}, nil
+		core.Log.Warnf("Update", "Check failed: %v", err)
+		return nil, fmt.Errorf("update check failed: %w", err)
 	}
 	if info == nil {
 		return &vpnapi.CheckUpdateResponse{Available: false}, nil

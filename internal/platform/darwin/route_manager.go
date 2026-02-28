@@ -215,6 +215,18 @@ func (rm *RouteManager) AddBypassRoute(dst netip.Addr) error {
 	return nil
 }
 
+// ClearBypassRoutes removes all bypass routes. Used before re-adding them
+// after a network change (new gateway).
+func (rm *RouteManager) ClearBypassRoutes() {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	for _, delArgs := range rm.bypassRoutes {
+		routeExec(delArgs, false)
+	}
+	rm.bypassRoutes = nil
+}
+
 // Cleanup removes all routes added by this manager (both default and bypass).
 func (rm *RouteManager) Cleanup() error {
 	rm.mu.Lock()

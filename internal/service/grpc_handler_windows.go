@@ -73,6 +73,14 @@ func (s *Service) ApplyUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.Ap
 	if err != nil {
 		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("download failed: %v", err)}, nil
 	}
+	// Clean up temp dir on any error path. On success the updater process
+	// is responsible for cleanup (it receives --temp-dir).
+	cleanupExtract := true
+	defer func() {
+		if cleanupExtract {
+			os.RemoveAll(filepath.Dir(extractDir))
+		}
+	}()
 
 	// Find updater binary in the current install directory.
 	exe, err := os.Executable()
@@ -102,6 +110,7 @@ func (s *Service) ApplyUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.Ap
 		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("failed to launch updater: %v", err)}, nil
 	}
 
+	cleanupExtract = false // updater owns the temp dir now
 	return &vpnapi.ApplyUpdateResponse{Success: true}, nil
 }
 

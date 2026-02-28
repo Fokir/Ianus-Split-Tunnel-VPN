@@ -6,6 +6,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"time"
 
 	"google.golang.org/protobuf/types/known/emptypb"
 
@@ -65,16 +68,19 @@ func (s *Service) ApplyUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.Ap
 	if err != nil {
 		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("download failed: %v", err)}, nil
 	}
+	defer os.RemoveAll(filepath.Dir(extractDir))
 
-	// Apply: replace binary only (no launchctl kickstart).
-	// The daemon will exit after this, and launchd will start the new binary
-	// on next GUI connect (socket activation) or via KeepAlive (legacy mode).
+	// Apply: replace daemon binary and GUI app bundle.
 	if err := update.ApplyDarwinUpdateBinaryOnly(extractDir); err != nil {
 		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("apply failed: %v", err)}, nil
 	}
 
-	// Signal daemon shutdown so the new binary takes effect.
-	go s.bus.Publish(core.Event{Type: core.EventConfigReloaded, Payload: "shutdown"})
+	// Signal daemon shutdown after a short delay so the gRPC response
+	// reaches the GUI before the connection drops.
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		s.bus.Publish(core.Event{Type: core.EventConfigReloaded, Payload: "shutdown"})
+	}()
 
 	return &vpnapi.ApplyUpdateResponse{Success: true}, nil
 }

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"awg-split-tunnel/internal/core"
@@ -163,5 +164,5 @@ func isSubPath(parent, child string) bool {
 	if err != nil {
 		return false
 	}
-	return !filepath.IsAbs(rel) && rel != ".." && len(rel) > 0 && rel[:2] != ".."
+	return !filepath.IsAbs(rel) && !strings.HasPrefix(rel, "..")
 }

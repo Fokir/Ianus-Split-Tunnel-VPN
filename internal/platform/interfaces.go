@@ -82,6 +82,8 @@ type RouteManager interface {
 	RemoveDefaultRoute() error
 	// AddBypassRoute adds a host route for a VPN server through the real NIC.
 	AddBypassRoute(dst netip.Addr) error
+	// ClearBypassRoutes removes all bypass routes (used before re-adding them on network change).
+	ClearBypassRoutes()
 	// Cleanup removes all routes added by this manager.
 	Cleanup() error
 }
