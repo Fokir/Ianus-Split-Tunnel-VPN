@@ -15,8 +15,11 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	vpnapi "awg-split-tunnel/api/gen"
 	"awg-split-tunnel/internal/ipc"
 )
 
@@ -92,20 +95,29 @@ func main() {
 }
 
 // connectOrLaunchDaemon tries to connect to the VPN daemon.
-// If the socket doesn't exist, it launches the daemon and retries.
+// With socket activation, the socket always exists (launchd holds it),
+// so a connect attempt will spawn the daemon automatically.
+// Falls back to manual launch for dev mode.
 func connectOrLaunchDaemon() (*ipc.Client, error) {
 	ctx := context.Background()
 
-	// First attempt — daemon may already be running.
-	client, err := ipc.DialWithTimeout(ctx, 2*time.Second)
+	// First attempt — with socket activation, this triggers launchd to start the daemon.
+	client, err := ipc.DialWithTimeout(ctx, 5*time.Second)
 	if err == nil {
-		if _, rpcErr := client.Service.GetStatus(ctx, &emptypb.Empty{}); rpcErr == nil {
+		status, rpcErr := client.Service.GetStatus(ctx, &emptypb.Empty{})
+		if rpcErr == nil {
+			// Connected. Check if daemon is idle and needs activation.
+			if err := ensureActive(ctx, client, status); err != nil {
+				client.Close()
+				return nil, fmt.Errorf("activation failed: %w", err)
+			}
 			return client, nil
 		}
 		client.Close()
 	}
 
-	// Daemon not running — try to launch it.
+	// Socket activation didn't work (not installed, or dev mode).
+	// Fall back to manual launch.
 	if launchErr := launchDaemon(); launchErr != nil {
 		return nil, fmt.Errorf("failed to start VPN daemon: %w", launchErr)
 	}
@@ -117,13 +129,78 @@ func connectOrLaunchDaemon() (*ipc.Client, error) {
 		if err != nil {
 			continue
 		}
-		if _, rpcErr := client.Service.GetStatus(ctx, &emptypb.Empty{}); rpcErr == nil {
+		status, rpcErr := client.Service.GetStatus(ctx, &emptypb.Empty{})
+		if rpcErr == nil {
+			if err := ensureActive(ctx, client, status); err != nil {
+				client.Close()
+				return nil, fmt.Errorf("activation failed: %w", err)
+			}
 			return client, nil
 		}
 		client.Close()
 	}
 
 	return nil, fmt.Errorf("VPN daemon did not start within 15 seconds")
+}
+
+// ensureActive checks if the daemon is idle and sends Activate if needed.
+// Handles both socket-activated (new) and legacy (old) daemons.
+func ensureActive(ctx context.Context, client *ipc.Client, status *vpnapi.ServiceStatus) error {
+	switch status.DaemonState {
+	case vpnapi.DaemonState_DAEMON_STATE_ACTIVE:
+		return nil
+
+	case vpnapi.DaemonState_DAEMON_STATE_IDLE:
+		// Attempt activation. If the daemon is legacy (doesn't support Activate RPC),
+		// we'll get Unimplemented — that's fine, it means VPN is already running.
+		log.Printf("[UI] Daemon is idle, sending Activate...")
+		resp, err := client.Service.Activate(ctx, &vpnapi.ActivateRequest{})
+		if err != nil {
+			// Legacy daemon returns Unimplemented — treat as already active.
+			if st, ok := grpcstatus.FromError(err); ok && st.Code() == codes.Unimplemented {
+				log.Printf("[UI] Daemon does not support Activate (legacy mode), continuing")
+				return nil
+			}
+			return fmt.Errorf("activate RPC: %w", err)
+		}
+		if !resp.Success {
+			return fmt.Errorf("activate failed: %s", resp.Error)
+		}
+		// Poll until active (up to 30s).
+		return waitForState(ctx, client, vpnapi.DaemonState_DAEMON_STATE_ACTIVE, 30*time.Second)
+
+	default:
+		// ACTIVATING or DEACTIVATING — wait for it to settle.
+		return waitForState(ctx, client, vpnapi.DaemonState_DAEMON_STATE_ACTIVE, 30*time.Second)
+	}
+}
+
+// waitForState polls GetStatus until the daemon reaches the desired state.
+func waitForState(ctx context.Context, client *ipc.Client, want vpnapi.DaemonState, timeout time.Duration) error {
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			return fmt.Errorf("daemon did not reach state %s within %s", want, timeout)
+		case <-ticker.C:
+			st, err := client.Service.GetStatus(ctx, &emptypb.Empty{})
+			if err != nil {
+				continue
+			}
+			if st.DaemonState == want {
+				log.Printf("[UI] Daemon reached state %s", want)
+				return nil
+			}
+			// If it went idle while we wanted active, try to activate again.
+			if want == vpnapi.DaemonState_DAEMON_STATE_ACTIVE &&
+				st.DaemonState == vpnapi.DaemonState_DAEMON_STATE_IDLE {
+				return ensureActive(ctx, client, st)
+			}
+		}
+	}
 }
 
 // launchDaemon starts the VPN daemon.

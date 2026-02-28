@@ -311,11 +311,12 @@ type ReconnectConfig struct {
 
 // GUIConfig holds GUI-specific settings.
 type GUIConfig struct {
-	RestoreConnections bool              `yaml:"restore_connections,omitempty"`
-	ActiveTunnels      []string          `yaml:"active_tunnels,omitempty"`
-	TunnelOrder        []string          `yaml:"tunnel_order,omitempty"` // display order for all tunnels (incl. subscription)
-	TunnelNames        map[string]string `yaml:"tunnel_names,omitempty"` // custom display names: tunnelID → name
-	Reconnect          ReconnectConfig   `yaml:"reconnect,omitempty"`
+	RestoreConnections    bool              `yaml:"restore_connections,omitempty"`
+	ActiveTunnels         []string          `yaml:"active_tunnels,omitempty"`
+	TunnelOrder           []string          `yaml:"tunnel_order,omitempty"`           // display order for all tunnels (incl. subscription)
+	TunnelNames           map[string]string `yaml:"tunnel_names,omitempty"`           // custom display names: tunnelID → name
+	Reconnect             ReconnectConfig   `yaml:"reconnect,omitempty"`
+	KeepAliveOnDisconnect bool              `yaml:"keep_alive_on_disconnect,omitempty"` // keep VPN when GUI disconnects (macOS)
 }
 
 // SubscriptionConfig holds configuration for a VLESS subscription URL.

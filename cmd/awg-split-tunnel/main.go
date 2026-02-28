@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/daemon"
 	"awg-split-tunnel/internal/gateway"
 	"awg-split-tunnel/internal/ipc"
 	"awg-split-tunnel/internal/platform"
@@ -33,7 +34,7 @@ var (
 )
 
 // runVPN contains the full VPN lifecycle. It blocks until shutdown is signalled.
-func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) error {
+func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, opts ...daemon.RunConfig) error {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
 	// === 1. Core components ===
@@ -631,18 +632,25 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}) 
 	})
 	svc.Start(ctx)
 
-	ipcServer := ipc.NewServer(svc)
-	go func() {
-		ln, err := plat.IPC.Listener()
-		if err != nil {
-			core.Log.Errorf("Core", "IPC listen error: %v", err)
-			return
-		}
-		core.Log.Infof("Core", "IPC server starting on %s", ln.Addr())
-		if err := ipcServer.Start(ln); err != nil {
-			core.Log.Errorf("Core", "IPC server error: %v", err)
-		}
-	}()
+	// Register service via controller callback (daemon mode) or create own IPC server.
+	var ipcServer *ipc.Server
+	var deregisterSvc func()
+	if len(opts) > 0 && opts[0].RegisterService != nil {
+		deregisterSvc = opts[0].RegisterService(svc)
+	} else {
+		ipcServer = ipc.NewServer(svc)
+		go func() {
+			ln, err := plat.IPC.Listener()
+			if err != nil {
+				core.Log.Errorf("Core", "IPC listen error: %v", err)
+				return
+			}
+			core.Log.Infof("Core", "IPC server starting on %s", ln.Addr())
+			if err := ipcServer.Start(ln); err != nil {
+				core.Log.Errorf("Core", "IPC server error: %v", err)
+			}
+		}()
+	}
 
 	// --- Wait for shutdown signal ---
 	sig := make(chan os.Signal, 1)
@@ -725,7 +733,12 @@ mainLoop:
 
 	done := make(chan struct{})
 	go func() {
-		ipcServer.Stop()
+		if deregisterSvc != nil {
+			deregisterSvc()
+		}
+		if ipcServer != nil {
+			ipcServer.Stop()
+		}
 		svc.Stop()
 
 		if subMgr != nil {

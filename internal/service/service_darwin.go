@@ -32,12 +32,15 @@ var daemonPlistTmpl = template.Must(template.New("plist").Parse(`<?xml version="
 		<string>-config</string>
 		<string>{{.Config}}</string>
 	</array>
-	<key>RunAtLoad</key>
-	<true/>
-	<key>KeepAlive</key>
+	<key>Sockets</key>
 	<dict>
-		<key>SuccessfulExit</key>
-		<false/>
+		<key>Listeners</key>
+		<dict>
+			<key>SockPathName</key>
+			<string>{{.Socket}}</string>
+			<key>SockPathMode</key>
+			<integer>438</integer>
+		</dict>
 	</dict>
 	<key>StandardOutPath</key>
 	<string>{{.Log}}</string>
@@ -52,6 +55,7 @@ type daemonPlistData struct {
 	Binary string
 	Config string
 	Log    string
+	Socket string
 }
 
 // InstallDaemon copies the running binary to /usr/local/bin/,
@@ -88,6 +92,7 @@ func InstallDaemon() error {
 		Binary: daemonBinary,
 		Config: configFile,
 		Log:    logFile,
+		Socket: "/var/run/awg-split-tunnel.sock",
 	}
 	if err := daemonPlistTmpl.Execute(f, data); err != nil {
 		return fmt.Errorf("write plist: %w", err)

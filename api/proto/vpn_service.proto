@@ -31,6 +31,13 @@ enum LogLevel {
   LOG_LEVEL_OFF = 4;
 }
 
+enum DaemonState {
+  DAEMON_STATE_IDLE = 0;
+  DAEMON_STATE_ACTIVATING = 1;
+  DAEMON_STATE_ACTIVE = 2;
+  DAEMON_STATE_DEACTIVATING = 3;
+}
+
 // ─── Tunnel messages ────────────────────────────────────────────────
 
 message TunnelConfig {
@@ -397,6 +404,21 @@ message ServiceStatus {
   int32 total_tunnels = 3;
   string version = 4;
   int64 uptime_seconds = 5;
+  DaemonState daemon_state = 6;
+}
+
+// -- Daemon lifecycle (macOS socket activation) --
+
+message ActivateRequest {}
+message ActivateResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message DeactivateRequest {}
+message DeactivateResponse {
+  bool success = 1;
+  string error = 2;
 }
 
 // -- Update --
@@ -466,6 +488,10 @@ service VPNService {
   // -- Service lifecycle --
   rpc GetStatus(google.protobuf.Empty) returns (ServiceStatus);
   rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  // -- Daemon lifecycle (macOS socket activation) --
+  rpc Activate(ActivateRequest) returns (ActivateResponse);
+  rpc Deactivate(DeactivateRequest) returns (DeactivateResponse);
 
   // -- Tunnel management --
   rpc ListTunnels(google.protobuf.Empty) returns (TunnelListResponse);

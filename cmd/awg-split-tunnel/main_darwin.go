@@ -8,6 +8,8 @@ import (
 	"log"
 	"os"
 
+	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/daemon"
 	platformDarwin "awg-split-tunnel/internal/platform/darwin"
 	"awg-split-tunnel/internal/service"
 )
@@ -65,7 +67,32 @@ func main() {
 	resolvedConfig := resolveRelativeToExe(*configPath)
 	plat := platformDarwin.NewPlatform()
 
-	// Console / launchd daemon mode.
+	// Check if daemon was launched via launchd socket activation.
+	ipcTransport := plat.IPC.(*platformDarwin.IPCTransport)
+	if ipcTransport.IsLaunchdActivated() {
+		// Socket-activated mode: use DaemonController for idle/active lifecycle.
+		ln := ipcTransport.InheritedListener()
+
+		// Load config early to read KeepAliveOnDisconnect setting.
+		cfgManager := core.NewConfigManager(resolvedConfig, nil)
+		_ = cfgManager.Load()
+		cfg := cfgManager.Get()
+
+		ctrl := daemon.NewController(daemon.ControllerConfig{
+			ConfigPath:  resolvedConfig,
+			Platform:    plat,
+			Version:     version,
+			RunVPN:      runVPN,
+			KeepAlive:   cfg.GUI.KeepAliveOnDisconnect,
+			Listener:    ln,
+		})
+		if err := ctrl.Run(); err != nil {
+			log.Fatalf("[Daemon] Fatal: %v", err)
+		}
+		return
+	}
+
+	// Legacy / dev mode — direct runVPN without daemon controller.
 	if err := runVPN(resolvedConfig, plat, stopCh); err != nil {
 		log.Fatalf("[Core] Fatal: %v", err)
 	}

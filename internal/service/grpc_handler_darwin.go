@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	vpnapi "awg-split-tunnel/api/gen"
+	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/update"
 )
 
@@ -65,10 +66,15 @@ func (s *Service) ApplyUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.Ap
 		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("download failed: %v", err)}, nil
 	}
 
-	// Apply: replace binary and restart daemon.
-	if err := update.ApplyDarwinUpdate(extractDir); err != nil {
+	// Apply: replace binary only (no launchctl kickstart).
+	// The daemon will exit after this, and launchd will start the new binary
+	// on next GUI connect (socket activation) or via KeepAlive (legacy mode).
+	if err := update.ApplyDarwinUpdateBinaryOnly(extractDir); err != nil {
 		return &vpnapi.ApplyUpdateResponse{Success: false, Error: fmt.Sprintf("apply failed: %v", err)}, nil
 	}
+
+	// Signal daemon shutdown so the new binary takes effect.
+	go s.bus.Publish(core.Event{Type: core.EventConfigReloaded, Payload: "shutdown"})
 
 	return &vpnapi.ApplyUpdateResponse{Success: true}, nil
 }

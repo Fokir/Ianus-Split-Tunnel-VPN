@@ -94,6 +94,33 @@ func ApplyDarwinUpdate(extractDir string) error {
 	return nil
 }
 
+// ApplyDarwinUpdateBinaryOnly replaces the daemon binary without restarting.
+// Used with socket activation: the daemon exits on its own after binary
+// replacement, and launchd will start the new binary on next GUI connect.
+func ApplyDarwinUpdateBinaryOnly(extractDir string) error {
+	binaryPath, err := findBinary(extractDir)
+	if err != nil {
+		return fmt.Errorf("find binary: %w", err)
+	}
+
+	// Atomic replace: write to temp file, then rename.
+	tmpBin := darwinDaemonBinary + ".new"
+	input, err := os.ReadFile(binaryPath)
+	if err != nil {
+		return fmt.Errorf("read new binary: %w", err)
+	}
+	if err := os.WriteFile(tmpBin, input, 0755); err != nil {
+		return fmt.Errorf("write temp binary: %w", err)
+	}
+	if err := os.Rename(tmpBin, darwinDaemonBinary); err != nil {
+		os.Remove(tmpBin)
+		return fmt.Errorf("replace binary: %w", err)
+	}
+
+	core.Log.Infof("Update", "Binary replaced (no restart — daemon will exit for socket activation)")
+	return nil
+}
+
 // findBinary locates the awg-split-tunnel binary in the extract directory.
 func findBinary(dir string) (string, error) {
 	// Look for exact name first.

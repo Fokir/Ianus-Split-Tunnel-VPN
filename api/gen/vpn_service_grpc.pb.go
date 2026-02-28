@@ -22,6 +22,8 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	VPNService_GetStatus_FullMethodName                = "/awg.vpn.v1.VPNService/GetStatus"
 	VPNService_Shutdown_FullMethodName                 = "/awg.vpn.v1.VPNService/Shutdown"
+	VPNService_Activate_FullMethodName                 = "/awg.vpn.v1.VPNService/Activate"
+	VPNService_Deactivate_FullMethodName               = "/awg.vpn.v1.VPNService/Deactivate"
 	VPNService_ListTunnels_FullMethodName              = "/awg.vpn.v1.VPNService/ListTunnels"
 	VPNService_GetTunnel_FullMethodName                = "/awg.vpn.v1.VPNService/GetTunnel"
 	VPNService_AddTunnel_FullMethodName                = "/awg.vpn.v1.VPNService/AddTunnel"
@@ -66,6 +68,9 @@ type VPNServiceClient interface {
 	// -- Service lifecycle --
 	GetStatus(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ServiceStatus, error)
 	Shutdown(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// -- Daemon lifecycle (macOS socket activation) --
+	Activate(ctx context.Context, in *ActivateRequest, opts ...grpc.CallOption) (*ActivateResponse, error)
+	Deactivate(ctx context.Context, in *DeactivateRequest, opts ...grpc.CallOption) (*DeactivateResponse, error)
 	// -- Tunnel management --
 	ListTunnels(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*TunnelListResponse, error)
 	GetTunnel(ctx context.Context, in *GetTunnelRequest, opts ...grpc.CallOption) (*TunnelStatus, error)
@@ -137,6 +142,26 @@ func (c *vPNServiceClient) Shutdown(ctx context.Context, in *emptypb.Empty, opts
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, VPNService_Shutdown_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) Activate(ctx context.Context, in *ActivateRequest, opts ...grpc.CallOption) (*ActivateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActivateResponse)
+	err := c.cc.Invoke(ctx, VPNService_Activate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) Deactivate(ctx context.Context, in *DeactivateRequest, opts ...grpc.CallOption) (*DeactivateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeactivateResponse)
+	err := c.cc.Invoke(ctx, VPNService_Deactivate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -518,6 +543,9 @@ type VPNServiceServer interface {
 	// -- Service lifecycle --
 	GetStatus(context.Context, *emptypb.Empty) (*ServiceStatus, error)
 	Shutdown(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
+	// -- Daemon lifecycle (macOS socket activation) --
+	Activate(context.Context, *ActivateRequest) (*ActivateResponse, error)
+	Deactivate(context.Context, *DeactivateRequest) (*DeactivateResponse, error)
 	// -- Tunnel management --
 	ListTunnels(context.Context, *emptypb.Empty) (*TunnelListResponse, error)
 	GetTunnel(context.Context, *GetTunnelRequest) (*TunnelStatus, error)
@@ -580,6 +608,12 @@ func (UnimplementedVPNServiceServer) GetStatus(context.Context, *emptypb.Empty) 
 }
 func (UnimplementedVPNServiceServer) Shutdown(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method Shutdown not implemented")
+}
+func (UnimplementedVPNServiceServer) Activate(context.Context, *ActivateRequest) (*ActivateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Activate not implemented")
+}
+func (UnimplementedVPNServiceServer) Deactivate(context.Context, *DeactivateRequest) (*DeactivateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Deactivate not implemented")
 }
 func (UnimplementedVPNServiceServer) ListTunnels(context.Context, *emptypb.Empty) (*TunnelListResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListTunnels not implemented")
@@ -739,6 +773,42 @@ func _VPNService_Shutdown_Handler(srv interface{}, ctx context.Context, dec func
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(VPNServiceServer).Shutdown(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_Activate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ActivateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).Activate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_Activate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).Activate(ctx, req.(*ActivateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_Deactivate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeactivateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).Deactivate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_Deactivate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).Deactivate(ctx, req.(*DeactivateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1373,6 +1443,14 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Shutdown",
 			Handler:    _VPNService_Shutdown_Handler,
+		},
+		{
+			MethodName: "Activate",
+			Handler:    _VPNService_Activate_Handler,
+		},
+		{
+			MethodName: "Deactivate",
+			Handler:    _VPNService_Deactivate_Handler,
 		},
 		{
 			MethodName: "ListTunnels",
