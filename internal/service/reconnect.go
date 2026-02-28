@@ -195,7 +195,10 @@ func (rm *ReconnectManager) reconnectLoop(ctx context.Context, tunnelID string) 
 		}
 
 		core.Log.Infof("Core", "Reconnect: attempt %d for %q", attempt, tunnelID)
-		if err := rm.ctrl.ConnectTunnel(ctx, tunnelID); err != nil {
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, 45*time.Second)
+		err := rm.ctrl.ConnectTunnel(attemptCtx, tunnelID)
+		attemptCancel()
+		if err != nil {
 			core.Log.Warnf("Core", "Reconnect: attempt %d failed for %q: %v", attempt, tunnelID, err)
 			continue
 		}

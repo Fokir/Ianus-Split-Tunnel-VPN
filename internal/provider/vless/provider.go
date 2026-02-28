@@ -87,13 +87,20 @@ func (p *Provider) Connect(ctx context.Context) error {
 		p.serverAddr = ap
 	} else {
 		// Resolve hostname through the real NIC to bypass TUN DNS (10.255.0.1).
+		// Read fields under write lock (already held), then resolve WITHOUT lock
+		// to avoid deadlock — resolveViaRealNIC would try RLock on the same goroutine.
+		realNICIndex := p.realNICIndex
+		binder := p.binder
+
+		resolveCtx, resolveCancel := context.WithTimeout(ctx, 10*time.Second)
 		var ips []string
 		var err error
-		if p.realNICIndex > 0 {
-			ips, err = p.resolveViaRealNIC(ctx, p.config.Address)
+		if realNICIndex > 0 {
+			ips, err = resolveViaRealNIC(resolveCtx, p.config.Address, realNICIndex, binder)
 		} else {
-			ips, err = net.DefaultResolver.LookupHost(ctx, p.config.Address)
+			ips, err = net.DefaultResolver.LookupHost(resolveCtx, p.config.Address)
 		}
+		resolveCancel()
 		if err != nil {
 			p.state = core.TunnelStateError
 			return fmt.Errorf("[VLESS] resolve %q: %w", p.config.Address, err)
@@ -137,9 +144,9 @@ func (p *Provider) Connect(ctx context.Context) error {
 
 	// Wait for socks5 listener to be ready (typically immediate after StartInstance).
 	ready := false
-	for i := 0; i < 20; i++ {
-		tc, err := net.DialTimeout("tcp", p.socksAddr, 100*time.Millisecond)
-		if err == nil {
+	for i := 0; i < 40; i++ {
+		tc, dialErr := net.DialTimeout("tcp", p.socksAddr, 100*time.Millisecond)
+		if dialErr == nil {
 			tc.Close()
 			ready = true
 			break
@@ -147,7 +154,11 @@ func (p *Provider) Connect(ctx context.Context) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	if !ready {
-		core.Log.Warnf("VLESS", "socks5 listener on %s not ready after 2s, proceeding anyway", p.socksAddr)
+		instance.Close()
+		p.instance = nil
+		p.socksAddr = ""
+		p.state = core.TunnelStateError
+		return fmt.Errorf("[VLESS] socks5 listener on %s not ready after 4s — xray startup failed", p.socksAddr)
 	}
 
 	p.state = core.TunnelStateUp
@@ -343,12 +354,9 @@ func (p *Provider) SetInterfaceBinder(binder platform.InterfaceBinder) {
 
 // resolveViaRealNIC resolves a hostname using a DNS resolver bound to the real
 // NIC interface, bypassing the TUN DNS resolver entirely.
-func (p *Provider) resolveViaRealNIC(ctx context.Context, host string) ([]string, error) {
-	p.mu.RLock()
-	realNICIndex := p.realNICIndex
-	binder := p.binder
-	p.mu.RUnlock()
-
+// This is a standalone function (not a method) to avoid mutex issues — the caller
+// must read realNICIndex and binder before calling.
+func resolveViaRealNIC(ctx context.Context, host string, realNICIndex uint32, binder platform.InterfaceBinder) ([]string, error) {
 	core.Log.Debugf("VLESS", "Resolving %q via real NIC (index=%d)", host, realNICIndex)
 
 	var controlFn func(string, string, syscall.RawConn) error

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/gateway"
@@ -189,7 +190,11 @@ func (tc *TunnelControllerImpl) ConnectTunnel(ctx context.Context, tunnelID stri
 		}
 	}
 
-	if err := inst.provider.Connect(tc.deps.Context); err != nil {
+	// Use a bounded context so Connect() cannot hang forever (e.g. DNS or xray startup stalls).
+	connectCtx, connectCancel := context.WithTimeout(tc.deps.Context, 30*time.Second)
+	defer connectCancel()
+
+	if err := inst.provider.Connect(connectCtx); err != nil {
 		tc.deps.Registry.SetState(tunnelID, core.TunnelStateError, err)
 		return fmt.Errorf("connect tunnel %q: %w", tunnelID, err)
 	}
