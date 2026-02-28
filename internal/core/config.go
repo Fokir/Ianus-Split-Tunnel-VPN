@@ -42,7 +42,6 @@ const (
 	ProtocolSOCKS5     = "socks5"
 	ProtocolHTTPProxy  = "httpproxy"
 	ProtocolVLESS      = "vless"
-	ProtocolDPIBypass  = "dpi_bypass"
 )
 
 // FallbackPolicy defines what happens when a tunnel is unavailable.
@@ -332,16 +331,6 @@ type SubscriptionConfig struct {
 	Prefix string `yaml:"prefix,omitempty"`
 }
 
-// DPIBypassConfig holds DPI bypass subsystem settings.
-type DPIBypassConfig struct {
-	// Enabled controls whether the DPI bypass subsystem is active.
-	Enabled bool `yaml:"enabled,omitempty"`
-	// TestDomains are used for connectivity probes (e.g. youtube.com, discord.com).
-	TestDomains []string `yaml:"test_domains,omitempty"`
-	// StartupCheck runs a background connectivity test on service start.
-	StartupCheck bool `yaml:"startup_check,omitempty"`
-}
-
 // Config is the top-level application configuration.
 type Config struct {
 	Version       int                           `yaml:"version,omitempty"`
@@ -354,7 +343,6 @@ type Config struct {
 	Logging       LogConfig                     `yaml:"logging,omitempty"`
 	GUI           GUIConfig                     `yaml:"gui,omitempty"`
 	Update        UpdateConfig                  `yaml:"update,omitempty"`
-	DPIBypass     DPIBypassConfig               `yaml:"dpi_bypass,omitempty"`
 }
 
 // ConfigManager handles loading, saving, and hot-reloading configuration.

@@ -16,7 +16,6 @@ import (
 	"awg-split-tunnel/internal/provider"
 	"awg-split-tunnel/internal/provider/amneziawg"
 	"awg-split-tunnel/internal/provider/direct"
-	"awg-split-tunnel/internal/provider/dpibypass"
 	"awg-split-tunnel/internal/provider/httpproxy"
 	"awg-split-tunnel/internal/provider/socks5"
 	"awg-split-tunnel/internal/provider/vless"
@@ -352,17 +351,6 @@ func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelCo
 		if err != nil {
 			return err
 		}
-	case core.ProtocolDPIBypass:
-		var err error
-		prov, err = dpibypass.New(
-			cfg.Name,
-			tc.deps.RealNICIndex,
-			tc.deps.RealNICLocalIP,
-			tc.deps.InterfaceBinder.BindControl(tc.deps.RealNICIndex),
-		)
-		if err != nil {
-			return err
-		}
 	default:
 		var err error
 		prov, err = tc.createProvider(cfg)
@@ -407,9 +395,9 @@ func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelCo
 	tc.mu.Unlock()
 
 	// Persist new tunnel to config file.
-	// Skip ephemeral tunnels: subscription-sourced, direct, and DPI bypass.
+	// Skip ephemeral tunnels: subscription-sourced and direct.
 	_, isSub := cfg.Settings["_subscription"]
-	if !isSub && cfg.Protocol != "direct" && cfg.Protocol != core.ProtocolDPIBypass {
+	if !isSub && cfg.Protocol != "direct" {
 		tc.persistTunnelConfig(cfg)
 	}
 

@@ -16,9 +16,6 @@ const (
 	EventConfigReloaded
 	EventSubscriptionUpdated
 	EventUpdateAvailable
-	EventDPISearchProgress
-	EventDPISearchComplete
-	EventDPIStrategyChanged
 )
 
 // Event carries data about something that happened in the system.
@@ -52,27 +49,6 @@ type UpdatePayload struct {
 	ReleaseNotes string
 	AssetURL     string
 	AssetSize    int64
-}
-
-// DPISearchProgressPayload is the payload for EventDPISearchProgress.
-type DPISearchProgressPayload struct {
-	Phase       int    // current search phase (0-2)
-	Tested      int    // number of configurations tested so far
-	Total       int    // estimated total configurations
-	CurrentDesc string // human-readable description of current test
-}
-
-// DPISearchCompletePayload is the payload for EventDPISearchComplete.
-type DPISearchCompletePayload struct {
-	Success      bool
-	StrategyName string
-	Error        string
-}
-
-// DPIStrategyChangedPayload is the payload for EventDPIStrategyChanged.
-type DPIStrategyChangedPayload struct {
-	StrategyName string
-	Source       string // "zapret", "user", "search"
 }
 
 // Handler is a callback for bus subscribers.

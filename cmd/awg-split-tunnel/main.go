@@ -16,13 +16,11 @@ import (
 
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/daemon"
-	"awg-split-tunnel/internal/dpi"
 	"awg-split-tunnel/internal/gateway"
 	"awg-split-tunnel/internal/ipc"
 	"awg-split-tunnel/internal/platform"
 	"awg-split-tunnel/internal/process"
 	"awg-split-tunnel/internal/provider"
-	"awg-split-tunnel/internal/provider/dpibypass"
 	"awg-split-tunnel/internal/provider/vless"
 	"awg-split-tunnel/internal/service"
 	"awg-split-tunnel/internal/update"
@@ -659,57 +657,6 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		}
 	}
 
-	// === 12c. DPI Bypass Manager ===
-	dpiDataDir := filepath.Dir(configPath)
-	dpiBindControl := ifBinder.BindControl(realNIC.Index)
-	dpiLocalIP := realNIC.LocalIP.AsSlice()
-	dpiGatewayIP := realNIC.Gateway.String()
-
-	// createDPIManager is a factory that creates and initializes a DPI manager.
-	createDPIManager := func() (*dpi.StrategyManager, error) {
-		dpicfg := cfgManager.Get().DPIBypass
-		mgr := dpi.NewStrategyManager(dpi.ManagerDeps{
-			Config:      dpicfg,
-			Bus:         bus,
-			DataDir:     dpiDataDir,
-			BindControl: dpiBindControl,
-			LocalIP:     dpiLocalIP,
-			GatewayIP:   dpiGatewayIP,
-		})
-		mgr.SetStrategyCallback(func(s *dpi.Strategy) {
-			for _, p := range providers {
-				if dp, ok := p.(*dpibypass.Provider); ok {
-					dp.SetStrategy(s)
-				}
-			}
-		})
-		if err := mgr.Init(ctx); err != nil {
-			return mgr, fmt.Errorf("DPI manager init: %w", err)
-		}
-		core.Log.Infof("DPI", "DPI bypass manager initialized")
-		return mgr, nil
-	}
-
-	var dpiMgr *dpi.StrategyManager
-	if cfg.DPIBypass.Enabled {
-		var err error
-		dpiMgr, err = createDPIManager()
-		if err != nil {
-			core.Log.Warnf("DPI", "Manager init failed: %v", err)
-		}
-		// Add ephemeral DPI bypass tunnel (not persisted to config).
-		dpiCfg := core.TunnelConfig{
-			ID:       "dpi-bypass",
-			Protocol: core.ProtocolDPIBypass,
-			Name:     "DPI Bypass",
-		}
-		if err := tunnelCtrl.AddTunnel(ctx, dpiCfg, nil); err != nil {
-			core.Log.Warnf("DPI", "Failed to add DPI tunnel: %v", err)
-		} else if err := tunnelCtrl.ConnectTunnel(ctx, "dpi-bypass"); err != nil {
-			core.Log.Warnf("DPI", "Failed to connect DPI tunnel: %v", err)
-		}
-	}
-
 	// === 13. Start gRPC IPC server for GUI communication ===
 	svc := service.New(service.Config{
 		ConfigManager:       cfgManager,
@@ -728,8 +675,6 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		SubscriptionManager: subMgr,
 		UpdateChecker:       updateChecker,
 		ReconnectManager:    reconnectMgr,
-		DPIManager:          dpiMgr,
-		DPIManagerFactory:   createDPIManager,
 	})
 	svc.Start(ctx)
 
@@ -841,10 +786,6 @@ mainLoop:
 			ipcServer.Stop()
 		}
 		svc.Stop()
-
-		if dpiMgr != nil {
-			dpiMgr.Stop()
-		}
 
 		if subMgr != nil {
 			subMgr.Stop()

@@ -3,7 +3,7 @@ package core
 import "fmt"
 
 // CurrentConfigVersion is the latest config schema version.
-const CurrentConfigVersion = 3
+const CurrentConfigVersion = 4
 
 // configMigration defines a single config migration step.
 type configMigration struct {
@@ -17,6 +17,7 @@ var configMigrations = []configMigration{
 	{FromVersion: 0, Migrate: migrateV0toV1},
 	{FromVersion: 1, Migrate: migrateV1toV2},
 	{FromVersion: 2, Migrate: migrateV2toV3},
+	{FromVersion: 3, Migrate: migrateV3toV4},
 }
 
 // MigrateConfig applies all pending migrations to a raw YAML config map.
@@ -91,15 +92,13 @@ func migrateV1toV2(raw map[string]interface{}) error {
 	return nil
 }
 
-// migrateV2toV3 adds the dpi_bypass section with defaults.
+// migrateV2toV3 adds the dpi_bypass section with defaults (legacy, kept for chain).
 func migrateV2toV3(raw map[string]interface{}) error {
-	if _, ok := raw["dpi_bypass"]; ok {
-		return nil // already has dpi_bypass section
-	}
-	raw["dpi_bypass"] = map[string]interface{}{
-		"enabled":       false,
-		"test_domains":  []interface{}{"youtube.com", "discord.com"},
-		"startup_check": false,
-	}
+	return nil
+}
+
+// migrateV3toV4 removes the dpi_bypass section (feature removed).
+func migrateV3toV4(raw map[string]interface{}) error {
+	delete(raw, "dpi_bypass")
 	return nil
 }
