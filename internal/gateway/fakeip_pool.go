@@ -158,23 +158,25 @@ func (p *FakeIPPool) AllocateForDomain(domain string, realIPs [][4]byte, tunnelI
 }
 
 // IncrementFlows marks that a new flow is using this FakeIP.
+// Holds RLock through the atomic Add to prevent eviction between lookup and increment.
 func (p *FakeIPPool) IncrementFlows(fakeIP [4]byte) {
 	p.mu.RLock()
 	entry, ok := p.byFakeIP[fakeIP]
-	p.mu.RUnlock()
 	if ok {
 		entry.ActiveFlows.Add(1)
 	}
+	p.mu.RUnlock()
 }
 
 // DecrementFlows marks that a flow using this FakeIP has ended.
+// Holds RLock through the atomic Add to prevent eviction between lookup and decrement.
 func (p *FakeIPPool) DecrementFlows(fakeIP [4]byte) {
 	p.mu.RLock()
 	entry, ok := p.byFakeIP[fakeIP]
-	p.mu.RUnlock()
 	if ok {
 		entry.ActiveFlows.Add(-1)
 	}
+	p.mu.RUnlock()
 }
 
 // Flush clears all mappings. Called on domain rule reload.

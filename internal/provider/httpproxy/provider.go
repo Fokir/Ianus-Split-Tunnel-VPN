@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -139,6 +140,14 @@ func (p *Provider) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
 		return nil, fmt.Errorf("[HTTP] connect to proxy: %w", err)
 	}
 
+	// Ensure rawConn is always closed on error to prevent fd leaks.
+	success := false
+	defer func() {
+		if !success {
+			rawConn.Close()
+		}
+	}()
+
 	// Wrap in TLS if configured.
 	var conn net.Conn = rawConn
 	if p.config.TLS {
@@ -147,24 +156,25 @@ func (p *Provider) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
 			InsecureSkipVerify: p.config.TLSSkipVerify,
 		})
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			rawConn.Close()
 			return nil, fmt.Errorf("[HTTP] TLS handshake: %w", err)
 		}
 		conn = tlsConn
 	}
 
 	// Send HTTP CONNECT request.
-	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", addr, addr)
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("CONNECT %s HTTP/1.1\r\n", addr))
+	b.WriteString(fmt.Sprintf("Host: %s\r\n", addr))
 	if p.config.Username != "" {
 		creds := base64.StdEncoding.EncodeToString(
 			[]byte(p.config.Username + ":" + p.config.Password),
 		)
-		connectReq += fmt.Sprintf("Proxy-Authorization: Basic %s\r\n", creds)
+		b.WriteString(fmt.Sprintf("Proxy-Authorization: Basic %s\r\n", creds))
 	}
-	connectReq += "\r\n"
+	b.WriteString("\r\n")
+	connectReq := b.String()
 
 	if _, err := conn.Write([]byte(connectReq)); err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("[HTTP] send CONNECT: %w", err)
 	}
 
@@ -172,15 +182,15 @@ func (p *Provider) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("[HTTP] read CONNECT response: %w", err)
 	}
 	resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		conn.Close()
 		return nil, fmt.Errorf("[HTTP] CONNECT failed: %s", resp.Status)
 	}
+
+	success = true // prevent defer from closing rawConn
 
 	// If there's buffered data in the reader, wrap the connection.
 	if br.Buffered() > 0 {
@@ -208,6 +218,8 @@ func (p *Provider) Protocol() string {
 // GetServerEndpoints returns the HTTP proxy server endpoint for bypass route management.
 // Implements provider.EndpointProvider.
 func (p *Provider) GetServerEndpoints() []netip.AddrPort {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.serverAddr.IsValid() {
 		return []netip.AddrPort{p.serverAddr}
 	}

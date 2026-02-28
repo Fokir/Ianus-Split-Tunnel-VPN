@@ -113,7 +113,12 @@ func dialUDPAssociate(ctx context.Context, serverAddr string, auth *socks5Auth, 
 		return nil, fmt.Errorf("invalid target %q: %w", targetAddr, err)
 	}
 	var port uint16
-	fmt.Sscanf(portStr, "%d", &port)
+	_, err = fmt.Sscanf(portStr, "%d", &port)
+	if err != nil {
+		udpConn.Close()
+		tcpConn.Close()
+		return nil, fmt.Errorf("invalid target port %q: %w", portStr, err)
+	}
 
 	conn := &udpAssociateConn{
 		udpConn:    udpConn,
@@ -332,12 +337,16 @@ func (c *udpAssociateConn) SetWriteDeadline(t time.Time) error {
 
 // monitorTCPControl watches the TCP control connection. When it closes,
 // the UDP relay is terminated (per RFC 1928).
+// Uses closeOnce to prevent double-close race with Close().
 func (c *udpAssociateConn) monitorTCPControl() {
 	buf := make([]byte, 1)
 	// Block until TCP connection closes or errors.
 	c.tcpCtrl.Read(buf)
-	// TCP closed — close UDP relay.
-	c.udpConn.Close()
+	// TCP closed — close UDP relay via closeOnce to avoid double-close.
+	c.closeOnce.Do(func() {
+		c.tcpCtrl.Close()
+		c.udpConn.Close()
+	})
 }
 
 // buildUDPHeader constructs the SOCKS5 UDP request header for the target address.

@@ -61,10 +61,10 @@ type DNSResolver struct {
 
 	// Domain-based routing.
 	domainMatcher atomic.Pointer[DomainMatcher]
-	domainTable   *DomainTable
+	domainTable   atomic.Pointer[DomainTable]
 
 	// FakeIP pool for synthetic IP allocation (nil if disabled).
-	fakeIPPool *FakeIPPool
+	fakeIPPool atomic.Pointer[FakeIPPool]
 
 	// Goroutine limiters to prevent resource exhaustion under DNS flood.
 	udpSem chan struct{} // limits concurrent UDP handlers
@@ -108,12 +108,12 @@ func (r *DNSResolver) SetDomainMatcher(m *DomainMatcher) {
 
 // SetDomainTable sets the domain table for recording resolved IPs.
 func (r *DNSResolver) SetDomainTable(dt *DomainTable) {
-	r.domainTable = dt
+	r.domainTable.Store(dt)
 }
 
 // SetFakeIPPool sets the FakeIP pool for DNS response rewriting.
 func (r *DNSResolver) SetFakeIPPool(pool *FakeIPPool) {
-	r.fakeIPPool = pool
+	r.fakeIPPool.Store(pool)
 }
 
 // Start begins listening for DNS queries on UDP and TCP.
@@ -177,8 +177,8 @@ func (r *DNSResolver) FlushCache() {
 		r.cache.Flush()
 		core.Log.Infof("DNS", "DNS cache flushed")
 	}
-	if r.domainTable != nil {
-		r.domainTable.Flush()
+	if dt := r.domainTable.Load(); dt != nil {
+		dt.Flush()
 		core.Log.Infof("DNS", "Domain table flushed")
 	}
 }
@@ -277,7 +277,7 @@ func (r *DNSResolver) Resolve(ctx context.Context, query []byte) []byte {
 			if cached, ok := r.cache.Get(queryID, qName, qtype, qclass); ok {
 				core.Log.Debugf("DNS", "%s cache hit (UDP)", name)
 				// Record IPs from cached response too.
-				if domainResult.Matched && r.domainTable != nil {
+				if domainResult.Matched {
 					r.recordDomainIPs(cached, name, routeTunnelID, domainResult.Action)
 				}
 				return cached
@@ -297,7 +297,7 @@ func (r *DNSResolver) Resolve(ctx context.Context, query []byte) []byte {
 		if name != "" {
 			core.Log.Debugf("DNS", "%s → %s via %s (UDP, route=%s)", name, server, usedTunnel, routeTunnelID)
 		}
-		if domainResult.Matched && r.domainTable != nil {
+		if domainResult.Matched {
 			r.recordDomainIPs(resp, name, routeTunnelID, domainResult.Action)
 		}
 		return resp
@@ -580,7 +580,7 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 				if err := writeTCPDNSResponse(clientConn, cached); err != nil {
 					core.Log.Warnf("DNS", "TCP write cached response: %v", err)
 				}
-				if domainResult.Matched && r.domainTable != nil {
+				if domainResult.Matched {
 					r.recordDomainIPs(cached, name, routeTunnelID, domainResult.Action)
 				}
 				return
@@ -621,7 +621,7 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 		if name != "" {
 			core.Log.Debugf("DNS", "%s → %s via %s (TCP, route=%s)", name, server, usedTunnel, routeTunnelID)
 		}
-		if domainResult.Matched && r.domainTable != nil {
+		if domainResult.Matched {
 			r.recordDomainIPs(resp, name, routeTunnelID, domainResult.Action)
 		}
 	}
@@ -955,7 +955,8 @@ func makeNXDomain(query []byte) []byte {
 
 // recordDomainIPs extracts A records from a DNS response and inserts them into the domain table.
 func (r *DNSResolver) recordDomainIPs(resp []byte, domain string, tunnelID string, action core.DomainAction) {
-	if len(resp) < 12 {
+	dt := r.domainTable.Load()
+	if dt == nil || len(resp) < 12 {
 		return
 	}
 
@@ -1035,7 +1036,7 @@ func (r *DNSResolver) recordDomainIPs(resp []byte, domain string, tunnelID strin
 				clampedTTL = 3600
 			}
 
-			r.domainTable.Insert(ip, &DomainEntry{
+			dt.Insert(ip, &DomainEntry{
 				TunnelID:  tunnelID,
 				Action:    action,
 				Domain:    domain,
@@ -1056,7 +1057,8 @@ func (r *DNSResolver) recordDomainIPs(resp []byte, domain string, tunnelID strin
 // records the FakeIP in the DomainTable, and returns the modified response.
 // Returns the original response unchanged if FakeIP allocation fails.
 func (r *DNSResolver) rewriteResponseWithFakeIP(resp []byte, domain string, tunnelID string, action core.DomainAction) []byte {
-	if r.fakeIPPool == nil || len(resp) < 12 {
+	fakeIPPool := r.fakeIPPool.Load()
+	if fakeIPPool == nil || len(resp) < 12 {
 		return resp
 	}
 
@@ -1140,7 +1142,7 @@ func (r *DNSResolver) rewriteResponseWithFakeIP(resp []byte, domain string, tunn
 	}
 
 	// Allocate FakeIP for this domain.
-	fakeIP, err := r.fakeIPPool.AllocateForDomain(domain, realIPs, tunnelID, action)
+	fakeIP, err := fakeIPPool.AllocateForDomain(domain, realIPs, tunnelID, action)
 	if err != nil {
 		core.Log.Warnf("DNS", "FakeIP allocation failed for %s: %v (using real IPs)", domain, err)
 		return resp
@@ -1157,8 +1159,8 @@ func (r *DNSResolver) rewriteResponseWithFakeIP(resp []byte, domain string, tunn
 	}
 
 	// Record FakeIP in DomainTable (never expires — ExpiresAt=0).
-	if r.domainTable != nil {
-		r.domainTable.Insert(fakeIP, &DomainEntry{
+	if dt := r.domainTable.Load(); dt != nil {
+		dt.Insert(fakeIP, &DomainEntry{
 			TunnelID:  tunnelID,
 			Action:    action,
 			Domain:    domain,

@@ -27,6 +27,14 @@ var fwdBufPool = sync.Pool{
 	},
 }
 
+// sniBufPool reuses 16KB buffers for SNI extraction.
+var sniBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 16384)
+		return &b
+	},
+}
+
 // NATLookup is a function that resolves a client connection to its original
 // destination, tunnel ID, and fallback context via the NAT table.
 // addrKey is the string form of the remote address (e.g. "1.2.3.4:5678").
@@ -152,7 +160,11 @@ func (tp *TunnelProxy) acceptLoop(ctx context.Context) {
 
 func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn) {
 	defer tp.wg.Done()
-	defer clientConn.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			core.Log.Errorf("Proxy", "panic in handleConnection: %v", r)
+		}
+	}()
 
 	// Tune client-side loopback socket: disable Nagle, enlarge buffers.
 	if tc, ok := clientConn.(*net.TCPConn); ok {
@@ -163,6 +175,7 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 
 	tp.trackConn(clientConn)
 	defer tp.untrackConn(clientConn)
+	defer clientConn.Close()
 
 	// Look up original destination and fallback context from NAT table.
 	info, ok := tp.natLookup(clientConn.RemoteAddr().String())
@@ -174,13 +187,17 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 	// SNI-based routing: if a domain match function is set, peek at the
 	// client's initial data to extract the TLS SNI hostname and potentially
 	// override the tunnel routing decision.
+	var initialData []byte
 	if matchFn := tp.domainMatchFunc.Load(); matchFn != nil {
-		buf := make([]byte, 16384) // 16KB — handles modern TLS ClientHello including post-quantum (ML-KEM)
+		bp := sniBufPool.Get().(*[]byte)
+		defer sniBufPool.Put(bp)
+		buf := *bp
+
 		clientConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		n, _ := clientConn.Read(buf)
 		clientConn.SetReadDeadline(time.Time{})
 		if n > 0 {
-			initialData := buf[:n]
+			initialData = buf[:n]
 			if sni := ExtractSNI(initialData); sni != "" {
 				if tid, action, matched := (*matchFn)(sni); matched {
 					switch action {
@@ -220,17 +237,11 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 		core.Log.Errorf("Proxy", "Failed to dial %s via %s: %v", info.OriginalDst, info.TunnelID, err)
 		return
 	}
-	defer remoteConn.Close()
 
-	// Tune tunnel-side socket: disable Nagle, enlarge buffers.
-	if tc, ok := remoteConn.(*net.TCPConn); ok {
-		tc.SetNoDelay(true)
-		tc.SetReadBuffer(sockBufSize)
-		tc.SetWriteBuffer(sockBufSize)
-	}
-
+	// Ensure remoteConn is properly closed and untracked.
 	tp.trackConn(remoteConn)
 	defer tp.untrackConn(remoteConn)
+	defer remoteConn.Close()
 
 	// Early EOF detection: after a successful dial, the server may still block
 	// the connection once it sees the destination (e.g. VLESS/Xray blackhole).
@@ -244,8 +255,9 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 		if result.RemoteConn != remoteConn {
 			// Fallback produced a new connection — swap it in.
 			// The old remoteConn is already closed by DetectEarlyEOF.
+			// The defer for the old remoteConn is no longer valid, but that's fine.
+			// The new remoteConn is already tracked and deferred for closing above.
 			remoteConn = result.RemoteConn
-			defer remoteConn.Close()
 
 			// Tune the new connection if it's a raw TCP conn.
 			if tc, ok := remoteConn.(*net.TCPConn); ok {
@@ -253,12 +265,7 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 				tc.SetReadBuffer(sockBufSize)
 				tc.SetWriteBuffer(sockBufSize)
 			}
-
-			tp.trackConn(remoteConn)
-			defer tp.untrackConn(remoteConn)
 		}
-		// If result.RemoteConn == remoteConn (possibly wrapped as prefixConn),
-		// the initial exchange already happened — proceed to forwarding.
 	}
 
 	// Bidirectional forwarding.

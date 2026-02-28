@@ -26,6 +26,7 @@ import (
 
 // tunnelInstance tracks a running tunnel and its associated resources.
 type tunnelInstance struct {
+	opMu         sync.Mutex // serializes Connect/Disconnect/Remove on this tunnel
 	provider     provider.TunnelProvider
 	tcpProxy     *proxy.TunnelProxy
 	udpProxy     *proxy.UDPProxy
@@ -165,6 +166,10 @@ func (tc *TunnelControllerImpl) ConnectTunnel(ctx context.Context, tunnelID stri
 		return fmt.Errorf("tunnel %q not found", tunnelID)
 	}
 
+	// Per-tunnel lock to prevent concurrent Connect/Disconnect/Remove.
+	inst.opMu.Lock()
+	defer inst.opMu.Unlock()
+
 	// Atomic CAS: only transition from Down or Error to Connecting.
 	if !tc.deps.Registry.CompareAndSetState(tunnelID, core.TunnelStateDown, core.TunnelStateConnecting, nil) {
 		if !tc.deps.Registry.CompareAndSetState(tunnelID, core.TunnelStateError, core.TunnelStateConnecting, nil) {
@@ -211,6 +216,10 @@ func (tc *TunnelControllerImpl) DisconnectTunnel(tunnelID string) error {
 	if !ok {
 		return fmt.Errorf("tunnel %q not found", tunnelID)
 	}
+
+	// Per-tunnel lock to prevent concurrent Connect/Disconnect/Remove.
+	inst.opMu.Lock()
+	defer inst.opMu.Unlock()
 
 	if err := inst.provider.Disconnect(); err != nil {
 		return fmt.Errorf("disconnect tunnel %q: %w", tunnelID, err)
@@ -338,14 +347,22 @@ func (tc *TunnelControllerImpl) AddTunnel(ctx context.Context, cfg core.TunnelCo
 	var prov provider.TunnelProvider
 	switch cfg.Protocol {
 	case "direct":
-		prov = direct.New(tc.deps.RealNICIndex, tc.deps.RealNICLocalIP, tc.deps.InterfaceBinder)
+		var err error
+		prov, err = direct.New(tc.deps.RealNICIndex, tc.deps.RealNICLocalIP, tc.deps.InterfaceBinder)
+		if err != nil {
+			return err
+		}
 	case core.ProtocolDPIBypass:
-		prov = dpibypass.New(
+		var err error
+		prov, err = dpibypass.New(
 			cfg.Name,
 			tc.deps.RealNICIndex,
 			tc.deps.RealNICLocalIP,
 			tc.deps.InterfaceBinder.BindControl(tc.deps.RealNICIndex),
 		)
+		if err != nil {
+			return err
+		}
 	default:
 		var err error
 		prov, err = tc.createProvider(cfg)

@@ -195,6 +195,8 @@ func (p *Provider) Protocol() string {
 // GetServerEndpoints returns the SOCKS5 server endpoint for bypass route management.
 // Implements provider.EndpointProvider.
 func (p *Provider) GetServerEndpoints() []netip.AddrPort {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.serverAddr.IsValid() {
 		return []netip.AddrPort{p.serverAddr}
 	}

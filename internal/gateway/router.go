@@ -56,11 +56,11 @@ type TUNRouter struct {
 	bytesReporter func(tunnelID string, tx, rx int64)
 
 	// Domain-based routing: resolved IP→tunnel.
-	domainTable  *DomainTable
+	domainTable  atomic.Pointer[DomainTable]
 	geoipMatcher atomic.Pointer[GeoIPMatcher]
 
 	// FakeIP pool for synthetic IP resolution (nil if disabled).
-	fakeIPPool *FakeIPPool
+	fakeIPPool atomic.Pointer[FakeIPPool]
 
 	// Server endpoint routing: VPN server IP → owning tunnel ID.
 	// Traffic to a server IP is routed through its tunnel (e.g. admin panels).
@@ -147,7 +147,7 @@ func (r *TUNRouter) SetBytesReporter(fn func(tunnelID string, tx, rx int64)) {
 
 // SetDomainTable sets the domain table for IP→tunnel routing based on DNS matches.
 func (r *TUNRouter) SetDomainTable(dt *DomainTable) {
-	r.domainTable = dt
+	r.domainTable.Store(dt)
 }
 
 // SetGeoIPMatcher atomically swaps the GeoIP matcher for IP-based country routing.
@@ -157,7 +157,7 @@ func (r *TUNRouter) SetGeoIPMatcher(m *GeoIPMatcher) {
 
 // SetFakeIPPool sets the FakeIP pool for synthetic IP resolution.
 func (r *TUNRouter) SetFakeIPPool(pool *FakeIPPool) {
-	r.fakeIPPool = pool
+	r.fakeIPPool.Store(pool)
 	// Wire cleanup hook: decrement FakeIP flow count when raw flows expire.
 	if pool != nil {
 		r.flows.SetRawFlowCleanupHook(func(entry *RawFlowEntry) {
@@ -412,8 +412,8 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 	var fakeIP [4]byte
 	var realDstIP [4]byte
 	effectiveDstIP := m.dstIP
-	if r.fakeIPPool != nil && r.fakeIPPool.IsFakeIP(m.dstIP) {
-		if fEntry, ok := r.fakeIPPool.Lookup(m.dstIP); ok && len(fEntry.RealIPs) > 0 {
+	if fp := r.fakeIPPool.Load(); fp != nil && fp.IsFakeIP(m.dstIP) {
+		if fEntry, ok := fp.Lookup(m.dstIP); ok && len(fEntry.RealIPs) > 0 {
 			fakeIP = m.dstIP
 			realDstIP = fEntry.RealIPs[0]
 			effectiveDstIP = realDstIP
@@ -438,7 +438,9 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 			// FakeIP: rewrite packet dst from FakeIP to real IP before forwarding.
 			if fakeIP != [4]byte{} {
 				tunOverwriteDstIP(pkt, realDstIP, m.tpOff+16)
-				r.fakeIPPool.IncrementFlows(fakeIP)
+				if fp := r.fakeIPPool.Load(); fp != nil {
+					fp.IncrementFlows(fakeIP)
+				}
 			}
 			r.handleRawOutbound(pkt, m, tunnelID, vpnIP, rf, protoTCP, prio)
 			return
@@ -522,8 +524,8 @@ func (r *TUNRouter) handleTCPProxyResponse(pkt []byte, m pktMeta) {
 func (r *TUNRouter) handleTCPExisting(pkt []byte, m pktMeta) {
 	// Resolve effective dst IP for raw flow lookup (FakeIP → real IP).
 	effectiveDstIP := m.dstIP
-	if r.fakeIPPool != nil && r.fakeIPPool.IsFakeIP(m.dstIP) {
-		if fEntry, ok := r.fakeIPPool.Lookup(m.dstIP); ok && len(fEntry.RealIPs) > 0 {
+	if fp := r.fakeIPPool.Load(); fp != nil && fp.IsFakeIP(m.dstIP) {
+		if fEntry, ok := fp.Lookup(m.dstIP); ok && len(fEntry.RealIPs) > 0 {
 			effectiveDstIP = fEntry.RealIPs[0]
 		}
 	}
@@ -613,8 +615,8 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 
 	// Resolve effective dst IP for raw flow lookup (FakeIP → real IP).
 	effectiveDstIP := m.dstIP
-	if r.fakeIPPool != nil && r.fakeIPPool.IsFakeIP(m.dstIP) {
-		if fEntry, ok := r.fakeIPPool.Lookup(m.dstIP); ok && len(fEntry.RealIPs) > 0 {
+	if fp := r.fakeIPPool.Load(); fp != nil && fp.IsFakeIP(m.dstIP) {
+		if fEntry, ok := fp.Lookup(m.dstIP); ok && len(fEntry.RealIPs) > 0 {
 			effectiveDstIP = fEntry.RealIPs[0]
 		}
 	}
@@ -703,7 +705,9 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 			// FakeIP: rewrite packet dst from FakeIP to real IP before forwarding.
 			if fakeIP != [4]byte{} {
 				tunOverwriteDstIP(pkt, realDstIP, m.tpOff+6)
-				r.fakeIPPool.IncrementFlows(fakeIP)
+				if fp := r.fakeIPPool.Load(); fp != nil {
+					fp.IncrementFlows(fakeIP)
+				}
 			}
 			r.handleRawOutbound(pkt, m, tunnelID, vpnIP, rf, protoUDP, prio)
 			return
@@ -878,8 +882,8 @@ func (r *TUNRouter) resolveICMPFlow(dstIP [4]byte) (tunnelID string, action flow
 	}
 
 	// Domain-based routing (IP→tunnel from DNS resolution).
-	if r.domainTable != nil {
-		if dEntry, ok := r.domainTable.Lookup(dstIP); ok {
+	if dt := r.domainTable.Load(); dt != nil {
+		if dEntry, ok := dt.Lookup(dstIP); ok {
 			switch dEntry.Action {
 			case core.DomainBlock:
 				return "", flowDrop
@@ -964,8 +968,8 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 
 	// FakeIP routing: highest priority for domain-based routing.
 	// IsFakeIP is lock-free arithmetic — safe for hot path.
-	if r.fakeIPPool != nil && r.fakeIPPool.IsFakeIP(dstIP) {
-		if entry, ok := r.fakeIPPool.Lookup(dstIP); ok {
+	if fp := r.fakeIPPool.Load(); fp != nil && fp.IsFakeIP(dstIP) {
+		if entry, ok := fp.Lookup(dstIP); ok {
 			switch entry.Action {
 			case core.DomainBlock:
 				return "", 0, flowDrop, 0, fb
@@ -987,8 +991,8 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 
 	// Domain-based routing: IP→tunnel from DNS resolution.
 	// Domain rules have HIGHER priority than process rules.
-	if r.domainTable != nil {
-		if dEntry, ok := r.domainTable.Lookup(dstIP); ok {
+	if dt := r.domainTable.Load(); dt != nil {
+		if dEntry, ok := dt.Lookup(dstIP); ok {
 			switch dEntry.Action {
 			case core.DomainBlock:
 				return "", 0, flowDrop, 0, fb

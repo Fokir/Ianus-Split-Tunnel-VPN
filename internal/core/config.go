@@ -442,6 +442,11 @@ func (cm *ConfigManager) Save() error {
 		return fmt.Errorf("[Core] failed to marshal config: %w", err)
 	}
 
+	return cm.writeFile(data)
+}
+
+// writeFile writes pre-marshaled YAML data to the config file.
+func (cm *ConfigManager) writeFile(data []byte) error {
 	if dir := filepath.Dir(cm.filePath); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("[Core] failed to create config directory %s: %w", dir, err)
@@ -529,9 +534,14 @@ func (cm *ConfigManager) SetTunnelOrder(ids []string) error {
 	sort.Slice(cm.config.Tunnels, func(i, j int) bool {
 		return cm.config.Tunnels[i].SortIndex < cm.config.Tunnels[j].SortIndex
 	})
+	// Marshal under write lock to prevent TOCTOU race with concurrent writers.
+	data, err := yaml.Marshal(&cm.config)
 	cm.mu.Unlock()
 
-	return cm.Save()
+	if err != nil {
+		return fmt.Errorf("[Core] failed to marshal config: %w", err)
+	}
+	return cm.writeFile(data)
 }
 
 // GetTunnelOrder returns the saved display order of tunnel IDs.

@@ -325,6 +325,113 @@ func fwdRowByte(table unsafe.Pointer, headerSize, rowSize uintptr, idx uint32, o
 	return *(*byte)(unsafe.Pointer(uintptr(table) + headerSize + uintptr(idx)*rowSize + uintptr(off)))
 }
 
+// getAllActiveInterfaceLUIDs returns a map of active interface LUIDs for quick lookup.
+func getAllActiveInterfaceLUIDs() (map[uint64]struct{}, error) {
+	luidMap := make(map[uint64]struct{})
+
+	// Pre-allocate a buffer for GetAdaptersAddresses.
+	b := make([]byte, 15000) // Recommended initial buffer size
+	l := uint32(len(b))
+	// GAA_FLAG_INCLUDE_ALL_INTERFACES (0x0100) includes TUN/TAP adapters.
+	const gaaFlagIncludeAll = 0x0100
+	err := windows.GetAdaptersAddresses(windows.AF_UNSPEC, gaaFlagIncludeAll, 0, (*windows.IpAdapterAddresses)(unsafe.Pointer(&b[0])), &l)
+	if err == windows.ERROR_BUFFER_OVERFLOW {
+		b = make([]byte, l) // Resize buffer if too small
+		err = windows.GetAdaptersAddresses(windows.AF_UNSPEC, gaaFlagIncludeAll, 0, (*windows.IpAdapterAddresses)(unsafe.Pointer(&b[0])), &l)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetAdaptersAddresses failed: %w", err)
+	}
+
+	for addr := (*windows.IpAdapterAddresses)(unsafe.Pointer(&b[0])); addr != nil; addr = addr.Next {
+		luidMap[addr.Luid] = struct{}{}
+	}
+	return luidMap, nil
+}
+
+// CleanupOrphanedRoutes checks for and removes any 0.0.0.0/1 or 128.0.0.0/1
+// routes that point to non-existent interfaces, which can happen if the
+// application crashes.
+func CleanupOrphanedRoutes() error {
+	core.Log.Infof("Route", "Checking for orphaned routes...")
+
+	activeLUIDs, err := getAllActiveInterfaceLUIDs()
+	if err != nil {
+		return fmt.Errorf("failed to get active interface LUIDs: %w", err)
+	}
+
+	var table unsafe.Pointer
+	r, _, _ := procGetIpForwardTable2.Call(
+		uintptr(windows.AF_INET),
+		uintptr(unsafe.Pointer(&table)),
+	)
+	if r != 0 {
+		return fmt.Errorf("GetIpForwardTable2 failed: 0x%x", r)
+	}
+	defer procFreeMibTable.Call(uintptr(table))
+
+	numEntries := *(*uint32)(table)
+	const rowSize = uintptr(104) // sizeof(MIB_IPFORWARD_ROW2)
+	headerSize := unsafe.Sizeof(uint64(0)) // alignment padding after NumEntries
+
+	var cleanedCount int
+	var lastErr error
+
+	for i := uint32(0); i < numEntries; i++ {
+		luid := fwdRowUint64(table, headerSize, rowSize, i, fwdInterfaceLUID)
+
+		// Check if the interface for this route is still active.
+		if _, isActive := activeLUIDs[luid]; isActive {
+			continue // This route's interface is active, not orphaned.
+		}
+
+		family := fwdRowUint16(table, headerSize, rowSize, i, fwdDestFamily)
+		if family != windows.AF_INET {
+			continue
+		}
+
+		dstIPBytes := fwdRowBytes4(table, headerSize, rowSize, i, fwdDestAddr)
+		prefixLen := fwdRowByte(table, headerSize, rowSize, i, fwdDestPrefixLen)
+
+		isDefaultSplitRoute := false
+		if (dstIPBytes == [4]byte{0, 0, 0, 0} && prefixLen == 1) ||
+			(dstIPBytes == [4]byte{128, 0, 0, 0} && prefixLen == 1) {
+			isDefaultSplitRoute = true
+		}
+
+		if isDefaultSplitRoute {
+			// This is a 0.0.0.0/1 or 128.0.0.0/1 route pointing to a non-existent interface.
+			// It's likely an orphaned route from a crashed instance.
+			var row mibIPForwardRow2
+			// Copy the full row data to pass to DeleteIpForwardEntry2.
+			// The current row is read-only, we need a mutable copy.
+			srcPtr := uintptr(table) + headerSize + uintptr(i)*rowSize
+			dstPtr := uintptr(unsafe.Pointer(&row))
+			for k := 0; k < int(rowSize); k++ {
+				*(*byte)(unsafe.Pointer(dstPtr + uintptr(k))) = *(*byte)(unsafe.Pointer(srcPtr + uintptr(k)))
+			}
+
+			r, _, _ := procDeleteIpForwardEntry2.Call(uintptr(unsafe.Pointer(&row)))
+			if r != 0 {
+				e := fmt.Errorf("DeleteIpForwardEntry2 for LUID 0x%x, prefix %s/%d failed: 0x%x", luid, net.IP(dstIPBytes[:]), prefixLen, r)
+				core.Log.Warnf("Route", "%v", e)
+				lastErr = e // Keep track of the last error, but continue attempting to clean up others.
+			} else {
+				core.Log.Infof("Route", "Removed orphaned route: %s/%d (LUID 0x%x)", net.IP(dstIPBytes[:]), prefixLen, luid)
+				cleanedCount++
+			}
+		}
+	}
+
+	if cleanedCount > 0 {
+		core.Log.Infof("Route", "Finished checking for orphaned routes. Removed %d.", cleanedCount)
+	} else {
+		core.Log.Infof("Route", "Finished checking for orphaned routes. None found.")
+	}
+
+	return lastErr
+}
+
 // discoverRealNIC finds the default gateway NIC (the one with 0.0.0.0/0 that isn't our TUN).
 func discoverRealNIC(tunLUID uint64) (RealNIC, error) {
 	var table unsafe.Pointer

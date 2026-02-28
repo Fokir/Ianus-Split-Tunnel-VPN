@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,18 +20,10 @@ var udpBufPool = sync.Pool{
 	},
 }
 
-// udpSessionKey is a compact, allocation-free key for the UDP session map.
-// Layout: 4 bytes IPv4 address + 2 bytes port (big-endian).
-type udpSessionKey [6]byte
-
-func makeUDPSessionKey(addr *net.UDPAddr) udpSessionKey {
-	var k udpSessionKey
-	if ip4 := addr.IP.To4(); ip4 != nil {
-		copy(k[:4], ip4)
-	}
-	k[4] = byte(addr.Port >> 8)
-	k[5] = byte(addr.Port)
-	return k
+// makeUDPSessionKey converts a net.UDPAddr to a netip.AddrPort.
+// It creates a compact, allocation-free key for the UDP session map, supporting both IPv4 and IPv6.
+func makeUDPSessionKey(addr *net.UDPAddr) netip.AddrPort {
+	return netip.AddrPortFrom(addr.AddrPort().Addr(), uint16(addr.Port))
 }
 
 // UDPNATLookup resolves a hairpinned client address to its original destination,
@@ -43,6 +36,7 @@ type UDPSession struct {
 	tunnelConn net.Conn
 	clientAddr *net.UDPAddr
 	cancel     context.CancelFunc
+	closeOnce  sync.Once // prevents double-close of tunnelConn
 }
 
 // UDPProxy is a per-tunnel transparent UDP proxy.
@@ -56,7 +50,7 @@ type UDPProxy struct {
 	fallback       *FallbackDialer
 
 	sessionsMu sync.RWMutex
-	sessions   map[udpSessionKey]*UDPSession
+	sessions   map[netip.AddrPort]*UDPSession
 
 	// Cached Unix timestamp (seconds), updated every 250ms.
 	// Eliminates time.Now() syscall from the per-datagram fast path.
@@ -79,7 +73,7 @@ func NewUDPProxy(port uint16, natLookup UDPNATLookup, providerLookup ProviderLoo
 		natLookup:      natLookup,
 		providerLookup: providerLookup,
 		fallback:       fallback,
-		sessions:       make(map[udpSessionKey]*UDPSession),
+		sessions:       make(map[netip.AddrPort]*UDPSession),
 	}
 }
 
@@ -114,13 +108,13 @@ func (up *UDPProxy) Stop() {
 		up.conn.Close()
 	}
 
-	// Close all active sessions.
+	// Close all active sessions (closeOnce prevents double-close with readFromTunnel).
 	up.sessionsMu.Lock()
 	for _, sess := range up.sessions {
-		sess.tunnelConn.Close()
+		sess.closeOnce.Do(func() { sess.tunnelConn.Close() })
 		sess.cancel()
 	}
-	up.sessions = make(map[udpSessionKey]*UDPSession)
+	up.sessions = make(map[netip.AddrPort]*UDPSession)
 	up.sessionsMu.Unlock()
 
 	up.wg.Wait()
@@ -131,7 +125,10 @@ func (up *UDPProxy) Stop() {
 func (up *UDPProxy) readLoop(ctx context.Context) {
 	defer up.wg.Done()
 
-	buf := make([]byte, 65535)
+	bp := udpBufPool.Get().(*[]byte)
+	defer udpBufPool.Put(bp)
+	buf := *bp
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -226,7 +223,7 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 
 // readFromTunnel reads datagrams from the tunnel connection and sends them
 // back to the client through the hairpin path.
-func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, sk udpSessionKey) {
+func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, sk netip.AddrPort) {
 	defer up.wg.Done()
 	defer up.removeSession(sk)
 
@@ -260,10 +257,10 @@ func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, sk udp
 }
 
 // removeSession closes and removes a session by key.
-func (up *UDPProxy) removeSession(sk udpSessionKey) {
+func (up *UDPProxy) removeSession(sk netip.AddrPort) {
 	up.sessionsMu.Lock()
 	if sess, ok := up.sessions[sk]; ok {
-		sess.tunnelConn.Close()
+		sess.closeOnce.Do(func() { sess.tunnelConn.Close() })
 		sess.cancel()
 		delete(up.sessions, sk)
 	}
@@ -301,7 +298,7 @@ func (up *UDPProxy) cleanupLoop(ctx context.Context) {
 		case <-ticker.C:
 			now := up.nowSec.Load()
 			const timeout int64 = 120 // 2 minutes
-			var stale []udpSessionKey
+			var stale []netip.AddrPort
 
 			up.sessionsMu.RLock()
 			for sk, sess := range up.sessions {

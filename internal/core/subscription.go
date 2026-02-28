@@ -18,7 +18,7 @@ type SubscriptionManager struct {
 	cfgMgr     *ConfigManager
 	bus        *EventBus
 	httpClient *http.Client
-	stopChs    map[string]chan struct{}
+	stopFns    map[string]context.CancelFunc
 	// cache stores the last fetched tunnels per subscription name.
 	cache map[string][]TunnelConfig
 	// parseURI is the function used to parse vless:// URIs into TunnelConfig.
@@ -41,7 +41,7 @@ func NewSubscriptionManager(
 		cfgMgr:     cfgMgr,
 		bus:        bus,
 		httpClient: httpClient,
-		stopChs:    make(map[string]chan struct{}),
+		stopFns:    make(map[string]context.CancelFunc),
 		cache:      make(map[string][]TunnelConfig),
 		parseURI:   parseURI,
 	}
@@ -67,9 +67,9 @@ func (sm *SubscriptionManager) Start(ctx context.Context) {
 func (sm *SubscriptionManager) Stop() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	for name, ch := range sm.stopChs {
-		close(ch)
-		delete(sm.stopChs, name)
+	for name, cancel := range sm.stopFns {
+		cancel()
+		delete(sm.stopFns, name)
 	}
 }
 
@@ -201,6 +201,9 @@ func (sm *SubscriptionManager) parse(name string, sub SubscriptionConfig, data [
 			tc.ID = fmt.Sprintf("%s_%s", prefix, tc.ID)
 		}
 
+		if tc.Settings == nil {
+			tc.Settings = make(map[string]any)
+		}
 		tc.Settings["_subscription"] = name
 
 		tunnels = append(tunnels, tc)
@@ -214,9 +217,14 @@ func (sm *SubscriptionManager) parse(name string, sub SubscriptionConfig, data [
 }
 
 func (sm *SubscriptionManager) startRefreshLoop(ctx context.Context, name string, sub SubscriptionConfig, interval time.Duration) {
+	loopCtx, loopCancel := context.WithCancel(ctx)
+
 	sm.mu.Lock()
-	stopCh := make(chan struct{})
-	sm.stopChs[name] = stopCh
+	// Cancel previous loop for this name if it exists.
+	if prev, ok := sm.stopFns[name]; ok {
+		prev()
+	}
+	sm.stopFns[name] = loopCancel
 	sm.mu.Unlock()
 
 	go func() {
@@ -225,12 +233,10 @@ func (sm *SubscriptionManager) startRefreshLoop(ctx context.Context, name string
 
 		for {
 			select {
-			case <-ctx.Done():
-				return
-			case <-stopCh:
+			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
-				if _, err := sm.Refresh(ctx, name, sub); err != nil {
+				if _, err := sm.Refresh(loopCtx, name, sub); err != nil {
 					Log.Warnf("Sub", "Auto-refresh failed for %q: %v", name, err)
 				}
 			}

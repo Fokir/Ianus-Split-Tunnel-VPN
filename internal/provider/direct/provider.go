@@ -2,8 +2,10 @@ package direct
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
+	"sync"
 
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/platform"
@@ -13,6 +15,7 @@ import (
 // Routes traffic through the real NIC using platform-specific interface binding
 // (IP_UNICAST_IF on Windows, IP_BOUND_IF on macOS), bypassing the TUN adapter's default route.
 type Provider struct {
+	mu           sync.RWMutex
 	realNICIndex uint32
 	localIP      netip.Addr // real NIC's own IPv4 address
 	state        core.TunnelState
@@ -20,17 +23,26 @@ type Provider struct {
 }
 
 // New creates a DirectProvider that binds to the specified real NIC.
-func New(realNICIndex uint32, localIP netip.Addr, binder platform.InterfaceBinder) *Provider {
+func New(realNICIndex uint32, localIP netip.Addr, binder platform.InterfaceBinder) (*Provider, error) {
+	if binder == nil {
+		return nil, fmt.Errorf("binder cannot be nil for DirectProvider")
+	}
+	if localIP.IsValid() && !localIP.Is4() {
+		return nil, fmt.Errorf("localIP must be an IPv4 address for DirectProvider, got %s", localIP)
+	}
 	return &Provider{
+		mu:           sync.RWMutex{},
 		realNICIndex: realNICIndex,
 		localIP:      localIP,
 		state:        core.TunnelStateUp,
 		binder:       binder,
-	}
+	}, nil
 }
 
 // Connect is a no-op for DirectProvider (always up).
 func (p *Provider) Connect(_ context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.state = core.TunnelStateUp
 	core.Log.Infof("Direct", "Provider ready (NIC index=%d, localIP=%s)", p.realNICIndex, p.localIP)
 	return nil
@@ -38,13 +50,19 @@ func (p *Provider) Connect(_ context.Context) error {
 
 // Disconnect is a no-op.
 func (p *Provider) Disconnect() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.state = core.TunnelStateDown
 	core.Log.Infof("Direct", "Provider stopped")
 	return nil
 }
 
 // State returns the current provider state.
-func (p *Provider) State() core.TunnelState { return p.state }
+func (p *Provider) State() core.TunnelState {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.state
+}
 
 // GetAdapterIP returns an invalid addr (no VPN adapter).
 func (p *Provider) GetAdapterIP() netip.Addr { return netip.Addr{} }

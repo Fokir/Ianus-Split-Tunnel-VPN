@@ -140,6 +140,8 @@ func (p *Provider) State() core.TunnelState {
 
 // GetAdapterIP returns the local IP of the tunnel.
 func (p *Provider) GetAdapterIP() netip.Addr {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.adapterIP
 }
 
@@ -192,6 +194,8 @@ func (p *Provider) Protocol() string {
 // GetServerEndpoints returns the WireGuard server endpoints parsed from the config.
 // Implements provider.EndpointProvider for bypass route management.
 func (p *Provider) GetServerEndpoints() []netip.AddrPort {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.peerEndpoints
 }
 

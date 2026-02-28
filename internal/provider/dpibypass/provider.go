@@ -2,6 +2,7 @@ package dpibypass
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -30,7 +31,11 @@ type Provider struct {
 // New creates a DPIBypassProvider.
 // bindControl is a function that binds sockets to the real NIC (from InterfaceBinder).
 func New(name string, realNICIndex uint32, localIP netip.Addr,
-	bindControl func(network, address string, c syscall.RawConn) error) *Provider {
+	bindControl func(network, address string, c syscall.RawConn) error) (*Provider, error) {
+
+	if localIP.IsValid() && !localIP.Is4() {
+		return nil, fmt.Errorf("localIP must be an IPv4 address for DPIBypassProvider, got %s", localIP)
+	}
 
 	p := &Provider{
 		name:         name,
@@ -39,7 +44,7 @@ func New(name string, realNICIndex uint32, localIP netip.Addr,
 		bindControl:  bindControl,
 	}
 	p.state.Store(int32(core.TunnelStateUp))
-	return p
+	return p, nil
 }
 
 // Connect is a no-op (always up, like DirectProvider).

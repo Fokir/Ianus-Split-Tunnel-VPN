@@ -468,9 +468,11 @@ func ParseVLESSURI(uri string) (Config, string, error) {
 
 	port := 443
 	if p := u.Port(); p != "" {
-		if n, err := strconv.Atoi(p); err == nil {
-			port = n
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return Config{}, "", fmt.Errorf("vless URI: invalid port %q: %w", p, err)
 		}
+		port = n
 	}
 
 	q := u.Query()

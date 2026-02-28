@@ -54,8 +54,14 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	// Start log streamer early so it captures ALL log messages from the start.
 	logStreamer := service.NewLogStreamer(bus)
 	logStreamer.Start()
+	defer logStreamer.Stop() // safe to call multiple times; ensures cleanup on early init errors
 
 	core.Log.Infof("Core", "AWG Split Tunnel %s starting...", version)
+
+	// Clean up any orphaned routes from previous crashes.
+	if err := gateway.CleanupOrphanedRoutes(); err != nil {
+		core.Log.Warnf("Core", "Orphaned route cleanup failed: %v", err)
+	}
 
 	registry := core.NewTunnelRegistry(bus)
 	matcher := process.NewMatcher()
@@ -87,6 +93,19 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		adapter.Close()
 		return fmt.Errorf("failed to create process filter: %w", err)
 	}
+
+	// Deferred cleanup for resources created before the main shutdown handler.
+	// On normal path, initCleanup is set to nil after TUN router starts successfully.
+	initCleanup := func() {
+		procFilter.Close()
+		routeMgr.Cleanup()
+		adapter.Close()
+	}
+	defer func() {
+		if initCleanup != nil {
+			initCleanup()
+		}
+	}()
 
 	// === 4a. Platform-specific pre-startup (e.g., cleanup conflicting WFP filters) ===
 	if plat.PreStartup != nil {
@@ -463,10 +482,19 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 				}
 			}
 
-			// Re-apply DNS configuration.
+			// Re-apply DNS configuration and leak protection for the new NIC.
 			if hasDNSResolver {
 				if err := adapter.SetDNS([]netip.Addr{adapter.IP()}); err != nil {
 					core.Log.Warnf("DNS", "Re-set DNS: %v", err)
+				}
+				// Remove stale DNS leak protection rules (old NIC LUID) and re-add for new NIC.
+				procFilter.UnblockDNSOnInterface()
+				procFilter.RemoveDNSPermitForSelf()
+				if err := procFilter.BlockDNSOnInterface(newNIC.LUID); err != nil {
+					core.Log.Warnf("DNS", "Re-apply DNS leak protection: %v", err)
+				}
+				if err := procFilter.PermitDNSForSelf(newNIC.LUID); err != nil {
+					core.Log.Warnf("DNS", "Re-apply DNS self-permit: %v", err)
 				}
 			}
 			// Flush system DNS cache so stale entries from old NIC are purged.
@@ -590,6 +618,8 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	if err := tunRouter.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start TUN router: %w", err)
 	}
+	// TUN router started — the main shutdown handler takes over cleanup.
+	initCleanup = nil
 
 	rules := ruleEngine.GetRules()
 	core.Log.Infof("Core", "Active rules: %d", len(rules))
@@ -811,6 +841,10 @@ mainLoop:
 			ipcServer.Stop()
 		}
 		svc.Stop()
+
+		if dpiMgr != nil {
+			dpiMgr.Stop()
+		}
 
 		if subMgr != nil {
 			subMgr.Stop()

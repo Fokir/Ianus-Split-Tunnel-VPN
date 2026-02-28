@@ -52,6 +52,7 @@ type Provider struct {
 	socksAddr    string // local socks5 proxy address "127.0.0.1:{port}"
 
 	selfTestCancel context.CancelFunc // cancels running selfTest on Disconnect
+	selfTestWg     sync.WaitGroup    // waits for selfTest goroutine to finish
 }
 
 // New creates a VLESS provider with the given configuration.
@@ -156,7 +157,11 @@ func (p *Provider) Connect(ctx context.Context) error {
 	// Connectivity self-test with cancellable context (cancelled on Disconnect).
 	selfTestCtx, selfTestCancel := context.WithCancel(context.Background())
 	p.selfTestCancel = selfTestCancel
-	go p.selfTest(selfTestCtx)
+	p.selfTestWg.Add(1)
+	go func() {
+		defer p.selfTestWg.Done()
+		p.selfTest(selfTestCtx)
+	}()
 
 	return nil
 }
@@ -200,11 +205,18 @@ func (p *Provider) Disconnect() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Cancel any running selfTest before tearing down the instance.
+	// Cancel any running selfTest and wait for it to finish
+	// before tearing down the instance.
 	if p.selfTestCancel != nil {
 		p.selfTestCancel()
 		p.selfTestCancel = nil
 	}
+	// Wait outside the lock is not needed — selfTest only reads socksAddr under RLock,
+	// and we haven't cleared instance yet. Wait with lock held is safe because
+	// selfTest acquires RLock (not Lock).
+	p.mu.Unlock()
+	p.selfTestWg.Wait()
+	p.mu.Lock()
 
 	if p.instance != nil {
 		if err := p.instance.Close(); err != nil {
@@ -249,7 +261,10 @@ func (p *Provider) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
 	}
 
 	var port uint16
-	fmt.Sscanf(portStr, "%d", &port)
+	_, err = fmt.Sscanf(portStr, "%d", &port)
+	if err != nil {
+		return nil, fmt.Errorf("[VLESS] invalid target port %q: %w", portStr, err)
+	}
 
 	conn, err := dialViaSocks5(ctx, socksAddr, host, port)
 	if err != nil {
@@ -278,7 +293,10 @@ func (p *Provider) DialUDP(ctx context.Context, addr string) (net.Conn, error) {
 	}
 
 	var port uint16
-	fmt.Sscanf(portStr, "%d", &port)
+	_, err = fmt.Sscanf(portStr, "%d", &port)
+	if err != nil {
+		return nil, fmt.Errorf("[VLESS] invalid target port %q: %w", portStr, err)
+	}
 
 	conn, err := dialUDPViaSocks5(ctx, socksAddr, host, port)
 	if err != nil {
@@ -301,6 +319,8 @@ func (p *Provider) Protocol() string {
 
 // GetServerEndpoints returns the VLESS server endpoint for bypass route management.
 func (p *Provider) GetServerEndpoints() []netip.AddrPort {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.serverAddr.IsValid() {
 		return []netip.AddrPort{p.serverAddr}
 	}
@@ -324,11 +344,16 @@ func (p *Provider) SetInterfaceBinder(binder platform.InterfaceBinder) {
 // resolveViaRealNIC resolves a hostname using a DNS resolver bound to the real
 // NIC interface, bypassing the TUN DNS resolver entirely.
 func (p *Provider) resolveViaRealNIC(ctx context.Context, host string) ([]string, error) {
-	core.Log.Debugf("VLESS", "Resolving %q via real NIC (index=%d)", host, p.realNICIndex)
+	p.mu.RLock()
+	realNICIndex := p.realNICIndex
+	binder := p.binder
+	p.mu.RUnlock()
+
+	core.Log.Debugf("VLESS", "Resolving %q via real NIC (index=%d)", host, realNICIndex)
 
 	var controlFn func(string, string, syscall.RawConn) error
-	if p.binder != nil {
-		controlFn = p.binder.BindControl(p.realNICIndex)
+	if binder != nil {
+		controlFn = binder.BindControl(realNICIndex)
 	}
 
 	resolver := &net.Resolver{

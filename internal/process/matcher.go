@@ -9,12 +9,33 @@ import (
 	"time"
 )
 
+// regexPool caches compiled regexps for MatchPattern/MatchPreprocessed.
+// These functions are called from non-hot paths (IPFilter), so a simple
+// sync.Map with bounded size is sufficient.
+var regexPool sync.Map // string → *regexp.Regexp
+
+func getOrCompileRegex(expr string) (*regexp.Regexp, error) {
+	if v, ok := regexPool.Load(expr); ok {
+		return v.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(expr)
+	if err != nil {
+		return nil, err
+	}
+	regexPool.Store(expr, re)
+	return re, nil
+}
+
 // cachedPath holds a cached process path with pre-computed lowercase variants.
 type cachedPath struct {
 	exePath   string // original full path
 	exeLower  string // strings.ToLower(exePath)
 	baseLower string // filepath.Base(exeLower)
 }
+
+// maxCacheSize is the maximum number of entries in the process path cache.
+// Prevents unbounded growth under heavy PID churn (CI, containers, etc.).
+const maxCacheSize = 10000
 
 // Matcher resolves process IDs to executable paths and matches them against patterns.
 type Matcher struct {
@@ -50,6 +71,17 @@ func (m *Matcher) GetExePath(pid uint32) (string, bool) {
 	}
 
 	m.mu.Lock()
+	if len(m.cache) >= maxCacheSize {
+		// Evict ~10% of entries to make room.
+		evictCount := maxCacheSize / 10
+		for k := range m.cache {
+			delete(m.cache, k)
+			evictCount--
+			if evictCount <= 0 {
+				break
+			}
+		}
+	}
 	m.cache[pid] = cp
 	m.mu.Unlock()
 
@@ -79,6 +111,16 @@ func (m *Matcher) GetExePathLower(pid uint32) (exePath, exeLower, baseLower stri
 	}
 
 	m.mu.Lock()
+	if len(m.cache) >= maxCacheSize {
+		evictCount := maxCacheSize / 10
+		for k := range m.cache {
+			delete(m.cache, k)
+			evictCount--
+			if evictCount <= 0 {
+				break
+			}
+		}
+	}
 	m.cache[pid] = cp
 	m.mu.Unlock()
 
@@ -139,17 +181,21 @@ func (m *Matcher) revalidateCache() {
 	m.mu.RUnlock()
 
 	// Check each PID outside the lock.
-	var stale []uint32
+	type staleEntry struct {
+		pid     uint32
+		oldPath string // path at snapshot time, used to prevent deleting refreshed entries
+	}
+	var stale []staleEntry
 	for i, pid := range pids {
 		currentPath, err := queryProcessPath(pid)
 		if err != nil {
 			// Process no longer exists.
-			stale = append(stale, pid)
+			stale = append(stale, staleEntry{pid, paths[i]})
 			continue
 		}
 		// Process exists but exe path changed (PID reused).
 		if !strings.EqualFold(currentPath, paths[i]) {
-			stale = append(stale, pid)
+			stale = append(stale, staleEntry{pid, paths[i]})
 		}
 	}
 
@@ -158,8 +204,11 @@ func (m *Matcher) revalidateCache() {
 	}
 
 	m.mu.Lock()
-	for _, pid := range stale {
-		delete(m.cache, pid)
+	for _, s := range stale {
+		// Re-check: the entry may have been refreshed between snapshot and now.
+		if cp, ok := m.cache[s.pid]; ok && cp.exePath == s.oldPath {
+			delete(m.cache, s.pid)
+		}
 	}
 	m.mu.Unlock()
 }
@@ -178,7 +227,7 @@ func MatchPattern(exePath string, pattern string) bool {
 
 	// Regex pattern: "regex:<expr>" matches against full lowercase path.
 	if strings.HasPrefix(pattern, "regex:") {
-		re, err := regexp.Compile(pattern[6:])
+		re, err := getOrCompileRegex(pattern[6:])
 		if err != nil {
 			return false
 		}
@@ -226,7 +275,7 @@ func MatchPreprocessed(exeLower, baseLower, pattern, patternLower string) bool {
 	// Note: In hot paths (RuleEngine), regex is pre-compiled in regexCache
 	// and this branch is never reached. This is a fallback for IPFilter calls.
 	if strings.HasPrefix(pattern, "regex:") {
-		re, err := regexp.Compile(pattern[6:])
+		re, err := getOrCompileRegex(pattern[6:])
 		if err != nil {
 			return false
 		}

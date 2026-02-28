@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,6 +32,22 @@ const (
 	// Client sends immediately after TCP handshake, so 2s is more than enough.
 	initialDataReadTimeout = 2 * time.Second
 )
+
+// initialBufPool reuses 32KB buffers for initial client data.
+var initialBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 32768)
+		return &b
+	},
+}
+
+// respBufPool reuses 4KB buffers for tunnel response data.
+var respBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 4096)
+		return &b
+	},
+}
 
 // directTunnelID is the special tunnel ID for direct (non-VPN) traffic.
 const directTunnelID = "__direct__"
@@ -375,7 +392,9 @@ func (fd *FallbackDialer) DetectEarlyEOF(
 	// For TLS, this is the ClientHello (~200-500 bytes). For HTTP, the request line.
 	// Use a short deadline since the client should send immediately after TCP handshake.
 	clientConn.SetReadDeadline(time.Now().Add(initialDataReadTimeout))
-	initialBuf := make([]byte, 32768) // 32KB covers any TLS ClientHello
+	ibp := initialBufPool.Get().(*[]byte)
+	defer initialBufPool.Put(ibp)
+	initialBuf := *ibp
 	n, err := clientConn.Read(initialBuf)
 	clientConn.SetReadDeadline(time.Time{}) // clear deadline
 
@@ -395,7 +414,9 @@ func (fd *FallbackDialer) DetectEarlyEOF(
 
 	// Step 3: Wait for first response from tunnel.
 	remoteConn.SetReadDeadline(time.Now().Add(earlyEOFTimeout))
-	respBuf := make([]byte, 4096)
+	rbp := respBufPool.Get().(*[]byte)
+	defer respBufPool.Put(rbp)
+	respBuf := *rbp
 	respN, respErr := remoteConn.Read(respBuf)
 	remoteConn.SetReadDeadline(time.Time{}) // clear deadline
 

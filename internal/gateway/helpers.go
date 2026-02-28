@@ -154,6 +154,10 @@ const rawMSSLimit = tunInterfaceMTU - 40 // 1360
 //
 // tpOff is the offset of the TCP header within pkt.
 func clampTCPMSS(pkt []byte, tpOff int) {
+	// Bounds check: need at least 14 bytes of TCP header (up to flags byte).
+	if tpOff+minTCPHdr > len(pkt) {
+		return
+	}
 	// Only process packets with SYN flag set (SYN or SYN-ACK).
 	if pkt[tpOff+13]&tcpSYN == 0 {
 		return
