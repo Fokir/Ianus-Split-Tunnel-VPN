@@ -404,12 +404,9 @@ func CleanupOrphanedRoutes() error {
 			// It's likely an orphaned route from a crashed instance.
 			var row mibIPForwardRow2
 			// Copy the full row data to pass to DeleteIpForwardEntry2.
-			// The current row is read-only, we need a mutable copy.
-			srcPtr := uintptr(table) + headerSize + uintptr(i)*rowSize
-			dstPtr := uintptr(unsafe.Pointer(&row))
-			for k := 0; k < int(rowSize); k++ {
-				*(*byte)(unsafe.Pointer(dstPtr + uintptr(k))) = *(*byte)(unsafe.Pointer(srcPtr + uintptr(k)))
-			}
+			srcSlice := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(table)+headerSize+uintptr(i)*rowSize)), rowSize)
+			dstSlice := unsafe.Slice((*byte)(unsafe.Pointer(&row)), rowSize)
+			copy(dstSlice, srcSlice)
 
 			r, _, _ := procDeleteIpForwardEntry2.Call(uintptr(unsafe.Pointer(&row)))
 			if r != 0 {
