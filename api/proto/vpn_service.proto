@@ -482,6 +482,96 @@ message StopConflictingServicesResponse {
   repeated string failed = 4;    // failed to stop
 }
 
+// ─── DPI Bypass ─────────────────────────────────────────────────────
+
+message DPIDesyncOp {
+  string mode = 1;           // "fake", "multisplit", "fakedsplit", "multidisorder"
+  repeated int32 filter_ports = 2;
+  string filter_protocol = 3;
+  int32 fake_ttl = 4;
+  repeated string fool = 5;
+  int32 repeats = 6;
+  repeated int32 split_pos = 7;
+  int32 split_seq_ovl = 8;
+  string cutoff = 9;
+}
+
+message DPIStrategy {
+  string name = 1;
+  string source = 2;            // "zapret", "user", "search"
+  repeated DPIDesyncOp ops = 3;
+  google.protobuf.Timestamp last_tested = 4;
+  string network_id = 5;
+}
+
+message ListDPIStrategiesResponse {
+  repeated DPIStrategy strategies = 1;
+}
+
+message FetchDPIStrategiesResponse {
+  bool success = 1;
+  string error = 2;
+  repeated DPIStrategy strategies = 3;
+}
+
+message SelectDPIStrategyRequest {
+  string name = 1;
+}
+
+message SelectDPIStrategyResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message StartDPISearchRequest {
+  string base_strategy = 1;    // name of base strategy (empty = default)
+}
+
+message StartDPISearchResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message StopDPISearchResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message DPISearchProgress {
+  int32 phase = 1;
+  int32 tested = 2;
+  int32 total = 3;
+  string current_desc = 4;
+  bool complete = 5;
+  bool found = 6;
+  string strategy_name = 7;
+  string error = 8;
+}
+
+message DPIProbeRequest {
+  string domain = 1;
+  string strategy_name = 2;   // empty = test direct (no desync)
+}
+
+message DPIProbeResponse {
+  bool success = 1;
+  int64 latency_ms = 2;
+  string error = 3;
+}
+
+message SetDPIEnabledRequest {
+  bool enabled = 1;
+}
+
+message SetDPIEnabledResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetDPIEnabledResponse {
+  bool enabled = 1;
+}
+
 // ─── Service definition ─────────────────────────────────────────────
 
 service VPNService {
@@ -551,4 +641,15 @@ service VPNService {
   // -- Conflicting services --
   rpc CheckConflictingServices(google.protobuf.Empty) returns (ConflictingServicesResponse);
   rpc StopConflictingServices(StopConflictingServicesRequest) returns (StopConflictingServicesResponse);
+
+  // -- DPI Bypass --
+  rpc GetDPIEnabled(google.protobuf.Empty) returns (GetDPIEnabledResponse);
+  rpc SetDPIEnabled(SetDPIEnabledRequest) returns (SetDPIEnabledResponse);
+  rpc ListDPIStrategies(google.protobuf.Empty) returns (ListDPIStrategiesResponse);
+  rpc FetchDPIStrategies(google.protobuf.Empty) returns (FetchDPIStrategiesResponse);
+  rpc SelectDPIStrategy(SelectDPIStrategyRequest) returns (SelectDPIStrategyResponse);
+  rpc StartDPISearch(StartDPISearchRequest) returns (StartDPISearchResponse);
+  rpc StopDPISearch(google.protobuf.Empty) returns (StopDPISearchResponse);
+  rpc StreamDPISearchProgress(google.protobuf.Empty) returns (stream DPISearchProgress);
+  rpc ProbeDPI(DPIProbeRequest) returns (DPIProbeResponse);
 }

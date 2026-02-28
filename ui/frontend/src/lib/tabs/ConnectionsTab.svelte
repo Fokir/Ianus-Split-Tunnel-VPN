@@ -557,6 +557,7 @@
                   class="text-sm font-medium text-zinc-200 bg-zinc-700 border border-blue-500 rounded px-1.5 py-0.5 outline-none min-w-[80px] max-w-[200px]"
                 />
               {:else}
+                <!-- svelte-ignore a11y-no-static-element-interactions -->
                 <span
                   class="text-sm font-medium text-zinc-200 truncate cursor-default"
                   on:dblclick={() => startRename(tunnel)}

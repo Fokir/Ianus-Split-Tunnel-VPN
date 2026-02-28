@@ -12,6 +12,7 @@ import (
 
 	vpnapi "awg-split-tunnel/api/gen"
 	"awg-split-tunnel/internal/core"
+	"awg-split-tunnel/internal/dpi"
 	"awg-split-tunnel/internal/gateway"
 	"awg-split-tunnel/internal/update"
 )
@@ -61,9 +62,11 @@ type Service struct {
 	httpClient      *http.Client
 	geoResolver     *gateway.GeoIPResolver
 
-	subMgr         *core.SubscriptionManager
-	updateChecker  *update.Checker
-	reconnectMgr   *ReconnectManager
+	subMgr            *core.SubscriptionManager
+	updateChecker     *update.Checker
+	reconnectMgr      *ReconnectManager
+	dpiMgr            *dpi.StrategyManager
+	dpiMgrFactory     func() (*dpi.StrategyManager, error)
 
 	mu sync.RWMutex
 }
@@ -96,6 +99,10 @@ type Config struct {
 	UpdateChecker *update.Checker
 	// ReconnectManager handles auto-reconnection on tunnel failures.
 	ReconnectManager *ReconnectManager
+	// DPIManager manages DPI bypass strategies (optional).
+	DPIManager *dpi.StrategyManager
+	// DPIManagerFactory creates a DPI manager on demand (for dynamic enable).
+	DPIManagerFactory func() (*dpi.StrategyManager, error)
 }
 
 // New creates a new Service instance.
@@ -127,6 +134,8 @@ func New(c Config) *Service {
 	s.subMgr = c.SubscriptionManager
 	s.updateChecker = c.UpdateChecker
 	s.reconnectMgr = c.ReconnectManager
+	s.dpiMgr = c.DPIManager
+	s.dpiMgrFactory = c.DPIManagerFactory
 
 	// Initialize GeoIP resolver for IP→country lookup (best-effort).
 	if c.GeoIPFilePath != "" {

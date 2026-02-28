@@ -59,6 +59,15 @@ const (
 	VPNService_ApplyUpdate_FullMethodName              = "/awg.vpn.v1.VPNService/ApplyUpdate"
 	VPNService_CheckConflictingServices_FullMethodName = "/awg.vpn.v1.VPNService/CheckConflictingServices"
 	VPNService_StopConflictingServices_FullMethodName  = "/awg.vpn.v1.VPNService/StopConflictingServices"
+	VPNService_GetDPIEnabled_FullMethodName            = "/awg.vpn.v1.VPNService/GetDPIEnabled"
+	VPNService_SetDPIEnabled_FullMethodName            = "/awg.vpn.v1.VPNService/SetDPIEnabled"
+	VPNService_ListDPIStrategies_FullMethodName        = "/awg.vpn.v1.VPNService/ListDPIStrategies"
+	VPNService_FetchDPIStrategies_FullMethodName       = "/awg.vpn.v1.VPNService/FetchDPIStrategies"
+	VPNService_SelectDPIStrategy_FullMethodName        = "/awg.vpn.v1.VPNService/SelectDPIStrategy"
+	VPNService_StartDPISearch_FullMethodName           = "/awg.vpn.v1.VPNService/StartDPISearch"
+	VPNService_StopDPISearch_FullMethodName            = "/awg.vpn.v1.VPNService/StopDPISearch"
+	VPNService_StreamDPISearchProgress_FullMethodName  = "/awg.vpn.v1.VPNService/StreamDPISearchProgress"
+	VPNService_ProbeDPI_FullMethodName                 = "/awg.vpn.v1.VPNService/ProbeDPI"
 )
 
 // VPNServiceClient is the client API for VPNService service.
@@ -118,6 +127,16 @@ type VPNServiceClient interface {
 	// -- Conflicting services --
 	CheckConflictingServices(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConflictingServicesResponse, error)
 	StopConflictingServices(ctx context.Context, in *StopConflictingServicesRequest, opts ...grpc.CallOption) (*StopConflictingServicesResponse, error)
+	// -- DPI Bypass --
+	GetDPIEnabled(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetDPIEnabledResponse, error)
+	SetDPIEnabled(ctx context.Context, in *SetDPIEnabledRequest, opts ...grpc.CallOption) (*SetDPIEnabledResponse, error)
+	ListDPIStrategies(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListDPIStrategiesResponse, error)
+	FetchDPIStrategies(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*FetchDPIStrategiesResponse, error)
+	SelectDPIStrategy(ctx context.Context, in *SelectDPIStrategyRequest, opts ...grpc.CallOption) (*SelectDPIStrategyResponse, error)
+	StartDPISearch(ctx context.Context, in *StartDPISearchRequest, opts ...grpc.CallOption) (*StartDPISearchResponse, error)
+	StopDPISearch(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*StopDPISearchResponse, error)
+	StreamDPISearchProgress(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DPISearchProgress], error)
+	ProbeDPI(ctx context.Context, in *DPIProbeRequest, opts ...grpc.CallOption) (*DPIProbeResponse, error)
 }
 
 type vPNServiceClient struct {
@@ -536,6 +555,105 @@ func (c *vPNServiceClient) StopConflictingServices(ctx context.Context, in *Stop
 	return out, nil
 }
 
+func (c *vPNServiceClient) GetDPIEnabled(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetDPIEnabledResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetDPIEnabledResponse)
+	err := c.cc.Invoke(ctx, VPNService_GetDPIEnabled_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) SetDPIEnabled(ctx context.Context, in *SetDPIEnabledRequest, opts ...grpc.CallOption) (*SetDPIEnabledResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetDPIEnabledResponse)
+	err := c.cc.Invoke(ctx, VPNService_SetDPIEnabled_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) ListDPIStrategies(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListDPIStrategiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListDPIStrategiesResponse)
+	err := c.cc.Invoke(ctx, VPNService_ListDPIStrategies_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) FetchDPIStrategies(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*FetchDPIStrategiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FetchDPIStrategiesResponse)
+	err := c.cc.Invoke(ctx, VPNService_FetchDPIStrategies_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) SelectDPIStrategy(ctx context.Context, in *SelectDPIStrategyRequest, opts ...grpc.CallOption) (*SelectDPIStrategyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SelectDPIStrategyResponse)
+	err := c.cc.Invoke(ctx, VPNService_SelectDPIStrategy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) StartDPISearch(ctx context.Context, in *StartDPISearchRequest, opts ...grpc.CallOption) (*StartDPISearchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StartDPISearchResponse)
+	err := c.cc.Invoke(ctx, VPNService_StartDPISearch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) StopDPISearch(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*StopDPISearchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StopDPISearchResponse)
+	err := c.cc.Invoke(ctx, VPNService_StopDPISearch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) StreamDPISearchProgress(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DPISearchProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &VPNService_ServiceDesc.Streams[2], VPNService_StreamDPISearchProgress_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[emptypb.Empty, DPISearchProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type VPNService_StreamDPISearchProgressClient = grpc.ServerStreamingClient[DPISearchProgress]
+
+func (c *vPNServiceClient) ProbeDPI(ctx context.Context, in *DPIProbeRequest, opts ...grpc.CallOption) (*DPIProbeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DPIProbeResponse)
+	err := c.cc.Invoke(ctx, VPNService_ProbeDPI_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VPNServiceServer is the server API for VPNService service.
 // All implementations must embed UnimplementedVPNServiceServer
 // for forward compatibility.
@@ -593,6 +711,16 @@ type VPNServiceServer interface {
 	// -- Conflicting services --
 	CheckConflictingServices(context.Context, *emptypb.Empty) (*ConflictingServicesResponse, error)
 	StopConflictingServices(context.Context, *StopConflictingServicesRequest) (*StopConflictingServicesResponse, error)
+	// -- DPI Bypass --
+	GetDPIEnabled(context.Context, *emptypb.Empty) (*GetDPIEnabledResponse, error)
+	SetDPIEnabled(context.Context, *SetDPIEnabledRequest) (*SetDPIEnabledResponse, error)
+	ListDPIStrategies(context.Context, *emptypb.Empty) (*ListDPIStrategiesResponse, error)
+	FetchDPIStrategies(context.Context, *emptypb.Empty) (*FetchDPIStrategiesResponse, error)
+	SelectDPIStrategy(context.Context, *SelectDPIStrategyRequest) (*SelectDPIStrategyResponse, error)
+	StartDPISearch(context.Context, *StartDPISearchRequest) (*StartDPISearchResponse, error)
+	StopDPISearch(context.Context, *emptypb.Empty) (*StopDPISearchResponse, error)
+	StreamDPISearchProgress(*emptypb.Empty, grpc.ServerStreamingServer[DPISearchProgress]) error
+	ProbeDPI(context.Context, *DPIProbeRequest) (*DPIProbeResponse, error)
 	mustEmbedUnimplementedVPNServiceServer()
 }
 
@@ -719,6 +847,33 @@ func (UnimplementedVPNServiceServer) CheckConflictingServices(context.Context, *
 }
 func (UnimplementedVPNServiceServer) StopConflictingServices(context.Context, *StopConflictingServicesRequest) (*StopConflictingServicesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StopConflictingServices not implemented")
+}
+func (UnimplementedVPNServiceServer) GetDPIEnabled(context.Context, *emptypb.Empty) (*GetDPIEnabledResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetDPIEnabled not implemented")
+}
+func (UnimplementedVPNServiceServer) SetDPIEnabled(context.Context, *SetDPIEnabledRequest) (*SetDPIEnabledResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetDPIEnabled not implemented")
+}
+func (UnimplementedVPNServiceServer) ListDPIStrategies(context.Context, *emptypb.Empty) (*ListDPIStrategiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListDPIStrategies not implemented")
+}
+func (UnimplementedVPNServiceServer) FetchDPIStrategies(context.Context, *emptypb.Empty) (*FetchDPIStrategiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FetchDPIStrategies not implemented")
+}
+func (UnimplementedVPNServiceServer) SelectDPIStrategy(context.Context, *SelectDPIStrategyRequest) (*SelectDPIStrategyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SelectDPIStrategy not implemented")
+}
+func (UnimplementedVPNServiceServer) StartDPISearch(context.Context, *StartDPISearchRequest) (*StartDPISearchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StartDPISearch not implemented")
+}
+func (UnimplementedVPNServiceServer) StopDPISearch(context.Context, *emptypb.Empty) (*StopDPISearchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StopDPISearch not implemented")
+}
+func (UnimplementedVPNServiceServer) StreamDPISearchProgress(*emptypb.Empty, grpc.ServerStreamingServer[DPISearchProgress]) error {
+	return status.Error(codes.Unimplemented, "method StreamDPISearchProgress not implemented")
+}
+func (UnimplementedVPNServiceServer) ProbeDPI(context.Context, *DPIProbeRequest) (*DPIProbeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProbeDPI not implemented")
 }
 func (UnimplementedVPNServiceServer) mustEmbedUnimplementedVPNServiceServer() {}
 func (UnimplementedVPNServiceServer) testEmbeddedByValue()                    {}
@@ -1429,6 +1584,161 @@ func _VPNService_StopConflictingServices_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VPNService_GetDPIEnabled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).GetDPIEnabled(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_GetDPIEnabled_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).GetDPIEnabled(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_SetDPIEnabled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetDPIEnabledRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).SetDPIEnabled(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_SetDPIEnabled_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).SetDPIEnabled(ctx, req.(*SetDPIEnabledRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_ListDPIStrategies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).ListDPIStrategies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_ListDPIStrategies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).ListDPIStrategies(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_FetchDPIStrategies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).FetchDPIStrategies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_FetchDPIStrategies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).FetchDPIStrategies(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_SelectDPIStrategy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SelectDPIStrategyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).SelectDPIStrategy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_SelectDPIStrategy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).SelectDPIStrategy(ctx, req.(*SelectDPIStrategyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_StartDPISearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartDPISearchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).StartDPISearch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_StartDPISearch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).StartDPISearch(ctx, req.(*StartDPISearchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_StopDPISearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).StopDPISearch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_StopDPISearch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).StopDPISearch(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_StreamDPISearchProgress_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(emptypb.Empty)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(VPNServiceServer).StreamDPISearchProgress(m, &grpc.GenericServerStream[emptypb.Empty, DPISearchProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type VPNService_StreamDPISearchProgressServer = grpc.ServerStreamingServer[DPISearchProgress]
+
+func _VPNService_ProbeDPI_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DPIProbeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).ProbeDPI(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_ProbeDPI_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).ProbeDPI(ctx, req.(*DPIProbeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // VPNService_ServiceDesc is the grpc.ServiceDesc for VPNService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1584,6 +1894,38 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "StopConflictingServices",
 			Handler:    _VPNService_StopConflictingServices_Handler,
 		},
+		{
+			MethodName: "GetDPIEnabled",
+			Handler:    _VPNService_GetDPIEnabled_Handler,
+		},
+		{
+			MethodName: "SetDPIEnabled",
+			Handler:    _VPNService_SetDPIEnabled_Handler,
+		},
+		{
+			MethodName: "ListDPIStrategies",
+			Handler:    _VPNService_ListDPIStrategies_Handler,
+		},
+		{
+			MethodName: "FetchDPIStrategies",
+			Handler:    _VPNService_FetchDPIStrategies_Handler,
+		},
+		{
+			MethodName: "SelectDPIStrategy",
+			Handler:    _VPNService_SelectDPIStrategy_Handler,
+		},
+		{
+			MethodName: "StartDPISearch",
+			Handler:    _VPNService_StartDPISearch_Handler,
+		},
+		{
+			MethodName: "StopDPISearch",
+			Handler:    _VPNService_StopDPISearch_Handler,
+		},
+		{
+			MethodName: "ProbeDPI",
+			Handler:    _VPNService_ProbeDPI_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -1594,6 +1936,11 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StreamStats",
 			Handler:       _VPNService_StreamStats_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamDPISearchProgress",
+			Handler:       _VPNService_StreamDPISearchProgress_Handler,
 			ServerStreams: true,
 		},
 	},
