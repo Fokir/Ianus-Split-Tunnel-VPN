@@ -4,7 +4,6 @@ package darwin
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/netip"
@@ -46,11 +45,6 @@ var writeBufPool = sync.Pool{
 	},
 }
 
-// dnsBackupFile is used to persist original DNS servers across crashes.
-// If the daemon is killed (SIGKILL) before ClearDNS runs, the next startup
-// can detect this file and restore original DNS.
-const dnsBackupFile = "/tmp/awg-split-tunnel-dns-backup"
-
 // TUNAdapter implements platform.TUNAdapter using macOS utun interfaces.
 // Created via kernel control socket (AF_SYSTEM, SYSPROTO_CONTROL).
 type TUNAdapter struct {
@@ -59,11 +53,6 @@ type TUNAdapter struct {
 	ifIndex uint32
 	ip      netip.Addr
 	readBuf []byte // pre-allocated read buffer (single-goroutine use)
-
-	// DNS state: cached primary service and saved servers for restore.
-	primaryService string
-	savedDNS       []string
-	dnsSaved       bool // true after first SetDNS, prevents overwrite by ReapplyDNS
 }
 
 // NewTUNAdapter creates a macOS utun TUN adapter with IP 10.255.0.1/24, MTU 1400.
@@ -96,14 +85,6 @@ func NewTUNAdapter() (*TUNAdapter, error) {
 	if err := a.configureInterface(); err != nil {
 		a.Close()
 		return nil, fmt.Errorf("[Gateway] configure %s: %w", ifName, err)
-	}
-
-	// Cache primary network service for DNS operations (must run before default routes).
-	if svc, err := primaryNetworkService(); err == nil {
-		a.primaryService = svc
-		core.Log.Debugf("DNS", "Primary network service: %s", svc)
-	} else {
-		core.Log.Warnf("DNS", "Could not determine primary network service: %v", err)
 	}
 
 	core.Log.Infof("Gateway", "utun adapter %s created (IP=%s, ifIndex=%d)", ifName, a.ip, a.ifIndex)
@@ -228,94 +209,13 @@ func (a *TUNAdapter) WritePacket(pkt []byte) error {
 	return err
 }
 
-// SetDNS configures system DNS to use the given servers via networksetup.
-// Saves the current DNS configuration for later restore by ClearDNS.
-// Only captures original DNS on the first call; subsequent calls (e.g. from
-// ReapplyDNS on the same service) preserve the original savedDNS.
-func (a *TUNAdapter) SetDNS(servers []netip.Addr) error {
-	if len(servers) == 0 {
-		return nil
-	}
-	if a.primaryService == "" {
-		return fmt.Errorf("no primary network service available for DNS configuration")
-	}
+// SetDNS is a no-op on macOS. DNS is handled entirely by intercepting all
+// port 53 traffic in the TUN packet loop (hijackDNS), so no system DNS
+// configuration via networksetup is needed.
+func (a *TUNAdapter) SetDNS(_ []netip.Addr) error { return nil }
 
-	// Only save original DNS on first call to prevent overwriting with our own TUN DNS.
-	if !a.dnsSaved {
-		a.savedDNS = currentDNSServers(a.primaryService)
-		a.dnsSaved = true
-		saveDNSBackup(a.primaryService, a.savedDNS)
-	}
-
-	// Skip if DNS is already set correctly — avoids unnecessary
-	// mDNSResponder restart that disrupts in-flight DNS queries.
-	if dnsAlreadyCorrect(currentDNSServers(a.primaryService), servers) {
-		return nil
-	}
-
-	args := []string{"-setdnsservers", a.primaryService}
-	for _, s := range servers {
-		args = append(args, s.String())
-	}
-
-	out, err := exec.Command("networksetup", args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("networksetup set DNS: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-
-	_ = flushSystemDNS()
-	core.Log.Infof("DNS", "System DNS set to %v on service %q", servers, a.primaryService)
-	return nil
-}
-
-// ClearDNS restores the original DNS configuration saved by SetDNS.
-func (a *TUNAdapter) ClearDNS() error {
-	if a.primaryService == "" {
-		return nil
-	}
-
-	args := []string{"-setdnsservers", a.primaryService}
-	if len(a.savedDNS) > 0 {
-		args = append(args, a.savedDNS...)
-	} else {
-		args = append(args, "empty") // restore DHCP/automatic
-	}
-
-	out, err := exec.Command("networksetup", args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("networksetup clear DNS: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-
-	a.savedDNS = nil
-	a.dnsSaved = false
-	removeDNSBackup()
-	_ = flushSystemDNS()
-	core.Log.Infof("DNS", "System DNS restored on service %q", a.primaryService)
-	return nil
-}
-
-// ReapplyDNS re-detects the primary network service and re-applies DNS configuration.
-// Useful after a network change (WiFi→Ethernet) when the primary service may have changed.
-// When the service changes, clears DNS on the old service first, then resets dnsSaved
-// so SetDNS will capture the original DNS from the new service.
-func (a *TUNAdapter) ReapplyDNS(servers []netip.Addr) error {
-	newSvc, err := primaryNetworkService()
-	if err != nil {
-		return fmt.Errorf("detect primary service: %w", err)
-	}
-
-	if newSvc != a.primaryService {
-		core.Log.Infof("DNS", "Primary network service changed: %q → %q", a.primaryService, newSvc)
-		// Restore DNS on the old service before switching.
-		if err := a.ClearDNS(); err != nil {
-			core.Log.Warnf("DNS", "Failed to clear DNS on old service %q: %v", a.primaryService, err)
-		}
-		a.primaryService = newSvc
-		// dnsSaved is now false (reset by ClearDNS), so SetDNS will save from new service.
-	}
-
-	return a.SetDNS(servers)
-}
+// ClearDNS is a no-op on macOS — system DNS is never modified.
+func (a *TUNAdapter) ClearDNS() error { return nil }
 
 // Close tears down the utun adapter. The kernel removes the utun interface when the fd is closed.
 func (a *TUNAdapter) Close() error {
@@ -328,133 +228,3 @@ func (a *TUNAdapter) Close() error {
 	return nil
 }
 
-// primaryNetworkService finds the active network service name (e.g. "Wi-Fi")
-// by resolving the default route interface and mapping it via networksetup.
-func primaryNetworkService() (string, error) {
-	// Get default route interface (e.g. "en0").
-	out, err := exec.Command("route", "-n", "get", "default").CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("route get default: %w", err)
-	}
-
-	var ifName string
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "interface:") {
-			ifName = strings.TrimSpace(line[len("interface:"):])
-			break
-		}
-	}
-	if ifName == "" {
-		return "", fmt.Errorf("no default interface found")
-	}
-
-	// Map interface name to network service via hardware ports listing.
-	out, err = exec.Command("networksetup", "-listallhardwareports").CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("list hardware ports: %w", err)
-	}
-
-	var svc string
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Hardware Port:") {
-			svc = strings.TrimPrefix(line, "Hardware Port: ")
-		} else if strings.HasPrefix(line, "Device:") {
-			dev := strings.TrimSpace(strings.TrimPrefix(line, "Device:"))
-			if dev == ifName {
-				return svc, nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("no network service for interface %s", ifName)
-}
-
-// currentDNSServers returns the current DNS servers for the given network service.
-// Returns nil if DNS is set to automatic/DHCP.
-func currentDNSServers(service string) []string {
-	out, err := exec.Command("networksetup", "-getdnsservers", service).CombinedOutput()
-	if err != nil {
-		return nil
-	}
-	text := strings.TrimSpace(string(out))
-	if text == "" || strings.Contains(text, "any DNS Servers") {
-		return nil
-	}
-	var servers []string
-	for _, line := range strings.Split(text, "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			servers = append(servers, s)
-		}
-	}
-	return servers
-}
-
-// dnsAlreadyCorrect returns true if the current DNS servers match desired,
-// preventing unnecessary networksetup calls and mDNSResponder restarts.
-func dnsAlreadyCorrect(current []string, desired []netip.Addr) bool {
-	if len(current) != len(desired) {
-		return false
-	}
-	for i, addr := range desired {
-		if current[i] != addr.String() {
-			return false
-		}
-	}
-	return true
-}
-
-// dnsBackupData is persisted to disk so DNS can be restored after a crash.
-type dnsBackupData struct {
-	Service string   `json:"service"`
-	Servers []string `json:"servers,omitempty"`
-}
-
-// saveDNSBackup writes the original DNS configuration to a temp file.
-func saveDNSBackup(service string, servers []string) {
-	data, err := json.Marshal(dnsBackupData{Service: service, Servers: servers})
-	if err != nil {
-		return
-	}
-	_ = os.WriteFile(dnsBackupFile, data, 0600)
-}
-
-// removeDNSBackup deletes the DNS backup file after successful restore.
-func removeDNSBackup() {
-	_ = os.Remove(dnsBackupFile)
-}
-
-// RestoreDNSFromBackup checks for a stale DNS backup file (left by a previous crash)
-// and restores the original DNS configuration. Should be called early at startup.
-func RestoreDNSFromBackup() {
-	data, err := os.ReadFile(dnsBackupFile)
-	if err != nil {
-		return // No backup file — clean startup.
-	}
-
-	var backup dnsBackupData
-	if err := json.Unmarshal(data, &backup); err != nil {
-		os.Remove(dnsBackupFile)
-		return
-	}
-
-	core.Log.Warnf("DNS", "Found stale DNS backup (previous crash?). Restoring DNS on service %q", backup.Service)
-
-	args := []string{"-setdnsservers", backup.Service}
-	if len(backup.Servers) > 0 {
-		args = append(args, backup.Servers...)
-	} else {
-		args = append(args, "empty")
-	}
-
-	out, err := exec.Command("networksetup", args...).CombinedOutput()
-	if err != nil {
-		core.Log.Warnf("DNS", "Failed to restore DNS from backup: %s: %v", strings.TrimSpace(string(out)), err)
-	} else {
-		_ = flushSystemDNS()
-		core.Log.Infof("DNS", "DNS restored from crash backup on service %q", backup.Service)
-	}
-
-	os.Remove(dnsBackupFile)
-}

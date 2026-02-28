@@ -231,6 +231,10 @@ func (s *Service) SaveRules(_ context.Context, req *vpnapi.SaveRulesRequest) (*v
 	if err := s.cfg.Save(); err != nil {
 		return &vpnapi.SaveRulesResponse{Success: false, Error: err.Error()}, nil
 	}
+	// Flush DNS caches so new process→tunnel rules take effect immediately.
+	if s.dnsFlush != nil {
+		_ = s.dnsFlush()
+	}
 	return &vpnapi.SaveRulesResponse{Success: true}, nil
 }
 
@@ -267,6 +271,10 @@ func (s *Service) SaveDomainRules(_ context.Context, req *vpnapi.SaveDomainRules
 			core.Log.Warnf("Core", "Domain reloader failed: %v", err)
 			return &vpnapi.SaveDomainRulesResponse{Success: false, Error: err.Error()}, nil
 		}
+	}
+	// Flush DNS caches so new domain routing takes effect immediately.
+	if s.dnsFlush != nil {
+		_ = s.dnsFlush()
 	}
 	return &vpnapi.SaveDomainRulesResponse{Success: true}, nil
 }

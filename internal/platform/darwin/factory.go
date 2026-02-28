@@ -37,11 +37,8 @@ func NewPlatform() *platform.Platform {
 			return NewNetworkMonitor(onChange)
 		},
 
-		PreStartup: func() error {
-			// Restore DNS if a previous daemon crash left it pointing at the TUN adapter.
-			RestoreDNSFromBackup()
-			return nil
-		},
+		// PreStartup: not needed — DNS is intercepted in-band (hijackDNS), so
+		// no system DNS configuration is modified and no crash recovery required.
 
 		FlushSystemDNS: flushSystemDNS,
 	}

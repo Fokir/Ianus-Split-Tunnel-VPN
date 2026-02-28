@@ -602,10 +602,11 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 		return
 	}
 
-	// In-band DNS hijack: on macOS, packets to our TUN IP port 53 arrive
-	// through the TUN device instead of being delivered to the local socket.
-	// Process them directly via the DNS resolver and write the response back.
-	if m.dstIP == r.tunIP && m.dstP == 53 && r.dnsResolver != nil {
+	// DNS hijack: intercept ALL outgoing DNS queries (port 53) and resolve
+	// them via the local DNS resolver. This eliminates the need for system DNS
+	// configuration (networksetup on macOS, netsh on Windows) and guarantees
+	// DNS leak protection — even apps that bypass system DNS are caught.
+	if m.dstP == 53 && r.dnsResolver != nil {
 		r.hijackDNS(pkt, m)
 		return
 	}
@@ -739,9 +740,10 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	r.writePacket(pkt)
 }
 
-// hijackDNS intercepts a DNS query packet destined for tunIP:53 and resolves
-// it in-band via the DNS resolver. The response is written back to TUN as a
-// raw IP/UDP packet. Runs asynchronously to avoid blocking the packet loop.
+// hijackDNS intercepts a DNS query packet and resolves it via the local DNS
+// resolver. The response is written back to TUN as a raw IP/UDP packet with
+// the original destination IP as source, so the client accepts the reply.
+// Runs asynchronously to avoid blocking the packet loop.
 func (r *TUNRouter) hijackDNS(pkt []byte, m pktMeta) {
 	// Extract DNS payload from UDP.
 	udpPayloadOff := m.tpOff + minUDPHdr
@@ -757,6 +759,7 @@ func (r *TUNRouter) hijackDNS(pkt []byte, m pktMeta) {
 
 	srcIP := m.srcIP
 	srcPort := m.srcP
+	dstIP := m.dstIP // preserve original destination for response source
 
 	select {
 	case r.dnsHijackSem <- struct{}{}:
@@ -771,8 +774,10 @@ func (r *TUNRouter) hijackDNS(pkt []byte, m pktMeta) {
 				return
 			}
 
-			// Build response: src=tunIP:53, dst=originalSrc:originalSrcPort.
-			respPkt := buildUDPPacket(r.tunIP, srcIP, 53, srcPort, resp)
+			// Build response: src=originalDst:53, dst=originalSrc:originalSrcPort.
+			// Using the original destination IP as source ensures the client
+			// accepts the response (it expects a reply from the server it queried).
+			respPkt := buildUDPPacket(dstIP, srcIP, 53, srcPort, resp)
 			r.writePacket(respPkt)
 		}()
 	default:
