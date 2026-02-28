@@ -12,8 +12,10 @@ import (
 )
 
 func setupTray(app *application.App, mainWindow *application.WebviewWindow, binding *BindingService) {
+	initTrayIcons()
+
 	systray := app.SystemTray.New()
-	systray.SetIcon(trayIconPNG)
+	systray.SetIcon(trayIconForStatus(trayStatusGray))
 
 	// Left-click on tray icon opens the main window.
 	systray.OnClick(func() {
@@ -69,29 +71,40 @@ func updateTrayState(app *application.App, systray *application.SystemTray, bind
 		return
 	}
 
+	prev := trayStatus(-1)
 	for {
 		snap, err := stream.Recv()
 		if err != nil {
 			return
 		}
 
-		hasActive := false
-		hasError := false
+		var hasActive, hasConnecting, hasError bool
 		for _, t := range snap.Tunnels {
-			if t.State == vpnapi.TunnelState_TUNNEL_STATE_UP {
+			switch t.State {
+			case vpnapi.TunnelState_TUNNEL_STATE_UP:
 				hasActive = true
-			}
-			if t.State == vpnapi.TunnelState_TUNNEL_STATE_ERROR {
+			case vpnapi.TunnelState_TUNNEL_STATE_CONNECTING:
+				hasConnecting = true
+			case vpnapi.TunnelState_TUNNEL_STATE_ERROR:
 				hasError = true
 			}
 		}
 
-		if hasError {
-			systray.SetLabel("AWG - Error")
-		} else if hasActive {
-			systray.SetLabel("AWG - Connected")
-		} else {
-			systray.SetLabel("AWG - Disconnected")
+		var status trayStatus
+		switch {
+		case hasError:
+			status = trayStatusRed
+		case hasConnecting:
+			status = trayStatusYellow
+		case hasActive:
+			status = trayStatusGreen
+		default:
+			status = trayStatusGray
+		}
+
+		if status != prev {
+			systray.SetIcon(trayIconForStatus(status))
+			prev = status
 		}
 	}
 }
