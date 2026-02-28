@@ -14,8 +14,25 @@ import (
 	"awg-split-tunnel/internal/platform"
 )
 
+// defaultSubRanges covers the full IPv4 address space using 8 specific prefixes
+// instead of the traditional 0/1 + 128/1 split. This avoids replacing the macOS
+// system default route (0/0), which preserves scoped-route semantics and service
+// ordering used by system apps (Safari, App Store, etc.). More-specific routes
+// always win via longest-prefix match, so all traffic still flows through utun.
+// This is the same approach used by sing-tun on Darwin.
+var defaultSubRanges = []string{
+	"1.0.0.0/8",
+	"2.0.0.0/7",
+	"4.0.0.0/6",
+	"8.0.0.0/5",
+	"16.0.0.0/4",
+	"32.0.0.0/3",
+	"64.0.0.0/2",
+	"128.0.0.0/1",
+}
+
 // RouteManager implements platform.RouteManager using macOS route(8) commands.
-// Uses split default routes (0/1 + 128/1) through utun for traffic capture,
+// Uses sub-range routes through utun for traffic capture (sing-tun approach),
 // and /32 bypass routes via real NIC gateway for VPN server endpoints.
 type RouteManager struct {
 	tunIfIndex uint32
@@ -102,8 +119,9 @@ func (rm *RouteManager) DiscoverRealNIC() (platform.RealNIC, error) {
 // RealNICInfo returns the previously discovered real NIC information.
 func (rm *RouteManager) RealNICInfo() platform.RealNIC { return rm.realNIC }
 
-// SetDefaultRoute adds split default routes (0/1 + 128/1) through the utun adapter.
-// These are more specific than 0/0, capturing all traffic into the TUN.
+// SetDefaultRoute adds sub-range routes covering the full IPv4 space through utun.
+// Uses 8 specific prefixes instead of 0/1+128/1 to avoid replacing the system
+// default route, which preserves macOS scoped-route semantics for system apps.
 // Additionally adds interface-scoped routes for the real NIC so that sockets
 // bound via IP_BOUND_IF (DirectProvider) can still route through the physical interface.
 func (rm *RouteManager) SetDefaultRoute() error {
@@ -118,7 +136,7 @@ func (rm *RouteManager) SetDefaultRoute() error {
 		return fmt.Errorf("[Route] TUN interface name unknown")
 	}
 
-	for _, prefix := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
+	for _, prefix := range defaultSubRanges {
 		addArgs := []string{"-n", "add", "-net", prefix, "-interface", rm.tunIfName}
 		delArgs := []string{"-n", "delete", "-net", prefix, "-interface", rm.tunIfName}
 
@@ -131,10 +149,10 @@ func (rm *RouteManager) SetDefaultRoute() error {
 	// Add interface-scoped routes for the real NIC so that sockets bound
 	// to the physical interface via IP_BOUND_IF can still route traffic.
 	// Without these, macOS kernel returns EHOSTUNREACH for bound sockets
-	// because the unscoped split routes point to utun, not en0.
+	// because the unscoped sub-range routes point to utun, not en0.
 	if rm.realNIC.Gateway.IsValid() && rm.realIfName != "" {
 		gw := rm.realNIC.Gateway.String()
-		for _, prefix := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
+		for _, prefix := range defaultSubRanges {
 			addArgs := []string{"-n", "add", "-net", prefix, gw, "-ifscope", rm.realIfName}
 			delArgs := []string{"-n", "delete", "-net", prefix, "-ifscope", rm.realIfName}
 
@@ -146,12 +164,11 @@ func (rm *RouteManager) SetDefaultRoute() error {
 		}
 	}
 
-	core.Log.Infof("Route", "Default routes set via %s", rm.tunIfName)
+	core.Log.Infof("Route", "Default routes set via %s (%d sub-ranges)", rm.tunIfName, len(defaultSubRanges))
 	return nil
 }
 
-// RemoveDefaultRoute removes the split default routes (0/1 + 128/1),
-// keeping bypass routes intact.
+// RemoveDefaultRoute removes the sub-range default routes, keeping bypass routes intact.
 func (rm *RouteManager) RemoveDefaultRoute() error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
