@@ -1,5 +1,5 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import * as api from '../api.js';
   import { sortTunnels } from '../utils.js';
   import ErrorAlert from '../ErrorAlert.svelte';
@@ -50,6 +50,11 @@
   let dragOverGroupIdx = -1;
   let dragOverRuleIdx = -1;
 
+  // Inline group rename
+  let renamingGroupPattern = '';
+  let renameGroupValue = '';
+  let renameGroupInput;
+
   // ─── Quick Rule Wizard ────────────────────────────────────────────
   let showQuickWizard = false;
   let wizardStep = 1;
@@ -75,6 +80,41 @@
       group.rules.push({ ...rule, realIndex: i });
     }
     return result;
+  }
+
+  // ─── Pattern Icons ───────────────────────────────────────────────
+
+  let patternIcons = {};
+  let iconLoadTimer;
+
+  async function loadPatternIcons() {
+    try {
+      const procs = await api.listProcesses('') || [];
+      const iconMap = {};
+      for (const group of groups) {
+        const pat = group.pattern.toLowerCase();
+        // 1. Exact match by process name
+        let match = procs.find(p => p.name.toLowerCase() === pat && p.icon);
+        // 2. If pattern is path/*, find process in that folder
+        if (!match && (pat.endsWith('/*') || pat.endsWith('\\*'))) {
+          const dir = pat.slice(0, -2);
+          match = procs.find(p => p.path && p.path.toLowerCase().startsWith(dir) && p.icon);
+        }
+        // 3. Substring match (e.g. "chrome", "firefox")
+        if (!match) {
+          match = procs.find(p => p.name.toLowerCase().includes(pat) && p.icon);
+        }
+        if (match) iconMap[group.pattern] = match.icon;
+      }
+      patternIcons = iconMap;
+    } catch {
+      // Icons are optional — don't break on failure
+    }
+  }
+
+  $: if (groups.length > 0) {
+    clearTimeout(iconLoadTimer);
+    iconLoadTimer = setTimeout(loadPatternIcons, 300);
   }
 
   // ─── Lifecycle ────────────────────────────────────────────────────
@@ -337,6 +377,26 @@
     showProcessPicker = false;
   }
 
+  function selectFolderProcess(detail) {
+    modalRule.pattern = detail.pattern;
+    showProcessPicker = false;
+  }
+
+  function wizardSelectFolder(detail) {
+    wizardSelectedProcess = { name: detail.pattern, path: detail.folder, icon: null };
+    wizardStep = 2;
+  }
+
+  function selectAppFolder(detail) {
+    if (appPickerIndex >= 0 && appPickerIndex < disallowedApps.length) {
+      disallowedApps[appPickerIndex].pattern = detail.pattern;
+      disallowedApps = [...disallowedApps];
+      appsDirty = true;
+    }
+    showAppProcessPicker = false;
+    appPickerIndex = -1;
+  }
+
   // ─── Drag & Drop (grouped) ───────────────────────────────────────
 
   function handleGroupDragStart(e, gi, ri) {
@@ -389,6 +449,33 @@
     dragRuleIdx = -1;
     dragOverGroupIdx = -1;
     dragOverRuleIdx = -1;
+  }
+
+  // ─── Inline Group Rename ─────────────────────────────────────────
+
+  async function startGroupRename(group) {
+    renamingGroupPattern = group.pattern;
+    renameGroupValue = group.pattern;
+    await tick();
+    if (renameGroupInput) { renameGroupInput.focus(); renameGroupInput.select(); }
+  }
+
+  function saveGroupRename() {
+    if (!renamingGroupPattern) return;
+    const trimmed = renameGroupValue.trim();
+    if (trimmed && trimmed !== renamingGroupPattern) {
+      rules = rules.map(r => r.pattern === renamingGroupPattern ? { ...r, pattern: trimmed } : r);
+      dirty = true;
+    }
+    renamingGroupPattern = '';
+    renameGroupValue = '';
+  }
+
+  function cancelGroupRename() { renamingGroupPattern = ''; renameGroupValue = ''; }
+
+  function handleGroupRenameKeydown(e) {
+    if (e.key === 'Enter') { e.preventDefault(); saveGroupRename(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancelGroupRename(); }
   }
 
   // ─── Quick Rule Wizard ────────────────────────────────────────────
@@ -589,10 +676,25 @@
         <div class="border border-zinc-700/40 rounded-lg overflow-hidden">
           <!-- Group header -->
           <div class="bg-zinc-800/60 px-4 py-2 flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-zinc-500 shrink-0" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
-            </svg>
-            <span class="font-mono text-xs text-zinc-200">{group.pattern}</span>
+            {#if patternIcons[group.pattern]}
+              <img src={patternIcons[group.pattern]} alt="" class="w-4 h-4 shrink-0 rounded" />
+            {:else}
+              <svg class="w-3.5 h-3.5 text-zinc-500 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
+              </svg>
+            {/if}
+            {#if renamingGroupPattern === group.pattern}
+              <input bind:this={renameGroupInput} bind:value={renameGroupValue}
+                on:blur={saveGroupRename} on:keydown={handleGroupRenameKeydown}
+                class="font-mono text-xs text-zinc-200 bg-zinc-700 border border-blue-500 rounded px-1.5 py-0.5 outline-none min-w-[80px] max-w-[300px]" />
+            {:else}
+              <!-- svelte-ignore a11y-no-static-element-interactions -->
+              <span class="font-mono text-xs text-zinc-200 cursor-default"
+                on:dblclick={() => startGroupRename(group)}
+                title={$t('rules.clickToRenameGroup')}>
+                {group.pattern}
+              </span>
+            {/if}
             <span class="text-[10px] text-zinc-500">
               {group.rules.length} {group.rules.length === 1 ? $t('rules.oneRule') : $t('rules.nRules')}
             </span>
@@ -825,7 +927,7 @@
     <div class="bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4 p-4 space-y-3 max-h-[70vh] flex flex-col">
       <h3 class="text-sm font-semibold text-zinc-100 shrink-0">{$t('rules.selectProcess')}</h3>
       <div class="flex-1 overflow-y-auto min-h-0">
-        <ProcessPicker on:select={e => selectAppProcess(e.detail)} />
+        <ProcessPicker groupByFolder on:select={e => selectAppProcess(e.detail)} on:selectFolder={e => selectAppFolder(e.detail)} />
       </div>
       <div class="flex justify-end pt-1 shrink-0">
         <button
@@ -881,7 +983,7 @@
         <!-- Process picker inline -->
         {#if showProcessPicker}
           <div class="bg-zinc-900 border border-zinc-700 rounded-lg p-2">
-            <ProcessPicker compact on:select={e => selectProcess(e.detail)} />
+            <ProcessPicker compact groupByFolder on:select={e => selectProcess(e.detail)} on:selectFolder={e => selectFolderProcess(e.detail)} />
           </div>
         {/if}
 
@@ -992,7 +1094,7 @@
       <div class="flex-1 overflow-y-auto min-h-0">
         <!-- ── Step 1: Select Process ── -->
         {#if wizardStep === 1}
-          <ProcessPicker on:select={e => wizardSelectProcess(e.detail)} />
+          <ProcessPicker groupByFolder on:select={e => wizardSelectProcess(e.detail)} on:selectFolder={e => wizardSelectFolder(e.detail)} />
 
         <!-- ── Step 2: Select Tunnels ── -->
         {:else if wizardStep === 2}

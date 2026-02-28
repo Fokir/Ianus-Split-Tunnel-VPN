@@ -189,7 +189,9 @@
     "next": "Next",
     "nRules": "rules",
     "oneRule": "rule",
-    "group": "Group"
+    "group": "Group",
+    "clickToRenameGroup": "Double-click to rename group",
+    "selectFolder": "Select folder as pattern"
   },
   "domains": {
     "title": "Domain routing",
