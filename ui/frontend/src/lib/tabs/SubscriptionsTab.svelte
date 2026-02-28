@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import * as api from '../api.js';
   import ErrorAlert from '../ErrorAlert.svelte';
+  import { Spinner, EmptyState, Modal } from '../components';
   import { t } from '../i18n';
 
   let subscriptions = [];
@@ -166,21 +167,15 @@
 
   <!-- Loading -->
   {#if loading}
-    <div class="flex items-center justify-center py-12 text-zinc-500">
-      <svg class="animate-spin h-5 w-5 mr-2" viewBox="0 0 24 24" fill="none">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-      </svg>
-      {$t('subscriptions.loading')}
+    <div class="py-12">
+      <Spinner text={$t('subscriptions.loading')} />
     </div>
   {:else if subscriptions.length === 0}
-    <div class="flex flex-col items-center justify-center py-16 text-zinc-500">
-      <svg class="w-12 h-12 mb-3 text-zinc-600" viewBox="0 0 24 24" fill="currentColor">
+    <EmptyState title={$t('subscriptions.emptyTitle')} description={$t('subscriptions.emptyHint')}>
+      <svg slot="icon" class="w-12 h-12" viewBox="0 0 24 24" fill="currentColor">
         <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
       </svg>
-      <p class="text-sm">{$t('subscriptions.emptyTitle')}</p>
-      <p class="text-xs text-zinc-600 mt-1">{$t('subscriptions.emptyHint')}</p>
-    </div>
+    </EmptyState>
   {:else}
     <!-- Subscription list -->
     <div class="space-y-2">
@@ -257,20 +252,8 @@
 </div>
 
 <!-- Add subscription modal -->
-{#if showAddModal}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-    on:click|self={closeAddModal}
-    on:keydown={(e) => e.key === 'Escape' && closeAddModal()}
-    role="presentation">
-    <div class="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4 max-h-[85vh] overflow-y-auto">
-      <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-700">
-        <h3 class="text-base font-semibold text-zinc-100">{editMode ? $t('subscriptions.editTitle') : $t('subscriptions.addTitle')}</h3>
-        <button class="text-zinc-400 hover:text-zinc-200" on:click={closeAddModal}>
-          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-        </button>
-      </div>
-
-      <div class="px-5 py-4 space-y-3">
+<Modal open={showAddModal} title={editMode ? $t('subscriptions.editTitle') : $t('subscriptions.addTitle')} on:close={closeAddModal}>
+      <div class="space-y-3">
         {#if addModalError}
           <ErrorAlert message={addModalError} />
         {/if}
@@ -309,8 +292,7 @@
         </div>
       </div>
 
-      <!-- Modal footer -->
-      <div class="flex justify-end gap-2 px-5 py-4 border-t border-zinc-700">
+      <svelte:fragment slot="footer">
         <button
           class="px-4 py-2 text-sm rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
           on:click={closeAddModal}
@@ -324,7 +306,5 @@
         >
           {addSaving ? $t('subscriptions.savingBtn') : (editMode ? $t('subscriptions.saveBtn') : $t('subscriptions.addRefresh'))}
         </button>
-      </div>
-    </div>
-  </div>
-{/if}
+      </svelte:fragment>
+</Modal>

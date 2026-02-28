@@ -12,6 +12,7 @@
   import StatusBar from './lib/StatusBar.svelte';
   import TitleBar from './lib/TitleBar.svelte';
   import ConflictingServicesModal from './lib/ConflictingServicesModal.svelte';
+  import { ConfirmDialog } from './lib/components';
   import { t } from './lib/i18n';
   import { tabDirty } from './lib/stores/dirty.js';
   import { initPlatform } from './lib/stores/platform.js';
@@ -157,34 +158,15 @@
     />
   {/if}
 
-  <!-- Unsaved changes confirmation modal -->
-  {#if showUnsavedModal}
-    <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
-    <div
-      class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
-      on:click|self={cancelDiscard}
-      on:keydown={e => e.key === 'Escape' && cancelDiscard()}
-      role="dialog"
-      tabindex="-1"
-    >
-      <div class="bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-sm mx-4 p-5 space-y-4">
-        <h3 class="text-base font-semibold text-zinc-100">{$t('common.unsavedChanges')}</h3>
-        <p class="text-sm text-zinc-400">{$t('common.unsavedChangesMessage')}</p>
-        <div class="flex justify-end gap-2 pt-2">
-          <button
-            class="px-4 py-2 text-sm rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 transition-colors"
-            on:click={cancelDiscard}
-          >
-            {$t('common.stay')}
-          </button>
-          <button
-            class="px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors"
-            on:click={confirmDiscard}
-          >
-            {$t('common.discard')}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <!-- Unsaved changes confirmation -->
+  <ConfirmDialog
+    open={showUnsavedModal}
+    title={$t('common.unsavedChanges')}
+    message={$t('common.unsavedChangesMessage')}
+    confirmText={$t('common.discard')}
+    cancelText={$t('common.stay')}
+    destructive={true}
+    on:confirm={confirmDiscard}
+    on:cancel={cancelDiscard}
+  />
 </div>

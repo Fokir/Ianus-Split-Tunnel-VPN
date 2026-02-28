@@ -3,6 +3,20 @@
  */
 
 /**
+ * Debounce a function call.
+ * @param {Function} fn
+ * @param {number} ms - Delay in milliseconds
+ * @returns {Function}
+ */
+export function debounce(fn, ms = 300) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
+/**
  * Sort tunnels by sortIndex with stable tiebreak by id.
  * Returns a new sorted array (does not mutate the input).
  * @param {Array<{id: string, sortIndex?: number}>} tunnels

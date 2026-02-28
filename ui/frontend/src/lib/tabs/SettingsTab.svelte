@@ -3,6 +3,7 @@
   import * as api from '../api.js';
   import { sortTunnels } from '../utils.js';
   import ErrorAlert from '../ErrorAlert.svelte';
+  import { Spinner, DirtyBar, CollapsibleSection } from '../components';
   import { t, locale, availableLocales } from '../i18n';
   import { tabDirty } from '../stores/dirty.js';
 
@@ -162,24 +163,7 @@
   }
 </script>
 
-{#if dirty}
-  <div class="sticky top-0 z-10 flex justify-end gap-2 py-2 px-4 bg-zinc-900/95 backdrop-blur-sm border-b border-zinc-700/40">
-    <button
-      class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
-      on:click={cancel}
-      disabled={saving}
-    >
-      {$t('settings.cancel')}
-    </button>
-    <button
-      class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40"
-      on:click={save}
-      disabled={saving}
-    >
-      {saving ? $t('settings.saving') : $t('settings.save')}
-    </button>
-  </div>
-{/if}
+<DirtyBar {dirty} {saving} saveText={$t('settings.save')} cancelText={$t('settings.cancel')} savingText={$t('settings.saving')} on:save={save} on:cancel={cancel} />
 
 <div class="p-4 space-y-6">
   <h2 class="text-lg font-semibold text-zinc-100">{$t('settings.title')}</h2>
@@ -189,11 +173,8 @@
   {/if}
 
   {#if loading}
-    <div class="flex items-center justify-center py-12 text-zinc-500">
-      <svg class="animate-spin h-5 w-5 mr-2" viewBox="0 0 24 24" fill="none">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-      </svg>
+    <div class="py-12">
+      <Spinner />
     </div>
   {:else if config}
     <!-- Language -->
@@ -474,17 +455,7 @@
     </section>
 
     <!-- DNS Cache -->
-    <section class="space-y-3">
-      <button
-        class="flex items-center gap-2 text-sm font-medium text-zinc-400 uppercase tracking-wider hover:text-zinc-300 transition-colors"
-        on:click={() => dnsCacheExpanded = !dnsCacheExpanded}
-      >
-        <svg class="w-3.5 h-3.5 transition-transform {dnsCacheExpanded ? 'rotate-90' : ''}" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
-        </svg>
-        {$t('settings.dnsCache')}
-      </button>
-      {#if dnsCacheExpanded}
+    <CollapsibleSection title={$t('settings.dnsCache')} bind:open={dnsCacheExpanded}>
         <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4 space-y-3">
           <label class="flex items-center justify-between cursor-pointer">
             <div>
@@ -526,21 +497,10 @@
             </div>
           </div>
         </div>
-      {/if}
-    </section>
+    </CollapsibleSection>
 
     <!-- FakeIP -->
-    <section class="space-y-3">
-      <button
-        class="flex items-center gap-2 text-sm font-medium text-zinc-400 uppercase tracking-wider hover:text-zinc-300 transition-colors"
-        on:click={() => fakeipExpanded = !fakeipExpanded}
-      >
-        <svg class="w-3.5 h-3.5 transition-transform {fakeipExpanded ? 'rotate-90' : ''}" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
-        </svg>
-        {$t('settings.fakeip')}
-      </button>
-      {#if fakeipExpanded}
+    <CollapsibleSection title={$t('settings.fakeip')} bind:open={fakeipExpanded}>
         <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4 space-y-3">
           <label class="flex items-center justify-between cursor-pointer">
             <div>
@@ -570,8 +530,7 @@
             />
           </div>
         </div>
-      {/if}
-    </section>
+    </CollapsibleSection>
 
     <!-- Logging -->
     <section class="space-y-3">
