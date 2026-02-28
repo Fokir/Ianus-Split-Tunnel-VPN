@@ -114,6 +114,42 @@ func (tr *TunnelRegistry) SetName(id, name string) bool {
 	return true
 }
 
+// CompareAndSetState atomically sets the state only if the current state matches expected.
+// Returns true if the transition succeeded, false if the current state didn't match.
+func (tr *TunnelRegistry) CompareAndSetState(id string, expected, newState TunnelState, err error) bool {
+	tr.mu.Lock()
+	entry, ok := tr.tunnels[id]
+	if !ok {
+		tr.mu.Unlock()
+		return false
+	}
+
+	if entry.State != expected {
+		tr.mu.Unlock()
+		return false
+	}
+
+	old := entry.State
+	entry.State = newState
+	entry.Error = err
+	tr.mu.Unlock()
+
+	if old != newState {
+		Log.Infof("Core", "Tunnel %q: %s → %s", id, old, newState)
+		if tr.bus != nil {
+			tr.bus.Publish(Event{
+				Type: EventTunnelStateChanged,
+				Payload: TunnelStatePayload{
+					TunnelID: id,
+					OldState: old,
+					NewState: newState,
+				},
+			})
+		}
+	}
+	return true
+}
+
 // GetState returns the current state of a tunnel.
 func (tr *TunnelRegistry) GetState(id string) TunnelState {
 	tr.mu.RLock()

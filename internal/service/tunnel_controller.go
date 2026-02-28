@@ -165,12 +165,16 @@ func (tc *TunnelControllerImpl) ConnectTunnel(ctx context.Context, tunnelID stri
 		return fmt.Errorf("tunnel %q not found", tunnelID)
 	}
 
-	state := tc.deps.Registry.GetState(tunnelID)
-	if state == core.TunnelStateUp {
-		return fmt.Errorf("tunnel %q already connected", tunnelID)
+	// Atomic CAS: only transition from Down or Error to Connecting.
+	if !tc.deps.Registry.CompareAndSetState(tunnelID, core.TunnelStateDown, core.TunnelStateConnecting, nil) {
+		if !tc.deps.Registry.CompareAndSetState(tunnelID, core.TunnelStateError, core.TunnelStateConnecting, nil) {
+			state := tc.deps.Registry.GetState(tunnelID)
+			if state == core.TunnelStateUp {
+				return fmt.Errorf("tunnel %q already connected", tunnelID)
+			}
+			return fmt.Errorf("tunnel %q cannot connect from state %s", tunnelID, state)
+		}
 	}
-
-	tc.deps.Registry.SetState(tunnelID, core.TunnelStateConnecting, nil)
 
 	// Pass real NIC index and binder to VLESS providers so they can resolve
 	// hostnames through the real NIC, bypassing TUN DNS (10.255.0.1).
@@ -827,8 +831,16 @@ func (tc *TunnelControllerImpl) saveActiveTunnels() {
 		return
 	}
 
-	var active []string
+	// Snapshot instance IDs under lock to avoid concurrent map iteration panic.
+	tc.mu.Lock()
+	ids := make([]string, 0, len(tc.instances))
 	for id := range tc.instances {
+		ids = append(ids, id)
+	}
+	tc.mu.Unlock()
+
+	var active []string
+	for _, id := range ids {
 		if tc.deps.Registry.GetState(id) == core.TunnelStateUp {
 			active = append(active, id)
 		}

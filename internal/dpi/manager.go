@@ -202,6 +202,13 @@ func (m *StrategyManager) StopSearch() {
 	m.search.Stop()
 }
 
+// Stop shuts down the strategy manager, stopping any active search and releasing resources.
+func (m *StrategyManager) Stop() {
+	m.search.Stop()
+	m.setStrategy = nil
+	core.Log.Infof("DPI", "StrategyManager stopped")
+}
+
 // SearchState returns the current search state.
 func (m *StrategyManager) SearchState() SearchState {
 	return m.search.State()

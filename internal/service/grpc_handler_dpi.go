@@ -62,6 +62,7 @@ func (s *Service) SetDPIEnabled(ctx context.Context, req *vpnapi.SetDPIEnabledRe
 		_ = s.ctrl.DisconnectTunnel(dpiTunnelID)
 		_ = s.ctrl.RemoveTunnel(dpiTunnelID)
 
+		s.dpiMgr.Stop()
 		s.dpiMgr = nil
 
 		// Persist disabled state in config.
@@ -157,6 +158,8 @@ func (s *Service) StreamDPISearchProgress(_ *emptypb.Empty, stream vpnapi.VPNSer
 
 	s.bus.Subscribe(core.EventDPISearchProgress, handler)
 	s.bus.Subscribe(core.EventDPISearchComplete, handler)
+	defer s.bus.Unsubscribe(core.EventDPISearchProgress, handler)
+	defer s.bus.Unsubscribe(core.EventDPISearchComplete, handler)
 
 	for {
 		select {

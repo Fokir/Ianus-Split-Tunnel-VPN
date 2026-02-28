@@ -419,6 +419,12 @@ func (fd *FallbackDialer) retryWithFallbackTCP(
 	info core.NATInfo,
 	initialData []byte,
 ) EarlyEOFResult {
+	// Don't attempt fallback if the context deadline is nearly expired.
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < 2*time.Second {
+		core.Log.Warnf("Proxy", "Early EOF fallback skipped for %s: context deadline too close", info.OriginalDst)
+		return EarlyEOFResult{Failed: true}
+	}
+
 	newConn, newTunnel, err := fd.applyFallbackTCP(ctx, info, io.EOF)
 	if err != nil {
 		core.Log.Errorf("Proxy", "Early EOF fallback failed for %s: %v", info.OriginalDst, err)

@@ -54,6 +54,7 @@ type udpAssociateConn struct {
 	targetAddr net.Addr    // original target address
 	targetHost string      // target host for SOCKS5 header
 	targetPort uint16      // target port for SOCKS5 header
+	closeOnce sync.Once    // ensures Close() is idempotent
 }
 
 // dialUDPAssociate performs SOCKS5 UDP ASSOCIATE handshake and returns a net.Conn
@@ -291,9 +292,12 @@ func (c *udpAssociateConn) Read(b []byte) (int, error) {
 }
 
 // Close closes both the UDP socket and the TCP control connection.
+// TCP is closed first to unblock monitorTCPControl's Read() call.
 func (c *udpAssociateConn) Close() error {
-	c.udpConn.Close()
-	c.tcpCtrl.Close()
+	c.closeOnce.Do(func() {
+		c.tcpCtrl.Close() // unblocks monitorTCPControl goroutine
+		c.udpConn.Close()
+	})
 	return nil
 }
 

@@ -70,8 +70,9 @@ type DNSResolver struct {
 	udpSem chan struct{} // limits concurrent UDP handlers
 	tcpSem chan struct{} // limits concurrent TCP handlers
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	started atomic.Bool
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
 }
 
 // NewDNSResolver creates a DNS resolver.
@@ -117,6 +118,10 @@ func (r *DNSResolver) SetFakeIPPool(pool *FakeIPPool) {
 
 // Start begins listening for DNS queries on UDP and TCP.
 func (r *DNSResolver) Start(ctx context.Context) error {
+	if !r.started.CompareAndSwap(false, true) {
+		return errors.New("[DNS] resolver already started")
+	}
+
 	ctx, r.cancel = context.WithCancel(ctx)
 
 	// UDP listener.
@@ -147,6 +152,9 @@ func (r *DNSResolver) Start(ctx context.Context) error {
 
 // Stop shuts down the resolver.
 func (r *DNSResolver) Stop() {
+	if !r.started.CompareAndSwap(true, false) {
+		return
+	}
 	if r.cancel != nil {
 		r.cancel()
 	}
@@ -219,7 +227,9 @@ func (r *DNSResolver) udpLoop(ctx context.Context) {
 func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAddr *net.UDPAddr) {
 	resp := r.Resolve(ctx, query)
 	if resp != nil {
-		r.udpConn.WriteToUDP(resp, clientAddr)
+		if _, err := r.udpConn.WriteToUDP(resp, clientAddr); err != nil {
+			core.Log.Warnf("DNS", "WriteToUDP to %s: %v", clientAddr, err)
+		}
 	}
 }
 
@@ -489,6 +499,17 @@ func (r *DNSResolver) tcpLoop(ctx context.Context) {
 	}
 }
 
+// writeTCPDNSResponse writes a DNS response with a 2-byte length prefix to a TCP connection.
+func writeTCPDNSResponse(conn net.Conn, resp []byte) error {
+	var lenBuf [2]byte
+	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(resp)))
+	if _, err := conn.Write(lenBuf[:]); err != nil {
+		return err
+	}
+	_, err := conn.Write(resp)
+	return err
+}
+
 func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 	defer clientConn.Close()
 	clientConn.SetDeadline(time.Now().Add(10 * time.Second))
@@ -513,10 +534,9 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 	// Block AAAA (IPv6) queries — return empty NOERROR response.
 	if isAAAAQuery(query) {
 		if resp := makeEmptyResponse(query); resp != nil {
-			var respLen [2]byte
-			binary.BigEndian.PutUint16(respLen[:], uint16(len(resp)))
-			clientConn.Write(respLen[:])
-			clientConn.Write(resp)
+			if err := writeTCPDNSResponse(clientConn, resp); err != nil {
+				core.Log.Warnf("DNS", "TCP write AAAA block response: %v", err)
+			}
 		}
 		return
 	}
@@ -537,10 +557,9 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 			case core.DomainBlock:
 				core.Log.Debugf("DNS", "%s blocked by domain rule (TCP)", name)
 				if nxd := makeNXDomain(query); nxd != nil {
-					var respLen [2]byte
-					binary.BigEndian.PutUint16(respLen[:], uint16(len(nxd)))
-					clientConn.Write(respLen[:])
-					clientConn.Write(nxd)
+					if err := writeTCPDNSResponse(clientConn, nxd); err != nil {
+						core.Log.Warnf("DNS", "TCP write NXDomain response: %v", err)
+					}
 				}
 				return
 			case core.DomainDirect:
@@ -558,10 +577,9 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 			queryID := getDNSTransactionID(query)
 			if cached, ok := r.cache.Get(queryID, qName, qtype, qclass); ok {
 				core.Log.Debugf("DNS", "%s cache hit (TCP)", name)
-				var respLen [2]byte
-				binary.BigEndian.PutUint16(respLen[:], uint16(len(cached)))
-				clientConn.Write(respLen[:])
-				clientConn.Write(cached)
+				if err := writeTCPDNSResponse(clientConn, cached); err != nil {
+					core.Log.Warnf("DNS", "TCP write cached response: %v", err)
+				}
 				if domainResult.Matched && r.domainTable != nil {
 					r.recordDomainIPs(cached, name, routeTunnelID, domainResult.Action)
 				}
@@ -609,10 +627,9 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 	}
 
 	// Write response with length prefix.
-	var respLen [2]byte
-	binary.BigEndian.PutUint16(respLen[:], uint16(len(resp)))
-	clientConn.Write(respLen[:])
-	clientConn.Write(resp)
+	if err := writeTCPDNSResponse(clientConn, resp); err != nil {
+		core.Log.Warnf("DNS", "TCP write response for %s: %v", name, err)
+	}
 }
 
 func (r *DNSResolver) forwardTCP(ctx context.Context, tunnelID string, query []byte) ([]byte, netip.Addr, error) {

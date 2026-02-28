@@ -311,6 +311,11 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	// Declared early so event handler closure can reference it (assigned below).
 	var netMon platform.NetworkMonitor
 
+	// Timer for delayed netMon.Resume() calls — tracked to prevent accumulation
+	// on rapid state changes.
+	var netMonTimer *time.Timer
+	var netMonTimerMu sync.Mutex
+
 	// Subscribe to tunnel state changes — activate/deactivate gateway dynamically.
 	bus.Subscribe(core.EventTunnelStateChanged, func(e core.Event) {
 		payload, ok := e.Payload.(core.TunnelStatePayload)
@@ -355,11 +360,16 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 			activateGateway()
 			// Resume after delay to absorb the cascade of PF_ROUTE events.
 			if netMon != nil {
-				time.AfterFunc(3*time.Second, func() {
+				netMonTimerMu.Lock()
+				if netMonTimer != nil {
+					netMonTimer.Stop()
+				}
+				netMonTimer = time.AfterFunc(3*time.Second, func() {
 					if netMon != nil {
 						netMon.Resume()
 					}
 				})
+				netMonTimerMu.Unlock()
 			}
 		} else if vpnUp == 0 && wasActive {
 			if netMon != nil {
@@ -367,11 +377,16 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 			}
 			deactivateGateway()
 			if netMon != nil {
-				time.AfterFunc(3*time.Second, func() {
+				netMonTimerMu.Lock()
+				if netMonTimer != nil {
+					netMonTimer.Stop()
+				}
+				netMonTimer = time.AfterFunc(3*time.Second, func() {
 					if netMon != nil {
 						netMon.Resume()
 					}
 				})
+				netMonTimerMu.Unlock()
 			}
 		} else if vpnUp > 0 && wasActive && cfgManager.Get().Global.KillSwitch {
 			// VPN endpoint list may have changed — refresh kill switch rules.

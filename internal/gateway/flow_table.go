@@ -158,7 +158,7 @@ type FlowTable struct {
 	nowSec atomic.Int64
 
 	// Hook called before removing stale raw flows (e.g. for FakeIP flow counting).
-	rawFlowCleanupHook func(*RawFlowEntry)
+	rawFlowCleanupHook atomic.Pointer[func(*RawFlowEntry)]
 
 	// wg tracks background goroutines (cleanup loops, timestamp updater).
 	wg sync.WaitGroup
@@ -439,10 +439,11 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 
 					if len(stale) > 0 {
 						shard.mu.Lock()
+						hookPtr := ft.rawFlowCleanupHook.Load()
 						for _, key := range stale {
-							if hook := ft.rawFlowCleanupHook; hook != nil {
+							if hookPtr != nil {
 								if entry, ok := shard.m[key]; ok {
-									hook(entry)
+									(*hookPtr)(entry)
 								}
 							}
 							delete(shard.m, key)
@@ -465,7 +466,7 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 // SetRawFlowCleanupHook sets a callback invoked before removing stale raw flows.
 // Used by FakeIP to decrement active flow counts on eviction.
 func (ft *FlowTable) SetRawFlowCleanupHook(hook func(*RawFlowEntry)) {
-	ft.rawFlowCleanupHook = hook
+	ft.rawFlowCleanupHook.Store(&hook)
 }
 
 // ---------------------------------------------------------------------------

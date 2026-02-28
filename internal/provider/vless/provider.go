@@ -50,6 +50,8 @@ type Provider struct {
 	serverAddr   netip.AddrPort           // resolved server endpoint for bypass routes
 	instance     *xcore.Instance
 	socksAddr    string // local socks5 proxy address "127.0.0.1:{port}"
+
+	selfTestCancel context.CancelFunc // cancels running selfTest on Disconnect
 }
 
 // New creates a VLESS provider with the given configuration.
@@ -151,15 +153,18 @@ func (p *Provider) Connect(ctx context.Context) error {
 	core.Log.Infof("VLESS", "Tunnel %q is UP (server=%s, security=%s, network=%s, socks5=%s)",
 		p.name, serverStr, p.config.Security, p.config.Network, p.socksAddr)
 
-	// Connectivity self-test.
-	go p.selfTest()
+	// Connectivity self-test with cancellable context (cancelled on Disconnect).
+	selfTestCtx, selfTestCancel := context.WithCancel(context.Background())
+	p.selfTestCancel = selfTestCancel
+	go p.selfTest(selfTestCtx)
 
 	return nil
 }
 
 // selfTest verifies connectivity through the socks5 proxy after tunnel is up.
-func (p *Provider) selfTest() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// The provided context is cancelled on Disconnect() to abort the test early.
+func (p *Provider) selfTest(parentCtx context.Context) {
+	ctx, cancel := context.WithTimeout(parentCtx, 10*time.Second)
 	defer cancel()
 
 	core.Log.Infof("VLESS", "[self-test] Dialing 1.1.1.1:80 via socks5...")
@@ -194,6 +199,12 @@ func (p *Provider) selfTest() {
 func (p *Provider) Disconnect() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	// Cancel any running selfTest before tearing down the instance.
+	if p.selfTestCancel != nil {
+		p.selfTestCancel()
+		p.selfTestCancel = nil
+	}
 
 	if p.instance != nil {
 		if err := p.instance.Close(); err != nil {

@@ -1,6 +1,9 @@
 package core
 
-import "sync"
+import (
+	"reflect"
+	"sync"
+)
 
 // EventType identifies the kind of event fired on the bus.
 type EventType int
@@ -92,6 +95,21 @@ func NewEventBus() *EventBus {
 func (eb *EventBus) Subscribe(t EventType, h Handler) {
 	eb.mu.Lock()
 	eb.handlers[t] = append(eb.handlers[t], h)
+	eb.mu.Unlock()
+}
+
+// Unsubscribe removes a previously registered handler for a given event type.
+// Handlers are compared by function pointer identity.
+func (eb *EventBus) Unsubscribe(t EventType, h Handler) {
+	target := reflect.ValueOf(h).Pointer()
+	eb.mu.Lock()
+	handlers := eb.handlers[t]
+	for i, existing := range handlers {
+		if reflect.ValueOf(existing).Pointer() == target {
+			eb.handlers[t] = append(handlers[:i], handlers[i+1:]...)
+			break
+		}
+	}
 	eb.mu.Unlock()
 }
 
