@@ -163,15 +163,15 @@ var pngSignature = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
 // icnsTypePriority maps ICNS block types to priority (lower = better).
 // We prefer 32×32 for consistency with the Windows implementation.
 var icnsTypePriority = map[string]int{
-	"icp5": 1, // 32×32 PNG
-	"ic11": 2, // 32×32@2x PNG
-	"icp6": 3, // 64×64 PNG
-	"ic07": 4, // 128×128 PNG
-	"ic08": 5, // 256×256 PNG
-	"ic09": 6, // 512×512 PNG
-	"ic10": 7, // 1024×1024 PNG
-	"ic14": 8, // 1024×1024@2x PNG
-	"ic13": 9, // 256×256@2x PNG
+	"icp5": 1,  // 32×32 PNG
+	"ic11": 2,  // 32×32@2x PNG
+	"icp6": 3,  // 64×64 PNG
+	"ic07": 4,  // 128×128 PNG
+	"ic08": 5,  // 256×256 PNG
+	"ic09": 6,  // 512×512 PNG
+	"ic10": 7,  // 1024×1024 PNG
+	"ic14": 8,  // 1024×1024@2x PNG
+	"ic13": 9,  // 256×256@2x PNG
 	"ic12": 10, // 64×64@2x PNG
 	"icp4": 11, // 16×16 PNG
 }
