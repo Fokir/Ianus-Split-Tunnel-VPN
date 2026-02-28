@@ -550,28 +550,24 @@ func (s *Service) RefreshSubscription(ctx context.Context, req *vpnapi.RefreshSu
 	}
 
 	if req.Name == "" {
-		// Refresh all subscriptions and sync tunnels.
-		tunnels, err := s.subMgr.RefreshAll(ctx)
+		// Refresh all subscriptions with safe stop/start cycle.
+		tunnels, err := s.refreshAllSubscriptionsSafe(ctx)
 		if err != nil {
-			// Still sync whatever was fetched successfully.
-			s.syncAllSubscriptionTunnels(ctx)
 			return &vpnapi.RefreshSubscriptionResponse{Success: false, Error: err.Error(), TunnelCount: int32(len(tunnels))}, nil
 		}
-		s.syncAllSubscriptionTunnels(ctx)
 		return &vpnapi.RefreshSubscriptionResponse{Success: true, TunnelCount: int32(len(tunnels))}, nil
 	}
 
-	// Refresh specific subscription and sync its tunnels.
+	// Refresh specific subscription with safe stop/start cycle.
 	cfg := s.cfg.Get()
 	sub, ok := cfg.Subscriptions[req.Name]
 	if !ok {
 		return &vpnapi.RefreshSubscriptionResponse{Success: false, Error: "subscription not found"}, nil
 	}
-	tunnels, err := s.subMgr.Refresh(ctx, req.Name, sub)
+	tunnels, err := s.refreshSubscriptionSafe(ctx, req.Name, sub)
 	if err != nil {
 		return &vpnapi.RefreshSubscriptionResponse{Success: false, Error: err.Error()}, nil
 	}
-	s.syncSubscriptionTunnels(ctx, req.Name, tunnels)
 	return &vpnapi.RefreshSubscriptionResponse{Success: true, TunnelCount: int32(len(tunnels))}, nil
 }
 

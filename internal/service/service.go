@@ -144,14 +144,20 @@ func (s *Service) Start(ctx context.Context) {
 	s.stats.Start(ctx)
 	s.logs.Start()
 
-	// When subscriptions auto-refresh, sync tunnels into the controller.
+	// When subscriptions auto-refresh via timer, the event carries the
+	// already-fetched tunnels. We flush DNS before and after sync so stale
+	// records don't linger, but do NOT disconnect tunnels — that would
+	// interrupt the user every N hours. Full stop/start cycle is only
+	// used for explicit (user-triggered) refreshes via refreshSubscriptionSafe.
 	if s.subMgr != nil {
 		s.bus.Subscribe(core.EventSubscriptionUpdated, func(e core.Event) {
 			payload, ok := e.Payload.(core.SubscriptionPayload)
 			if !ok || payload.Error != nil {
 				return
 			}
+			s.flushDNSQuiet()
 			s.syncSubscriptionTunnels(ctx, payload.Name, payload.Tunnels)
+			s.flushDNSQuiet()
 		})
 	}
 
