@@ -97,6 +97,7 @@ func (nm *NotificationManager) NotifyReconnected(tunnelID string) {
 }
 
 // NotifyUpdateAvailable sends a notification about a new version.
+// The toast is shown at most once per version (not throttled by time).
 func (nm *NotificationManager) NotifyUpdateAvailable(version string) {
 	nm.mu.Lock()
 	if !nm.enabled || !nm.updates {
@@ -104,7 +105,7 @@ func (nm *NotificationManager) NotifyUpdateAvailable(version string) {
 		return
 	}
 	key := "update:" + version
-	if time.Since(nm.lastNotif[key]) < nm.throttle {
+	if _, seen := nm.lastNotif[key]; seen {
 		nm.mu.Unlock()
 		return
 	}

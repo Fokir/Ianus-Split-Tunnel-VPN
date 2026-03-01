@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -79,11 +80,28 @@ func (b *BindingService) StartUpdateNotifier() {
 	}()
 }
 
+var (
+	emittedUpdateMu      sync.Mutex
+	emittedUpdateVersion string
+)
+
 func (b *BindingService) emitUpdateIfAvailable(app *application.App) {
 	result, err := b.CheckUpdate()
 	if err != nil || !result.Available {
 		return
 	}
+
+	emittedUpdateMu.Lock()
+	already := emittedUpdateVersion == result.Version
+	if !already {
+		emittedUpdateVersion = result.Version
+	}
+	emittedUpdateMu.Unlock()
+
+	if already {
+		return
+	}
+
 	b.notifMgr.NotifyUpdateAvailable(result.Version)
 	app.Event.Emit("update-available", map[string]interface{}{
 		"version":      result.Version,

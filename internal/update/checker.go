@@ -45,8 +45,9 @@ type Checker struct {
 	interval       time.Duration
 	bus            *core.EventBus
 
-	mu     sync.RWMutex
-	latest *Info
+	mu              sync.RWMutex
+	latest          *Info
+	notifiedVersion string // version for which EventUpdateAvailable was already published
 }
 
 // NewChecker creates a new update checker.
@@ -124,7 +125,15 @@ func (c *Checker) check(ctx context.Context) {
 
 	c.mu.Lock()
 	c.latest = info
+	alreadyNotified := c.notifiedVersion == info.Version
+	if !alreadyNotified {
+		c.notifiedVersion = info.Version
+	}
 	c.mu.Unlock()
+
+	if alreadyNotified {
+		return
+	}
 
 	core.Log.Infof("Update", "New version available: %s", info.Version)
 
