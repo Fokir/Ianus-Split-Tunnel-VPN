@@ -635,6 +635,40 @@ func (tc *TunnelControllerImpl) RegisterExistingTunnel(
 	}
 }
 
+// ProviderLookup returns the provider lookup function for use by the health monitor.
+func (tc *TunnelControllerImpl) ProviderLookup() func(string) (provider.TunnelProvider, bool) {
+	return tc.providerLookup
+}
+
+// MarkTunnelUnhealthy transitions a tunnel from Up to Error state and disconnects it.
+// Uses CAS to prevent races with concurrent Connect/Disconnect. Returns true if the
+// transition was performed.
+func (tc *TunnelControllerImpl) MarkTunnelUnhealthy(tunnelID string, reason error) bool {
+	tc.mu.Lock()
+	inst, ok := tc.instances[tunnelID]
+	tc.mu.Unlock()
+	if !ok {
+		return false
+	}
+
+	// Per-tunnel lock to serialize with Connect/Disconnect.
+	inst.opMu.Lock()
+	defer inst.opMu.Unlock()
+
+	// CAS: only transition Up → Error. If the tunnel is already Down/Connecting/Error,
+	// someone else handled it — we skip.
+	if !tc.deps.Registry.CompareAndSetState(tunnelID, core.TunnelStateUp, core.TunnelStateError, reason) {
+		return false
+	}
+
+	// Clean up the device so ReconnectManager can do a fresh Connect.
+	if err := inst.provider.Disconnect(); err != nil {
+		core.Log.Warnf("Core", "MarkTunnelUnhealthy: disconnect %q: %v", tunnelID, err)
+	}
+
+	return true
+}
+
 // SetDomainMatchFunc updates the domain match function used for SNI-based routing.
 // Propagates to all existing tunnel proxies and is stored for future ones.
 func (tc *TunnelControllerImpl) SetDomainMatchFunc(fn *core.DomainMatchFunc) {

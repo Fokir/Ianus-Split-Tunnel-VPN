@@ -665,6 +665,21 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		}
 	}
 
+	// === 12c. Health Monitor ===
+	var healthMon *service.HealthMonitor
+	{
+		hcfg := cfg.GUI.HealthCheck
+		// Default: enabled when reconnect is enabled (unless explicitly overridden).
+		enabled := cfg.GUI.Reconnect.Enabled
+		if hcfg.Enabled != nil {
+			enabled = *hcfg.Enabled
+		}
+		if enabled {
+			healthMon = service.NewHealthMonitor(hcfg, registry,
+				tunnelCtrl.ProviderLookup(), tunnelCtrl.MarkTunnelUnhealthy)
+		}
+	}
+
 	// === 13. Start gRPC IPC server for GUI communication ===
 	svc := service.New(service.Config{
 		ConfigManager:       cfgManager,
@@ -683,6 +698,7 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		SubscriptionManager: subMgr,
 		UpdateChecker:       updateChecker,
 		ReconnectManager:    reconnectMgr,
+		HealthMonitor:       healthMon,
 	})
 	svc.Start(ctx)
 

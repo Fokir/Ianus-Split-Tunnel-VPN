@@ -64,6 +64,7 @@ type Service struct {
 	subMgr            *core.SubscriptionManager
 	updateChecker     *update.Checker
 	reconnectMgr      *ReconnectManager
+	healthMon         *HealthMonitor
 
 	mu sync.RWMutex
 }
@@ -96,6 +97,8 @@ type Config struct {
 	UpdateChecker *update.Checker
 	// ReconnectManager handles auto-reconnection on tunnel failures.
 	ReconnectManager *ReconnectManager
+	// HealthMonitor checks peer liveness for WG/AWG tunnels.
+	HealthMonitor *HealthMonitor
 }
 
 // New creates a new Service instance.
@@ -127,6 +130,7 @@ func New(c Config) *Service {
 	s.subMgr = c.SubscriptionManager
 	s.updateChecker = c.UpdateChecker
 	s.reconnectMgr = c.ReconnectManager
+	s.healthMon = c.HealthMonitor
 
 	// Initialize GeoIP resolver for IP→country lookup (best-effort).
 	if c.GeoIPFilePath != "" {
@@ -165,10 +169,18 @@ func (s *Service) Start(ctx context.Context) {
 	if s.reconnectMgr != nil {
 		s.reconnectMgr.Start()
 	}
+
+	// Start health monitor for peer liveness checks.
+	if s.healthMon != nil {
+		s.healthMon.Start()
+	}
 }
 
 // Stop shuts down background workers.
 func (s *Service) Stop() {
+	if s.healthMon != nil {
+		s.healthMon.Stop()
+	}
 	if s.reconnectMgr != nil {
 		s.reconnectMgr.Stop()
 	}

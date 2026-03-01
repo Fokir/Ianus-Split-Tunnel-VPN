@@ -65,3 +65,10 @@ type TunnelProvider interface {
 type EndpointProvider interface {
 	GetServerEndpoints() []netip.AddrPort
 }
+
+// HealthCheckable is optionally implemented by providers that support WireGuard-style
+// IPC health queries. Used by the health monitor to detect stale peers via
+// last_handshake_time inspection.
+type HealthCheckable interface {
+	IpcGet() (string, error)
+}

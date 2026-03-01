@@ -237,3 +237,15 @@ func (p *Provider) SetInboundHandler(handler func(pkt []byte) bool) {
 		tnet.SetInboundHandler(handler)
 	}
 }
+
+// IpcGet returns the WireGuard IPC status string, including peer handshake times.
+// Used by the health monitor to detect stale peers.
+func (p *Provider) IpcGet() (string, error) {
+	p.mu.RLock()
+	dev := p.dev
+	p.mu.RUnlock()
+	if dev == nil {
+		return "", fmt.Errorf("device not initialized")
+	}
+	return dev.IpcGet()
+}

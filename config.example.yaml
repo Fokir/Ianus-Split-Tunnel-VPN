@@ -130,6 +130,20 @@ logging:
   #   dns: off       # Silence DNS per-query logs
   #   gateway: debug # Verbose gateway/packet logs
 
+# GUI settings (optional).
+# gui:
+#   restore_connections: true
+#   reconnect:
+#     enabled: true
+#     interval: "5s"
+#     max_retries: 0
+#   # Peer health monitoring: detects stale WG/AWG peers (expired handshakes)
+#   # and triggers automatic reconnection. Enabled by default when reconnect is enabled.
+#   # health_check:
+#   #   enabled: true          # Override: set false to disable even with reconnect on
+#   #   interval: "30s"        # How often to check peer handshake times
+#   #   stale_threshold: "3m"  # Max age of last handshake before marking stale
+
 # Auto-update settings (optional).
 # Checks GitHub Releases for new versions periodically.
 update:

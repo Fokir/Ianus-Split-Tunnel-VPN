@@ -309,6 +309,13 @@ type ReconnectConfig struct {
 	MaxRetries int    `yaml:"max_retries,omitempty"` // 0 = unlimited
 }
 
+// HealthCheckConfig controls periodic peer liveness monitoring for WG/AWG tunnels.
+type HealthCheckConfig struct {
+	Enabled        *bool  `yaml:"enabled,omitempty"`          // nil = follow reconnect.enabled
+	Interval       string `yaml:"interval,omitempty"`         // check interval, default "30s"
+	StaleThreshold string `yaml:"stale_threshold,omitempty"`  // max age of last handshake, default "3m"
+}
+
 // GUIConfig holds GUI-specific settings.
 type GUIConfig struct {
 	RestoreConnections    bool              `yaml:"restore_connections,omitempty"`
@@ -316,6 +323,7 @@ type GUIConfig struct {
 	TunnelOrder           []string          `yaml:"tunnel_order,omitempty"`           // display order for all tunnels (incl. subscription)
 	TunnelNames           map[string]string `yaml:"tunnel_names,omitempty"`           // custom display names: tunnelID → name
 	Reconnect             ReconnectConfig   `yaml:"reconnect,omitempty"`
+	HealthCheck           HealthCheckConfig `yaml:"health_check,omitempty"`
 	KeepAliveOnDisconnect bool              `yaml:"keep_alive_on_disconnect,omitempty"` // keep VPN when GUI disconnects (macOS)
 }
 
