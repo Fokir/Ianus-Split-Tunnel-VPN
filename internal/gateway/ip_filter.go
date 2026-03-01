@@ -217,6 +217,14 @@ func (f *IPFilter) IsLocalBypassIP(dstIP [4]byte) bool {
 	return f.localBypassIPs != nil && f.localBypassIPs.Contains(dstIP)
 }
 
+// IsGlobalBypassIP returns true if the IP matches global-level bypass rules
+// (globalDisallowedIPs, which includes hardcoded local CIDRs when enabled).
+// These IPs already have WFP PERMIT rules via AddBypassPrefixes, so no
+// dynamic WFP permits are needed for them.
+func (f *IPFilter) IsGlobalBypassIP(dstIP [4]byte) bool {
+	return f.globalDisallowedIPs.Contains(dstIP)
+}
+
 // ShouldBypassIP checks if the destination IP should bypass the tunnel.
 // Evaluation: DisallowedIPs (global, then per-tunnel) → bypass.
 // Then AllowedIPs (per-tunnel, then global) → not in list → bypass.

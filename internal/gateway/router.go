@@ -1179,6 +1179,13 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 
 		// Tunnel is up — check IP-based filtering (DisallowedIPs / AllowedIPs).
 		if f != nil && f.ShouldBypassIP(result.TunnelID, dstIP) {
+			// Per-tunnel bypass (DisallowedIPs / AllowedIPs mismatch): add a
+			// dynamic WFP PERMIT so already-blocked processes can reach this IP
+			// on the real NIC. Global bypasses (local CIDRs + global DisallowedIPs)
+			// already have CIDR-level WFP permits — skip to avoid redundant /32 rules.
+			if r.wfp != nil && !f.IsGlobalBypassIP(dstIP) {
+				r.wfp.PermitDirectIPs([]netip.Addr{netip.AddrFrom4(dstIP)})
+			}
 			return "", 0, flowPass, 0, fb
 		}
 
