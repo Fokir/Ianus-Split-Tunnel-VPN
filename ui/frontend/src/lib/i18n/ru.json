@@ -293,7 +293,7 @@
     "experimental": "Экспериментальное"
   },
   "logs": {
-    "filterTag": "Фильтр по тегу...",
+    "filterPlaceholder": "Поиск по логам...",
     "entries": "записей",
     "scrollDown": "Прокрутить вниз",
     "saveLogs": "Сохранить",
@@ -302,7 +302,8 @@
     "clear": "Очистить",
     "noEntries": "Нет записей логов",
     "copied": "Скопировано",
-    "clickToCopy": "Нажмите чтобы скопировать"
+    "clickToCopy": "Нажмите чтобы скопировать",
+    "maxEntriesTitle": "Макс. количество записей"
   },
   "about": {
     "subtitle": "Многотуннельный VPN-клиент с per-process split tunneling",

@@ -39,7 +39,11 @@ type Logger struct {
 	components  map[string]LogLevel // lowercase component name → level (immutable after init)
 	levelCache  sync.Map            // tag → LogLevel (lock-free cache)
 	hook        atomic.Pointer[LogHook]
-	logFile     *os.File // file sink (nil if file logging is disabled)
+
+	fileMu      sync.Mutex // guards logFile + currentDay
+	logFile     *os.File   // file sink (nil if file logging is disabled)
+	fileEnabled bool       // whether file logging was requested
+	currentDay  int        // yday of the currently open log file
 }
 
 // ParseLevel converts a string level name to LogLevel.
@@ -74,8 +78,10 @@ func NewLogger(cfg LogConfig) *Logger {
 
 	// Set up file logging next to the executable (disabled by default).
 	if cfg.FileEnabled != nil && *cfg.FileEnabled {
+		l.fileEnabled = true
 		if f := openLogFile(); f != nil {
 			l.logFile = f
+			l.currentDay = time.Now().YearDay()
 			log.SetOutput(io.MultiWriter(os.Stderr, f))
 		}
 	}
@@ -85,10 +91,45 @@ func NewLogger(cfg LogConfig) *Logger {
 
 // Close flushes and closes the log file (if any).
 func (l *Logger) Close() {
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
 	if l.logFile != nil {
 		l.logFile.Sync()
 		l.logFile.Close()
 		l.logFile = nil
+	}
+}
+
+// rotateIfNeeded switches to a new log file when the day changes.
+// Must be called without fileMu held (it acquires it internally).
+func (l *Logger) rotateIfNeeded() {
+	if !l.fileEnabled {
+		return
+	}
+	today := time.Now().YearDay()
+	if today == l.currentDay && l.logFile != nil {
+		return
+	}
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
+	// Double-check under lock.
+	today = time.Now().YearDay()
+	if today == l.currentDay && l.logFile != nil {
+		return
+	}
+	// Close the old file.
+	if l.logFile != nil {
+		l.logFile.Sync()
+		l.logFile.Close()
+	}
+	// Open a new file for the current day.
+	if f := openLogFile(); f != nil {
+		l.logFile = f
+		l.currentDay = today
+		log.SetOutput(io.MultiWriter(os.Stderr, f))
+	} else {
+		l.logFile = nil
+		log.SetOutput(os.Stderr)
 	}
 }
 
@@ -145,6 +186,7 @@ func (l *Logger) emit(level LogLevel, tag, msg string) {
 // Debugf logs at debug level.
 func (l *Logger) Debugf(tag, format string, args ...any) {
 	if l.levelFor(tag) <= LevelDebug {
+		l.rotateIfNeeded()
 		msg := fmt.Sprintf(format, args...)
 		log.Printf("[%s] %s", tag, msg)
 		l.emit(LevelDebug, tag, msg)
@@ -154,6 +196,7 @@ func (l *Logger) Debugf(tag, format string, args ...any) {
 // Infof logs at info level.
 func (l *Logger) Infof(tag, format string, args ...any) {
 	if l.levelFor(tag) <= LevelInfo {
+		l.rotateIfNeeded()
 		msg := fmt.Sprintf(format, args...)
 		log.Printf("[%s] %s", tag, msg)
 		l.emit(LevelInfo, tag, msg)
@@ -163,6 +206,7 @@ func (l *Logger) Infof(tag, format string, args ...any) {
 // Warnf logs at warn level.
 func (l *Logger) Warnf(tag, format string, args ...any) {
 	if l.levelFor(tag) <= LevelWarn {
+		l.rotateIfNeeded()
 		msg := fmt.Sprintf(format, args...)
 		log.Printf("[%s] %s", tag, msg)
 		l.emit(LevelWarn, tag, msg)
@@ -172,6 +216,7 @@ func (l *Logger) Warnf(tag, format string, args ...any) {
 // Errorf logs at error level.
 func (l *Logger) Errorf(tag, format string, args ...any) {
 	if l.levelFor(tag) <= LevelError {
+		l.rotateIfNeeded()
 		msg := fmt.Sprintf(format, args...)
 		log.Printf("[%s] %s", tag, msg)
 		l.emit(LevelError, tag, msg)
@@ -180,6 +225,7 @@ func (l *Logger) Errorf(tag, format string, args ...any) {
 
 // Fatalf always logs and calls os.Exit(1).
 func (l *Logger) Fatalf(tag, format string, args ...any) {
+	l.rotateIfNeeded()
 	msg := fmt.Sprintf(format, args...)
 	log.Printf("[%s] %s", tag, msg)
 	l.emit(LevelError, tag, msg)

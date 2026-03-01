@@ -293,7 +293,7 @@
     "experimental": "Experimental"
   },
   "logs": {
-    "filterTag": "Filter by tag...",
+    "filterPlaceholder": "Search logs...",
     "entries": "entries",
     "scrollDown": "Scroll to bottom",
     "saveLogs": "Save",
@@ -302,7 +302,8 @@
     "clear": "Clear",
     "noEntries": "No log entries",
     "copied": "Copied",
-    "clickToCopy": "Click to copy"
+    "clickToCopy": "Click to copy",
+    "maxEntriesTitle": "Max number of entries"
   },
   "about": {
     "subtitle": "Multi-tunnel VPN client with per-process split tunneling",

@@ -1,7 +1,23 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 import { Events, Call } from '@wailsio/runtime';
 
-const MAX_LOGS = 1000;
+const STORAGE_KEY = 'awg-log-max-entries';
+const DEFAULT_MAX = 1000;
+const ALLOWED_LIMITS = [500, 1000, 2000, 5000, 10000];
+
+function loadMaxLogs() {
+  try {
+    const v = parseInt(localStorage.getItem(STORAGE_KEY), 10);
+    if (ALLOWED_LIMITS.includes(v)) return v;
+  } catch {}
+  return DEFAULT_MAX;
+}
+
+export const maxLogsStore = writable(loadMaxLogs());
+
+maxLogsStore.subscribe(v => {
+  try { localStorage.setItem(STORAGE_KEY, String(v)); } catch {}
+});
 
 function createLogStore() {
   const { subscribe, update, set } = writable([]);
@@ -13,16 +29,18 @@ function createLogStore() {
     if (buffer.length === 0) return;
     const batch = buffer;
     buffer = [];
+    const maxLogs = get(maxLogsStore);
     update(current => {
-      const updated = [...current, ...batch];
-      return updated.length > MAX_LOGS ? updated.slice(updated.length - MAX_LOGS) : updated;
+      // Avoid full copy when possible
+      if (current.length + batch.length <= maxLogs) {
+        current.push(...batch);
+        return current;
+      }
+      const combined = current.concat(batch);
+      return combined.slice(combined.length - maxLogs);
     });
   }
 
-  // Subscribe to log events FIRST, before starting the stream,
-  // so no events are lost between stream start and subscription.
-  // Events are buffered and flushed via requestAnimationFrame to
-  // prevent UI freezes during event bursts (max ~60 updates/sec).
   Events.On('log-entry', (event) => {
     const entry = event.data;
     if (!entry) return;
@@ -32,14 +50,18 @@ function createLogStore() {
     }
   });
 
-  // Now start the gRPC log stream on the backend.
-  // This is safe to call multiple times (guarded by sync.Once in Go).
   Call.ByName("main.BindingService.StartLogStream");
 
   return {
     subscribe,
     clear: () => { buffer = []; set([]); },
+    trimToMax: (newMax) => {
+      update(current => {
+        return current.length > newMax ? current.slice(current.length - newMax) : current;
+      });
+    },
   };
 }
 
 export const logStore = createLogStore();
+export { ALLOWED_LIMITS };
