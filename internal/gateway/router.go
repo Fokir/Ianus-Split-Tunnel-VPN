@@ -824,19 +824,37 @@ func (r *TUNRouter) handleICMP(pkt []byte, m pktMeta) {
 	// Extract ICMP Identifier (bytes 4-5 of ICMP header) as pseudo-port for flow tracking.
 	icmpID := binary.BigEndian.Uint16(pkt[m.tpOff+4:])
 
-	// Fast path: existing raw flow.
-	if rawEntry, ok := r.flows.GetRawFlow(protoICMP, m.dstIP, icmpID); ok {
+	// Resolve FakeIP → real IP (same as TCP/UDP).
+	// Domain-based DNS routing rewrites A records to FakeIPs (198.18.0.0/15);
+	// we must translate back to the real destination before forwarding.
+	var fakeIP [4]byte
+	var realDstIP [4]byte
+	effectiveDstIP := m.dstIP
+	if fp := r.fakeIPPool.Load(); fp != nil && fp.IsFakeIP(m.dstIP) {
+		if fEntry, ok := fp.Lookup(m.dstIP); ok && len(fEntry.RealIPs) > 0 {
+			fakeIP = m.dstIP
+			realDstIP = fEntry.RealIPs[0]
+			effectiveDstIP = realDstIP
+		}
+	}
+
+	// Fast path: existing raw flow (keyed by effective/real IP).
+	if rawEntry, ok := r.flows.GetRawFlow(protoICMP, effectiveDstIP, icmpID); ok {
 		atomic.StoreInt64(&rawEntry.LastActivity, r.flows.NowSec())
 		if rf, vpnIP, ok := r.getRawForwarder(rawEntry.TunnelID); ok {
+			// FakeIP: rewrite dst from FakeIP to real IP before forwarding.
+			if rawEntry.FakeIP != [4]byte{} {
+				tunOverwriteDstIP(pkt, rawEntry.RealDstIP, 0)
+			}
 			r.handleRawOutbound(pkt, m, rawEntry.TunnelID, vpnIP, rf, protoICMP, rawEntry.Priority)
 			return
 		}
 		// Forwarder gone — delete stale flow and fall through.
-		r.flows.DeleteRawFlow(protoICMP, m.dstIP, icmpID)
+		r.flows.DeleteRawFlow(protoICMP, effectiveDstIP, icmpID)
 	}
 
 	// Slow path: resolve tunnel for new ICMP flow.
-	tunnelID, action := r.resolveICMPFlow(m.dstIP)
+	tunnelID, action := r.resolveICMPFlow(effectiveDstIP)
 
 	switch action {
 	case flowDrop:
@@ -852,12 +870,21 @@ func (r *TUNRouter) handleICMP(pkt []byte, m pktMeta) {
 		return
 	}
 
-	r.flows.InsertRawFlow(protoICMP, m.dstIP, icmpID, &RawFlowEntry{
+	r.flows.InsertRawFlow(protoICMP, effectiveDstIP, icmpID, &RawFlowEntry{
 		LastActivity: r.flows.NowSec(),
 		TunnelID:     tunnelID,
 		VpnIP:        vpnIP,
 		Priority:     PrioNormal,
+		FakeIP:       fakeIP,
+		RealDstIP:    realDstIP,
 	})
+	// FakeIP: rewrite dst from FakeIP to real IP before forwarding.
+	if fakeIP != [4]byte{} {
+		tunOverwriteDstIP(pkt, realDstIP, 0)
+		if fp := r.fakeIPPool.Load(); fp != nil {
+			fp.IncrementFlows(fakeIP)
+		}
+	}
 	r.handleRawOutbound(pkt, m, tunnelID, vpnIP, rf, protoICMP, PrioNormal)
 }
 
@@ -888,7 +915,9 @@ func (r *TUNRouter) resolveICMPFlow(dstIP [4]byte) (tunnelID string, action flow
 			case core.DomainBlock:
 				return "", flowDrop
 			case core.DomainDirect:
-				return "", flowPass
+				// DirectProvider has no RawForwarder, so ICMP cannot use flowPass
+				// (TUN already captured the packet; the OS can't route it).
+				// Fall through to route via any available VPN tunnel instead.
 			case core.DomainRoute:
 				if entry, ok := r.registry.Get(dEntry.TunnelID); ok && entry.State == core.TunnelStateUp {
 					if _, _, ok := r.getRawForwarder(dEntry.TunnelID); ok {
