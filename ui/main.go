@@ -30,6 +30,13 @@ const serviceBinary = "awg-split-tunnel.exe"
 func main() {
 	runtime.LockOSThread()
 
+	// Single-instance guard: only one UI process is allowed.
+	if !acquireSingleInstance() {
+		// Another instance is running — signal it to show its window and exit.
+		notifyExistingInstance()
+		return
+	}
+
 	// Try to connect to the VPN service; if not running, launch it elevated.
 	client, err := connectOrLaunchService()
 	if err != nil {
@@ -77,6 +84,12 @@ func main() {
 	mainWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 		mainWindow.Hide()
 		e.Cancel()
+	})
+
+	// Listen for "show UI" messages from duplicate instances.
+	registerWindowMessageHook(func() {
+		mainWindow.Show()
+		mainWindow.Focus()
 	})
 
 	// Setup system tray.
