@@ -66,6 +66,10 @@ type DNSResolver struct {
 	// FakeIP pool for synthetic IP allocation (nil if disabled).
 	fakeIPPool atomic.Pointer[FakeIPPool]
 
+	// onDirectIPs is called when DNS resolves IPs for a DomainDirect domain.
+	// Used to add WFP permit rules before returning the response to the app.
+	onDirectIPs func(ips []netip.Addr)
+
 	// Goroutine limiters to prevent resource exhaustion under DNS flood.
 	udpSem chan struct{} // limits concurrent UDP handlers
 	tcpSem chan struct{} // limits concurrent TCP handlers
@@ -99,6 +103,13 @@ func NewDNSResolver(
 	}
 
 	return r
+}
+
+// SetDirectIPCallback sets the callback invoked when DNS resolves IPs for
+// DomainDirect domains. The callback receives the resolved IPs and should
+// add WFP permit rules before the DNS response reaches the application.
+func (r *DNSResolver) SetDirectIPCallback(fn func(ips []netip.Addr)) {
+	r.onDirectIPs = fn
 }
 
 // SetDomainMatcher atomically sets the domain matcher for DNS interception.
@@ -986,6 +997,7 @@ func (r *DNSResolver) recordDomainIPs(resp []byte, domain string, tunnelID strin
 
 	// Parse answer RRs.
 	recorded := 0
+	var directIPs []netip.Addr
 	for i := 0; i < ancount && pos < len(resp); i++ {
 		// Skip NAME (may be pointer or labels).
 		if pos >= len(resp) {
@@ -1043,9 +1055,19 @@ func (r *DNSResolver) recordDomainIPs(resp []byte, domain string, tunnelID strin
 				ExpiresAt: time.Now().Unix() + int64(clampedTTL),
 			})
 			recorded++
+
+			if action == core.DomainDirect && r.onDirectIPs != nil {
+				directIPs = append(directIPs, netip.AddrFrom4(ip))
+			}
 		}
 
 		pos += rdLength
+	}
+
+	// Add WFP permit rules for direct IPs before returning the DNS response,
+	// so the app can connect directly through the real NIC.
+	if len(directIPs) > 0 {
+		r.onDirectIPs(directIPs)
 	}
 
 	if recorded > 0 {

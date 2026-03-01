@@ -41,6 +41,9 @@ type WFPManager struct {
 	mu      sync.Mutex
 	rules   map[string][]wf.RuleID // exePath (lowered) → rule IDs
 	nextSeq uint32
+
+	// directIPs tracks WFP PERMIT rules for direct-routed IPs (bypass TUN).
+	directIPs map[[4]byte][]wf.RuleID
 }
 
 // NewWFPManager creates a WFP session with dynamic rules.
@@ -81,9 +84,10 @@ func NewWFPManager(tunLUID uint64) (*WFPManager, error) {
 	core.Log.Infof("WFP", "Session opened (Dynamic=true, TUN LUID=0x%x)", tunLUID)
 
 	return &WFPManager{
-		session: sess,
-		tunLUID: tunLUID,
-		rules:   make(map[string][]wf.RuleID),
+		session:   sess,
+		tunLUID:   tunLUID,
+		rules:     make(map[string][]wf.RuleID),
+		directIPs: make(map[[4]byte][]wf.RuleID),
 	}, nil
 }
 
@@ -276,6 +280,102 @@ func (w *WFPManager) AddBypassPrefixes(prefixes []netip.Prefix) error {
 
 	core.Log.Infof("WFP", "Added bypass permits for %d prefixes", len(prefixes))
 	return nil
+}
+
+// PermitDirectIPs adds WFP PERMIT rules for specific destination IPs, allowing
+// blocked processes to reach these IPs directly on the real NIC (bypassing TUN).
+// Weight 2000 overrides per-process BLOCK (1000), same as bypass prefixes.
+// Idempotent: skips IPs that already have permit rules.
+func (w *WFPManager) PermitDirectIPs(ips []netip.Addr) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	added := 0
+	for _, ip := range ips {
+		if !ip.Is4() {
+			continue
+		}
+		key := ip.As4()
+		if _, exists := w.directIPs[key]; exists {
+			continue
+		}
+
+		prefix := netip.PrefixFrom(ip, 32)
+
+		connectID := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:       connectID,
+			Name:     fmt.Sprintf("AWG direct permit connect: %s", ip),
+			Layer:    wf.LayerALEAuthConnectV4,
+			Sublayer: awgSublayerID,
+			Weight:   2000,
+			Conditions: []*wf.Match{
+				{
+					Field: wf.FieldIPRemoteAddress,
+					Op:    wf.MatchTypeEqual,
+					Value: prefix,
+				},
+			},
+			Action: wf.ActionPermit,
+		}); err != nil {
+			return fmt.Errorf("[WFP] add direct permit connect %s: %w", ip, err)
+		}
+
+		recvID := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:       recvID,
+			Name:     fmt.Sprintf("AWG direct permit recv: %s", ip),
+			Layer:    wf.LayerALEAuthRecvAcceptV4,
+			Sublayer: awgSublayerID,
+			Weight:   2000,
+			Conditions: []*wf.Match{
+				{
+					Field: wf.FieldIPRemoteAddress,
+					Op:    wf.MatchTypeEqual,
+					Value: prefix,
+				},
+			},
+			Action: wf.ActionPermit,
+		}); err != nil {
+			_ = w.session.DeleteRule(connectID)
+			return fmt.Errorf("[WFP] add direct permit recv %s: %w", ip, err)
+		}
+
+		w.directIPs[key] = []wf.RuleID{connectID, recvID}
+		added++
+	}
+
+	if added > 0 {
+		core.Log.Debugf("WFP", "Added direct permits for %d IPs (total tracked: %d)", added, len(w.directIPs))
+	}
+	return nil
+}
+
+// RemoveDirectIPs removes WFP PERMIT rules for the given destination IPs.
+func (w *WFPManager) RemoveDirectIPs(ips []netip.Addr) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	removed := 0
+	for _, ip := range ips {
+		if !ip.Is4() {
+			continue
+		}
+		key := ip.As4()
+		ruleIDs, exists := w.directIPs[key]
+		if !exists {
+			continue
+		}
+		for _, id := range ruleIDs {
+			_ = w.session.DeleteRule(id)
+		}
+		delete(w.directIPs, key)
+		removed++
+	}
+
+	if removed > 0 {
+		core.Log.Debugf("WFP", "Removed direct permits for %d IPs (total tracked: %d)", removed, len(w.directIPs))
+	}
 }
 
 // Special keys for DNS-related WFP rules.

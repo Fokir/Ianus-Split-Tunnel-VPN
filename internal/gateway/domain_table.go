@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -21,6 +22,10 @@ type DomainEntry struct {
 type DomainTable struct {
 	mu      sync.RWMutex
 	entries map[[4]byte]*DomainEntry
+
+	// onDirectIPsExpired is called during cleanup when direct-routed IPs expire.
+	// Used to remove corresponding WFP permit rules.
+	onDirectIPsExpired func(ips []netip.Addr)
 }
 
 // NewDomainTable creates an empty domain table.
@@ -43,6 +48,14 @@ func (dt *DomainTable) Lookup(ip [4]byte) (*DomainEntry, bool) {
 func (dt *DomainTable) Insert(ip [4]byte, entry *DomainEntry) {
 	dt.mu.Lock()
 	dt.entries[ip] = entry
+	dt.mu.Unlock()
+}
+
+// SetDirectIPsExpiredCallback sets the callback invoked during cleanup
+// when direct-routed IP entries expire.
+func (dt *DomainTable) SetDirectIPsExpiredCallback(fn func(ips []netip.Addr)) {
+	dt.mu.Lock()
+	dt.onDirectIPsExpired = fn
 	dt.mu.Unlock()
 }
 
@@ -81,11 +94,21 @@ func (dt *DomainTable) StartCleanup(ctx context.Context) {
 // cleanup removes entries whose TTL has expired.
 func (dt *DomainTable) cleanup() {
 	now := time.Now().Unix()
+	var expiredDirectIPs []netip.Addr
+
 	dt.mu.Lock()
 	for ip, entry := range dt.entries {
 		if entry.ExpiresAt > 0 && entry.ExpiresAt < now {
+			if entry.Action == core.DomainDirect {
+				expiredDirectIPs = append(expiredDirectIPs, netip.AddrFrom4(ip))
+			}
 			delete(dt.entries, ip)
 		}
 	}
+	cb := dt.onDirectIPsExpired
 	dt.mu.Unlock()
+
+	if len(expiredDirectIPs) > 0 && cb != nil {
+		cb(expiredDirectIPs)
+	}
 }

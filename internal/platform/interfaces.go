@@ -66,6 +66,12 @@ type ProcessFilter interface {
 	EnableKillSwitch(tunIfName string, vpnEndpoints []netip.Addr) error
 	// DisableKillSwitch removes the kill switch rules.
 	DisableKillSwitch() error
+	// PermitDirectIPs adds PERMIT rules for specific destination IPs so that
+	// blocked processes can reach them directly on the real NIC (bypassing TUN).
+	// This preserves the original TCP/TLS fingerprint of the application.
+	PermitDirectIPs(ips []netip.Addr) error
+	// RemoveDirectIPs removes previously added direct-IP permit rules.
+	RemoveDirectIPs(ips []netip.Addr)
 	// Close tears down the filter session (rules auto-removed on Windows).
 	Close() error
 }

@@ -343,6 +343,14 @@ func (f *ProcessFilter) DisableKillSwitch() error {
 	return nil
 }
 
+// PermitDirectIPs is a no-op on macOS (routing handles direct bypass).
+func (f *ProcessFilter) PermitDirectIPs(ips []netip.Addr) error {
+	return nil
+}
+
+// RemoveDirectIPs is a no-op on macOS.
+func (f *ProcessFilter) RemoveDirectIPs(ips []netip.Addr) {}
+
 // --- Cleanup ---
 
 // Close flushes all PF anchor rules, restores original pf.conf config,

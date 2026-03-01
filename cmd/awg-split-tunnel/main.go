@@ -222,6 +222,11 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 			Cache:          buildDNSCacheConfig(cfg.DNS.Cache),
 		}
 		dnsResolver = gateway.NewDNSResolver(resolverCfg, registry, providers)
+		dnsResolver.SetDirectIPCallback(func(ips []netip.Addr) {
+			if err := procFilter.PermitDirectIPs(ips); err != nil {
+				core.Log.Warnf("WFP", "Failed to add direct IP permits: %v", err)
+			}
+		})
 		if err := dnsResolver.Start(ctx); err != nil {
 			core.Log.Warnf("DNS", "Failed to start DNS resolver: %v", err)
 		} else {
@@ -520,6 +525,9 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	geositeFilePath := resolveRelativeToExe("geosite.dat")
 	geoipFilePath := resolveRelativeToExe("geoip.dat")
 	domainTable := gateway.NewDomainTable()
+	domainTable.SetDirectIPsExpiredCallback(func(ips []netip.Addr) {
+		procFilter.RemoveDirectIPs(ips)
+	})
 	domainTable.StartCleanup(ctx)
 	domainMatcher := buildDomainMatcher(cfg.DomainRules, geositeFilePath, nicHTTPClient)
 	if dnsResolver != nil {
