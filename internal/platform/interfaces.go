@@ -72,6 +72,11 @@ type ProcessFilter interface {
 	PermitDirectIPs(ips []netip.Addr) error
 	// RemoveDirectIPs removes previously added direct-IP permit rules.
 	RemoveDirectIPs(ips []netip.Addr)
+	// EnableDefaultBlock adds low-priority BLOCK rules that force all processes
+	// through TUN by blocking non-TUN traffic. The calling process is permitted.
+	EnableDefaultBlock() error
+	// DisableDefaultBlock removes the default block rules.
+	DisableDefaultBlock()
 	// Close tears down the filter session (rules auto-removed on Windows).
 	Close() error
 }

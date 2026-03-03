@@ -343,6 +343,13 @@ func (f *ProcessFilter) DisableKillSwitch() error {
 	return nil
 }
 
+// EnableDefaultBlock is a no-op on macOS. utun routing enforces traffic capture
+// for all processes; no per-process PF blocking is needed.
+func (f *ProcessFilter) EnableDefaultBlock() error { return nil }
+
+// DisableDefaultBlock is a no-op on macOS.
+func (f *ProcessFilter) DisableDefaultBlock() {}
+
 // PermitDirectIPs is a no-op on macOS (routing handles direct bypass).
 func (f *ProcessFilter) PermitDirectIPs(ips []netip.Addr) error {
 	return nil

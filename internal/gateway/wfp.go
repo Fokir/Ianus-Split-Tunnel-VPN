@@ -378,10 +378,11 @@ func (w *WFPManager) RemoveDirectIPs(ips []netip.Addr) {
 	}
 }
 
-// Special keys for DNS-related WFP rules.
+// Special keys for WFP rules.
 const (
 	wfpDNSBlockKey      = "__dns_block__"
 	wfpDNSPermitSelfKey = "__dns_self_permit__"
+	wfpDefaultBlockKey  = "__default_block__"
 )
 
 // BlockDNSOnInterface adds WFP rules to block DNS (UDP/TCP port 53) on a
@@ -524,15 +525,174 @@ func (w *WFPManager) RemoveDNSPermitForSelf() {
 	w.removeRulesByKey(wfpDNSPermitSelfKey)
 }
 
-// UnblockAllProcesses removes all per-process WFP rules (but not IPv6, DNS, or
-// bypass rules). Used when deactivating the gateway so that previously blocked
-// apps can reach the real NIC directly.
+// EnableDefaultBlock adds low-priority WFP BLOCK rules (weight 100) that block
+// ALL processes on non-TUN, non-loopback interfaces. This forces all traffic
+// through TUN when the gateway is active — fixing Windows 10 where some processes
+// bypass TUN /1 split routes and send traffic directly through the physical NIC.
+//
+// A PERMIT rule (weight 200) is added for our own process so the direct proxy
+// and DNS resolver can still dial out on the real NIC.
+//
+// Higher-weight rules override this: bypass PERMIT (2000), DNS BLOCK (3000), etc.
+// Idempotent: no-op if already enabled.
+func (w *WFPManager) EnableDefaultBlock() error {
+	w.mu.Lock()
+	if _, exists := w.rules[wfpDefaultBlockKey]; exists {
+		w.mu.Unlock()
+		return nil
+	}
+	w.mu.Unlock()
+
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("[WFP] get executable path: %w", err)
+	}
+
+	appID, err := wf.AppID(exePath)
+	if err != nil {
+		return fmt.Errorf("[WFP] AppID(%s): %w", exePath, err)
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// Double-check after re-acquiring lock.
+	if _, exists := w.rules[wfpDefaultBlockKey]; exists {
+		return nil
+	}
+
+	var ruleIDs []wf.RuleID
+
+	// Rule 1: Block ALL outbound connections on non-TUN, non-loopback interfaces.
+	blockConnectID := w.nextRuleID()
+	if err := w.session.AddRule(&wf.Rule{
+		ID:       blockConnectID,
+		Name:     "AWG default block connect",
+		Layer:    wf.LayerALEAuthConnectV4,
+		Sublayer: awgSublayerID,
+		Weight:   100,
+		Conditions: []*wf.Match{
+			{
+				Field: wf.FieldIPLocalInterface,
+				Op:    wf.MatchTypeNotEqual,
+				Value: uint64(w.tunLUID),
+			},
+			{
+				Field: wf.FieldFlags,
+				Op:    wf.MatchTypeFlagsNoneSet,
+				Value: wf.ConditionFlagIsLoopback,
+			},
+		},
+		Action: wf.ActionBlock,
+	}); err != nil {
+		return fmt.Errorf("[WFP] add default block connect: %w", err)
+	}
+	ruleIDs = append(ruleIDs, blockConnectID)
+
+	// Rule 2: Block ALL inbound on non-TUN, non-loopback interfaces.
+	blockRecvID := w.nextRuleID()
+	if err := w.session.AddRule(&wf.Rule{
+		ID:       blockRecvID,
+		Name:     "AWG default block recv",
+		Layer:    wf.LayerALEAuthRecvAcceptV4,
+		Sublayer: awgSublayerID,
+		Weight:   100,
+		Conditions: []*wf.Match{
+			{
+				Field: wf.FieldIPLocalInterface,
+				Op:    wf.MatchTypeNotEqual,
+				Value: uint64(w.tunLUID),
+			},
+			{
+				Field: wf.FieldFlags,
+				Op:    wf.MatchTypeFlagsNoneSet,
+				Value: wf.ConditionFlagIsLoopback,
+			},
+		},
+		Action: wf.ActionBlock,
+	}); err != nil {
+		w.session.DeleteRule(blockConnectID)
+		return fmt.Errorf("[WFP] add default block recv: %w", err)
+	}
+	ruleIDs = append(ruleIDs, blockRecvID)
+
+	// Rule 3: PERMIT our own process outbound on non-TUN (for direct proxy, DNS).
+	selfConnectID := w.nextRuleID()
+	if err := w.session.AddRule(&wf.Rule{
+		ID:       selfConnectID,
+		Name:     "AWG default self permit connect",
+		Layer:    wf.LayerALEAuthConnectV4,
+		Sublayer: awgSublayerID,
+		Weight:   200,
+		Conditions: []*wf.Match{
+			{
+				Field: wf.FieldALEAppID,
+				Op:    wf.MatchTypeEqual,
+				Value: appID,
+			},
+			{
+				Field: wf.FieldIPLocalInterface,
+				Op:    wf.MatchTypeNotEqual,
+				Value: uint64(w.tunLUID),
+			},
+		},
+		Action: wf.ActionPermit,
+	}); err != nil {
+		w.session.DeleteRule(blockConnectID)
+		w.session.DeleteRule(blockRecvID)
+		return fmt.Errorf("[WFP] add default self permit connect: %w", err)
+	}
+	ruleIDs = append(ruleIDs, selfConnectID)
+
+	// Rule 4: PERMIT our own process inbound on non-TUN.
+	selfRecvID := w.nextRuleID()
+	if err := w.session.AddRule(&wf.Rule{
+		ID:       selfRecvID,
+		Name:     "AWG default self permit recv",
+		Layer:    wf.LayerALEAuthRecvAcceptV4,
+		Sublayer: awgSublayerID,
+		Weight:   200,
+		Conditions: []*wf.Match{
+			{
+				Field: wf.FieldALEAppID,
+				Op:    wf.MatchTypeEqual,
+				Value: appID,
+			},
+			{
+				Field: wf.FieldIPLocalInterface,
+				Op:    wf.MatchTypeNotEqual,
+				Value: uint64(w.tunLUID),
+			},
+		},
+		Action: wf.ActionPermit,
+	}); err != nil {
+		w.session.DeleteRule(blockConnectID)
+		w.session.DeleteRule(blockRecvID)
+		w.session.DeleteRule(selfConnectID)
+		return fmt.Errorf("[WFP] add default self permit recv: %w", err)
+	}
+	ruleIDs = append(ruleIDs, selfRecvID)
+
+	w.rules[wfpDefaultBlockKey] = ruleIDs
+	core.Log.Infof("WFP", "Default block enabled (%d rules, self-permit for %s)", len(ruleIDs), exePath)
+	return nil
+}
+
+// DisableDefaultBlock removes the default block rules added by EnableDefaultBlock.
+func (w *WFPManager) DisableDefaultBlock() {
+	w.removeRulesByKey(wfpDefaultBlockKey)
+	core.Log.Debugf("WFP", "Default block disabled")
+}
+
+// UnblockAllProcesses removes all per-process WFP rules (but not IPv6, DNS,
+// default block, or bypass rules). Used when deactivating the gateway so that
+// previously blocked apps can reach the real NIC directly.
 func (w *WFPManager) UnblockAllProcesses() {
 	w.mu.Lock()
 	var toDelete []wf.RuleID
 	for key, ids := range w.rules {
 		switch key {
-		case "__ipv6_block__", wfpDNSBlockKey, wfpDNSPermitSelfKey:
+		case "__ipv6_block__", wfpDNSBlockKey, wfpDNSPermitSelfKey, wfpDefaultBlockKey:
 			continue // keep these
 		}
 		toDelete = append(toDelete, ids...)

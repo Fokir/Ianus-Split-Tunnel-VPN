@@ -267,6 +267,12 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 			return
 		}
 
+		// Default WFP block: force all processes through TUN on non-loopback interfaces.
+		// Fixes Windows 10 where some processes bypass /1 split routes.
+		if err := procFilter.EnableDefaultBlock(); err != nil {
+			core.Log.Warnf("WFP", "Failed to enable default block: %v", err)
+		}
+
 		if hasDNSResolver {
 			if err := adapter.SetDNS([]netip.Addr{adapter.IP()}); err != nil {
 				core.Log.Warnf("DNS", "Failed to set DNS on TUN adapter: %v", err)
@@ -313,6 +319,7 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 
 		// Remove per-process blocking rules first — they block apps on real NIC.
 		procFilter.UnblockAllProcesses()
+		procFilter.DisableDefaultBlock()
 
 		if err := routeMgr.RemoveDefaultRoute(); err != nil {
 			core.Log.Warnf("Route", "Failed to remove default route: %v", err)
