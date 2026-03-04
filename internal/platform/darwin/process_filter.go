@@ -17,9 +17,49 @@ import (
 const (
 	pfAnchorRoot       = "com.awg"
 	pfAnchorDNS        = "com.awg/dns"
+	pfAnchorDoHDoT     = "com.awg/dohdot"
 	pfAnchorIPv6       = "com.awg/ipv6"
 	pfAnchorKillSwitch = "com.awg/killswitch"
 )
+
+// knownDoHDoTServers contains well-known public DNS resolver IPs that support
+// DNS-over-HTTPS (port 443) and DNS-over-TLS (port 853). Blocking these on
+// the physical NIC prevents DNS leaks via encrypted DNS protocols.
+var knownDoHDoTServers = []netip.Addr{
+	// Google Public DNS
+	netip.MustParseAddr("8.8.8.8"),
+	netip.MustParseAddr("8.8.4.4"),
+	netip.MustParseAddr("2001:4860:4860::8888"),
+	netip.MustParseAddr("2001:4860:4860::8844"),
+	// Cloudflare DNS
+	netip.MustParseAddr("1.1.1.1"),
+	netip.MustParseAddr("1.0.0.1"),
+	netip.MustParseAddr("2606:4700:4700::1111"),
+	netip.MustParseAddr("2606:4700:4700::1001"),
+	// Quad9
+	netip.MustParseAddr("9.9.9.9"),
+	netip.MustParseAddr("149.112.112.112"),
+	netip.MustParseAddr("2620:fe::fe"),
+	netip.MustParseAddr("2620:fe::9"),
+	// OpenDNS (Cisco)
+	netip.MustParseAddr("208.67.222.222"),
+	netip.MustParseAddr("208.67.220.220"),
+	netip.MustParseAddr("2620:119:35::35"),
+	netip.MustParseAddr("2620:119:53::53"),
+	// NextDNS
+	netip.MustParseAddr("45.90.28.0"),
+	netip.MustParseAddr("45.90.30.0"),
+	netip.MustParseAddr("2a07:a8c0::"),
+	netip.MustParseAddr("2a07:a8c1::"),
+	// AdGuard DNS
+	netip.MustParseAddr("94.140.14.14"),
+	netip.MustParseAddr("94.140.15.15"),
+	netip.MustParseAddr("2a10:50c0::ad1:ff"),
+	netip.MustParseAddr("2a10:50c0::ad2:ff"),
+	// CleanBrowsing
+	netip.MustParseAddr("185.228.168.9"),
+	netip.MustParseAddr("185.228.169.9"),
+}
 
 // ProcessFilter implements platform.ProcessFilter using macOS PF (Packet Filter).
 //
@@ -35,6 +75,9 @@ type ProcessFilter struct {
 	// DNS leak protection state.
 	dnsBlockedIf  string // interface name where DNS is blocked (e.g. "en0")
 	dnsPermitSelf bool   // whether self-permit is active
+
+	// DoH/DoT leak protection state.
+	dohDotBlockedIf string // interface name where DoH/DoT is blocked
 
 	// IPv6 blocking state.
 	ipv6Blocked bool
@@ -203,16 +246,73 @@ func (f *ProcessFilter) UnblockDNSOnInterface() {
 	core.Log.Infof("PF", "DNS block rules removed")
 }
 
-// BlockDoHDoTOnInterface blocks DoH/DoT to known public DNS resolvers.
-// Not yet implemented on macOS — PF-based approach TBD.
+// BlockDoHDoTOnInterface adds PF rules to block DoH (TCP:443) and DoT (TCP:853)
+// to known public DNS resolvers on the physical NIC. This forces browsers like
+// Chrome (which use Secure DNS / DoH by default) to fall back to standard DNS
+// on port 53, where our TUN-based DNS hijacking can intercept and apply
+// domain-based routing rules.
 func (f *ProcessFilter) BlockDoHDoTOnInterface(ifLUID uint64) error {
-	core.Log.Debugf("PF", "DoH/DoT leak protection not yet implemented on macOS")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if !f.pfSetup {
+		return fmt.Errorf("PF not initialized")
+	}
+
+	ifName, err := interfaceNameByIndex(ifLUID)
+	if err != nil {
+		return fmt.Errorf("resolve interface %d: %w", ifLUID, err)
+	}
+
+	f.dohDotBlockedIf = ifName
+	if err := f.rebuildDoHDoTAnchor(); err != nil {
+		return err
+	}
+
+	core.Log.Infof("PF", "DoH/DoT blocked on %s (%d resolvers, ports 443+853)", ifName, len(knownDoHDoTServers))
 	return nil
 }
 
 // UnblockDoHDoTOnInterface removes DoH/DoT blocking rules.
 func (f *ProcessFilter) UnblockDoHDoTOnInterface() {
-	// no-op on macOS
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.dohDotBlockedIf = ""
+
+	if f.pfSetup {
+		if err := pfctlFlushAnchor(pfAnchorDoHDoT); err != nil {
+			core.Log.Warnf("PF", "Flush DoH/DoT anchor: %v", err)
+		}
+	}
+	core.Log.Infof("PF", "DoH/DoT block rules removed")
+}
+
+// rebuildDoHDoTAnchor regenerates the com.awg/dohdot anchor rules.
+// Uses a PF table for efficient matching against known DoH/DoT resolvers.
+// Must be called with f.mu held.
+func (f *ProcessFilter) rebuildDoHDoTAnchor() error {
+	if f.dohDotBlockedIf == "" {
+		return pfctlFlushAnchor(pfAnchorDoHDoT)
+	}
+
+	var rules strings.Builder
+
+	// Build PF table with known DoH/DoT server IPs (IPv4 + IPv6).
+	rules.WriteString("table <doh_servers> const { ")
+	for i, ip := range knownDoHDoTServers {
+		if i > 0 {
+			rules.WriteString(", ")
+		}
+		rules.WriteString(ip.String())
+	}
+	rules.WriteString(" }\n")
+
+	// Block TCP to known DoH/DoT resolvers on ports 443 (DoH) and 853 (DoT).
+	// Our daemon (root) doesn't use DoH/DoT, so no self-permit needed.
+	fmt.Fprintf(&rules, "block return out quick on %s proto tcp from any to <doh_servers> port { 443, 853 }\n", f.dohDotBlockedIf)
+
+	return pfctlLoadAnchor(pfAnchorDoHDoT, rules.String())
 }
 
 // PermitDNSForSelf allows our daemon process (running as root) to send DNS
@@ -386,6 +486,7 @@ func (f *ProcessFilter) Close() error {
 
 	if f.pfSetup {
 		pfctlFlushAnchor(pfAnchorDNS)
+		pfctlFlushAnchor(pfAnchorDoHDoT)
 		pfctlFlushAnchor(pfAnchorIPv6)
 		pfctlFlushAnchor(pfAnchorKillSwitch)
 
