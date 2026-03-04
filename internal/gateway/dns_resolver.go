@@ -16,6 +16,15 @@ import (
 	"awg-split-tunnel/internal/provider"
 )
 
+// dnsRespPool is a pool of 4KB buffers for DNS UDP response reads.
+// Used in forwardUDPSingle to avoid allocating 4KB per DNS query.
+var dnsRespPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 4096)
+		return &b
+	},
+}
+
 // DNSResolverConfig configures the local DNS resolver.
 type DNSResolverConfig struct {
 	// ListenAddr is the address to listen on (e.g. "10.255.0.1:53").
@@ -465,17 +474,25 @@ func (r *DNSResolver) forwardUDPSingle(ctx context.Context, prov provider.Tunnel
 		return nil, server, err
 	}
 
-	resp := make([]byte, 4096)
-	n, err := conn.Read(resp)
+	// Use pooled 4KB buffer for reading, then copy to right-sized result.
+	// This avoids pinning 4KB per response (especially in DNS cache).
+	bp := dnsRespPool.Get().(*[]byte)
+	n, err := conn.Read(*bp)
 	if err != nil {
+		dnsRespPool.Put(bp)
 		return nil, server, err
 	}
 
 	if n < 12 {
+		dnsRespPool.Put(bp)
 		return nil, server, fmt.Errorf("response too short (%d bytes)", n)
 	}
 
-	return resp[:n], server, nil
+	result := make([]byte, n)
+	copy(result, (*bp)[:n])
+	dnsRespPool.Put(bp)
+
+	return result, server, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -815,18 +832,23 @@ func (r *DNSResolver) forwardRawUDP(ctx context.Context, query []byte) ([]byte, 
 			lastErr = err
 			continue
 		}
-		resp := make([]byte, 4096)
-		n, err := conn.Read(resp)
+		bp := dnsRespPool.Get().(*[]byte)
+		n, err := conn.Read(*bp)
 		conn.Close()
 		if err != nil {
+			dnsRespPool.Put(bp)
 			lastErr = err
 			continue
 		}
 		if n < 12 {
+			dnsRespPool.Put(bp)
 			lastErr = fmt.Errorf("response too short (%d bytes)", n)
 			continue
 		}
-		return resp[:n], nil
+		result := make([]byte, n)
+		copy(result, (*bp)[:n])
+		dnsRespPool.Put(bp)
+		return result, nil
 	}
 	return nil, fmt.Errorf("raw fallback DNS failed: %w", lastErr)
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -36,6 +37,11 @@ var (
 // runVPN contains the full VPN lifecycle. It blocks until shutdown is signalled.
 func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, opts ...daemon.RunConfig) error {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+
+	// Limit heap to 256MB so Go returns memory to the OS more aggressively.
+	// Without this, the runtime keeps freed pages mapped (MADV_FREE) and RSS
+	// appears much higher than actual usage.
+	debug.SetMemoryLimit(256 * 1024 * 1024)
 
 	// === 1. Core components ===
 	bus := core.NewEventBus()
