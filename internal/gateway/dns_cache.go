@@ -20,10 +20,12 @@ type dnsCacheKey struct {
 
 // dnsCacheEntry holds a cached DNS response with expiration metadata.
 type dnsCacheEntry struct {
-	response  []byte    // Raw DNS response (transaction ID will be swapped on Get)
-	storedAt  time.Time // When the entry was cached
-	expiresAt time.Time // storedAt + effectiveTTL
-	minTTL    uint32    // Original minimum TTL from RRs (seconds)
+	response       []byte    // Raw DNS response (transaction ID will be swapped on Get)
+	storedAt       time.Time // When the entry was cached
+	expiresAt      time.Time // storedAt + effectiveTTL
+	minTTL         uint32    // Original minimum TTL from RRs (seconds)
+	lastAccess     int64     // unix seconds, updated atomically in Get()
+	prefetchQueued int32     // atomic CAS: 0=idle, 1=queued for prefetch
 }
 
 // DNSCacheConfig holds cache configuration parameters.
@@ -45,8 +47,11 @@ type DNSCache struct {
 	maxTTL  time.Duration
 	negTTL  time.Duration
 
-	hits   atomic.Uint64
-	misses atomic.Uint64
+	hits       atomic.Uint64
+	misses     atomic.Uint64
+	prefetches atomic.Uint64
+
+	onPrefetchNeeded func(name string, qtype, qclass uint16) // callback, MUST NOT block
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -108,8 +113,23 @@ func (c *DNSCache) Get(queryID uint16, name string, qtype, qclass uint16) ([]byt
 		return nil, false
 	}
 
-	elapsed := uint32(now.Sub(entry.storedAt).Seconds())
-	resp := adjustTTLs(entry.response, elapsed, queryID)
+	// Update lastAccess atomically (entry is a pointer, RLock is safe).
+	atomic.StoreInt64(&entry.lastAccess, now.Unix())
+
+	// Prefetch check: if ≥75% of TTL elapsed, queue a background refresh.
+	if c.onPrefetchNeeded != nil {
+		totalTTL := entry.expiresAt.Sub(entry.storedAt)
+		elapsed := now.Sub(entry.storedAt)
+		if elapsed >= totalTTL*3/4 {
+			if atomic.CompareAndSwapInt32(&entry.prefetchQueued, 0, 1) {
+				c.prefetches.Add(1)
+				c.onPrefetchNeeded(name, qtype, qclass)
+			}
+		}
+	}
+
+	elapsedSec := uint32(now.Sub(entry.storedAt).Seconds())
+	resp := adjustTTLs(entry.response, elapsedSec, queryID)
 
 	c.hits.Add(1)
 	return resp, true
@@ -163,10 +183,12 @@ func (c *DNSCache) Put(name string, qtype, qclass uint16, response []byte) {
 	copy(stored, response)
 
 	entry := &dnsCacheEntry{
-		response:  stored,
-		storedAt:  now,
-		expiresAt: now.Add(effectiveTTL),
-		minTTL:    uint32(effectiveTTL.Seconds()),
+		response:   stored,
+		storedAt:   now,
+		expiresAt:  now.Add(effectiveTTL),
+		minTTL:     uint32(effectiveTTL.Seconds()),
+		lastAccess: now.Unix(),
+		// prefetchQueued: 0 — zero value, ready for new prefetch cycle
 	}
 
 	c.mu.Lock()
@@ -218,13 +240,21 @@ func (c *DNSCache) Flush() {
 func (c *DNSCache) Stop() {
 	c.cancel()
 	c.wg.Wait()
-	hits, misses := c.hits.Load(), c.misses.Load()
-	core.Log.Infof("DNS", "Cache stopped (hits=%d, misses=%d, entries=%d)", hits, misses, len(c.entries))
+	hits, misses, prefetches := c.Stats()
+	core.Log.Infof("DNS", "Cache stopped (hits=%d, misses=%d, prefetches=%d, entries=%d)",
+		hits, misses, prefetches, len(c.entries))
 }
 
-// Stats returns cache hit/miss counters.
-func (c *DNSCache) Stats() (hits, misses uint64) {
-	return c.hits.Load(), c.misses.Load()
+// Stats returns cache hit/miss/prefetch counters.
+func (c *DNSCache) Stats() (hits, misses, prefetches uint64) {
+	return c.hits.Load(), c.misses.Load(), c.prefetches.Load()
+}
+
+// SetPrefetchCallback sets the callback invoked when a cache entry is close
+// to expiration and should be refreshed in the background. The callback
+// MUST NOT block — it should enqueue the request and return immediately.
+func (c *DNSCache) SetPrefetchCallback(cb func(name string, qtype, qclass uint16)) {
+	c.onPrefetchNeeded = cb
 }
 
 // cleanup periodically removes expired entries.

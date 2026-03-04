@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,14 @@ import (
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/provider"
 )
+
+const prefetchChanSize = 64
+
+type prefetchRequest struct {
+	name   string // FQDN with trailing dot (cache key format)
+	qtype  uint16
+	qclass uint16
+}
 
 // dnsRespPool is a pool of 4KB buffers for DNS UDP response reads.
 // Used in forwardUDPSingle to avoid allocating 4KB per DNS query.
@@ -82,6 +91,9 @@ type DNSResolver struct {
 	// Goroutine limiters to prevent resource exhaustion under DNS flood.
 	udpSem chan struct{} // limits concurrent UDP handlers
 	tcpSem chan struct{} // limits concurrent TCP handlers
+
+	prefetchCh chan prefetchRequest
+	prefetchWg sync.WaitGroup
 
 	started atomic.Bool
 	cancel  context.CancelFunc
@@ -161,6 +173,20 @@ func (r *DNSResolver) Start(ctx context.Context) error {
 		return fmt.Errorf("[DNS] listen TCP %s: %w", r.config.ListenAddr, err)
 	}
 
+	// Start prefetch worker for proactive cache refresh.
+	if r.cache != nil {
+		r.prefetchCh = make(chan prefetchRequest, prefetchChanSize)
+		r.cache.SetPrefetchCallback(func(name string, qtype, qclass uint16) {
+			select {
+			case r.prefetchCh <- prefetchRequest{name: name, qtype: qtype, qclass: qclass}:
+			default:
+				// Queue full — drop, not critical.
+			}
+		})
+		r.prefetchWg.Add(1)
+		go r.prefetchLoop(ctx)
+	}
+
 	r.wg.Add(2)
 	go r.udpLoop(ctx)
 	go r.tcpLoop(ctx)
@@ -185,6 +211,7 @@ func (r *DNSResolver) Stop() {
 		r.tcpLn.Close()
 	}
 	r.wg.Wait()
+	r.prefetchWg.Wait()
 	if r.cache != nil {
 		r.cache.Stop()
 	}
@@ -801,6 +828,130 @@ func (r *DNSResolver) forwardTCPSingle(ctx context.Context, prov provider.Tunnel
 	}
 
 	return resp, server, nil
+}
+
+// ---------------------------------------------------------------------------
+// DNS Prefetch
+// ---------------------------------------------------------------------------
+
+// prefetchLoop drains the prefetch channel and refreshes cache entries
+// that are close to expiration. A single worker serializes prefetch
+// requests to avoid overloading upstream DNS servers.
+func (r *DNSResolver) prefetchLoop(ctx context.Context) {
+	defer r.prefetchWg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case req := <-r.prefetchCh:
+			r.executePrefetch(ctx, req)
+		}
+	}
+}
+
+// executePrefetch resolves a DNS name in the background and updates the cache.
+// It mirrors the core logic of Resolve() in a simplified form.
+func (r *DNSResolver) executePrefetch(ctx context.Context, req prefetchRequest) {
+	query := buildPrefetchQuery(req.name, req.qtype, req.qclass)
+	if query == nil {
+		return
+	}
+
+	name := strings.TrimSuffix(req.name, ".")
+
+	// Re-evaluate domain rules (they may have changed since the original query).
+	tunnelIDs := r.config.TunnelIDs
+	routeTunnelID := ""
+	if len(tunnelIDs) > 0 {
+		routeTunnelID = tunnelIDs[0]
+	}
+	var domainResult DomainMatchResult
+	if dm := r.domainMatcher.Load(); dm != nil && name != "" {
+		domainResult = dm.Match(name)
+		if domainResult.Matched {
+			switch domainResult.Action {
+			case core.DomainBlock:
+				return // domain is now blocked, skip prefetch
+			case core.DomainDirect:
+				routeTunnelID = DirectTunnelID
+			case core.DomainRoute:
+				routeTunnelID = domainResult.TunnelID
+			}
+		}
+	}
+
+	// Use a shorter timeout for prefetch — it's best-effort.
+	pfCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	resp, _, _, err := r.forwardUDPAll(pfCtx, tunnelIDs, query)
+	if err != nil {
+		core.Log.Debugf("DNS", "Prefetch failed for %s: %v", name, err)
+		return
+	}
+
+	// Apply FakeIP rewriting if domain-matched.
+	if domainResult.Matched && domainResult.Action != core.DomainBlock {
+		resp = r.rewriteResponseWithFakeIP(resp, name, routeTunnelID, domainResult.Action)
+	}
+
+	// Store fresh response in cache (replaces old entry, resets prefetchQueued).
+	r.cacheStore(query, resp)
+
+	// Update domain table.
+	if domainResult.Matched {
+		r.recordDomainIPs(resp, name, routeTunnelID, domainResult.Action)
+	}
+
+	core.Log.Debugf("DNS", "Prefetch refreshed %s", name)
+}
+
+// buildDNSQuery constructs a minimal DNS query from name/qtype/qclass.
+// The name must be an FQDN with trailing dot (e.g. "example.com.").
+// Returns nil if the name is empty or malformed.
+func buildPrefetchQuery(name string, qtype, qclass uint16) []byte {
+	if name == "" {
+		return nil
+	}
+
+	// Strip trailing dot for label splitting.
+	fqdn := strings.TrimSuffix(name, ".")
+	labels := strings.Split(fqdn, ".")
+	if len(labels) == 0 || (len(labels) == 1 && labels[0] == "") {
+		return nil
+	}
+
+	// Calculate QNAME wire length: sum(1+len(label)) + 1 (root).
+	qnameLen := 1 // root label (0x00)
+	for _, l := range labels {
+		if len(l) == 0 || len(l) > 63 {
+			return nil
+		}
+		qnameLen += 1 + len(l)
+	}
+
+	// Total: 12 (header) + qnameLen + 4 (QTYPE + QCLASS).
+	buf := make([]byte, 12+qnameLen+4)
+
+	// Header: ID=0 (don't care), RD=1, QDCOUNT=1.
+	buf[2] = 0x01 // RD=1
+	binary.BigEndian.PutUint16(buf[4:6], 1) // QDCOUNT=1
+
+	// QNAME.
+	pos := 12
+	for _, l := range labels {
+		buf[pos] = byte(len(l))
+		pos++
+		pos += copy(buf[pos:], l)
+	}
+	buf[pos] = 0 // root label
+	pos++
+
+	// QTYPE + QCLASS.
+	binary.BigEndian.PutUint16(buf[pos:], qtype)
+	binary.BigEndian.PutUint16(buf[pos+2:], qclass)
+
+	return buf
 }
 
 // defaultFallbackServers are used when all configured tunnels and direct
