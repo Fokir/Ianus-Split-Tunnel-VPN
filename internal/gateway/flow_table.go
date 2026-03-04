@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"math"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -103,6 +104,7 @@ func rawFlowShardIndex(k rawFlowKey) uint32 {
 type rawFlowShard struct {
 	mu sync.RWMutex
 	m  map[rawFlowKey]*RawFlowEntry
+	_  [64]byte // cache line padding to prevent false sharing between shards
 }
 
 // ---------------------------------------------------------------------------
@@ -111,14 +113,20 @@ type rawFlowShard struct {
 
 const numNATShards = 64
 
+// maxEntriesPerShard limits each shard to prevent unbounded growth under
+// connection floods (port scans, torrents). Total max: 64 * 8192 = 524,288.
+const maxEntriesPerShard = 8192
+
 type tcpNATShard struct {
 	mu sync.RWMutex
 	m  map[natKey]*NATEntry
+	_  [64]byte // cache line padding
 }
 
 type udpNATShard struct {
 	mu sync.RWMutex
 	m  map[natKey]*UDPNATEntry
+	_  [64]byte // cache line padding
 }
 
 // natShardIndex selects a shard using FNV-1a hash of the 6-byte natKey.
@@ -216,10 +224,22 @@ func (ft *FlowTable) Wait() { ft.wg.Wait() }
 // ---------------------------------------------------------------------------
 
 // InsertTCP creates a NAT entry for a new TCP connection.
+// Evicts the least-recently-active entry if the shard is at capacity.
 func (ft *FlowTable) InsertTCP(dstIP netip.Addr, srcPort uint16, entry *NATEntry) {
 	nk := makeNATKey(dstIP, srcPort)
 	shard := &ft.tcp[natShardIndex(nk)]
 	shard.mu.Lock()
+	if len(shard.m) >= maxEntriesPerShard {
+		var oldestKey natKey
+		oldestTime := int64(math.MaxInt64)
+		for k, v := range shard.m {
+			if t := atomic.LoadInt64(&v.LastActivity); t < oldestTime {
+				oldestTime = t
+				oldestKey = k
+			}
+		}
+		delete(shard.m, oldestKey)
+	}
 	shard.m[nk] = entry
 	shard.mu.Unlock()
 }
@@ -284,10 +304,22 @@ func (ft *FlowTable) LookupNAT(addrKey string) (core.NATInfo, bool) {
 // ---------------------------------------------------------------------------
 
 // InsertUDP creates a NAT entry for a new UDP flow.
+// Evicts the least-recently-active entry if the shard is at capacity.
 func (ft *FlowTable) InsertUDP(dstIP netip.Addr, srcPort uint16, entry *UDPNATEntry) {
 	nk := makeNATKey(dstIP, srcPort)
 	shard := &ft.udp[natShardIndex(nk)]
 	shard.mu.Lock()
+	if len(shard.m) >= maxEntriesPerShard {
+		var oldestKey natKey
+		oldestTime := int64(math.MaxInt64)
+		for k, v := range shard.m {
+			if t := atomic.LoadInt64(&v.LastActivity); t < oldestTime {
+				oldestTime = t
+				oldestKey = k
+			}
+		}
+		delete(shard.m, oldestKey)
+	}
 	shard.m[nk] = entry
 	shard.mu.Unlock()
 }
@@ -343,10 +375,22 @@ func (ft *FlowTable) LookupUDPNAT(addrKey string) (core.NATInfo, bool) {
 // ---------------------------------------------------------------------------
 
 // InsertRawFlow creates a raw flow entry for a TCP or UDP flow.
+// Evicts the least-recently-active entry if the shard is at capacity.
 func (ft *FlowTable) InsertRawFlow(proto byte, dstIP [4]byte, srcPort uint16, entry *RawFlowEntry) {
 	k := makeRawFlowKey(proto, dstIP, srcPort)
 	shard := &ft.raw[rawFlowShardIndex(k)]
 	shard.mu.Lock()
+	if len(shard.m) >= maxEntriesPerShard {
+		var oldestKey rawFlowKey
+		oldestTime := int64(math.MaxInt64)
+		for fk, v := range shard.m {
+			if t := atomic.LoadInt64(&v.LastActivity); t < oldestTime {
+				oldestTime = t
+				oldestKey = fk
+			}
+		}
+		delete(shard.m, oldestKey)
+	}
 	shard.m[k] = entry
 	shard.mu.Unlock()
 }
@@ -427,30 +471,34 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 
 				for i := range ft.raw {
 					shard := &ft.raw[i]
-					var stale []rawFlowKey
+					// Phase 1: collect candidates under read lock.
+					var candidates []rawFlowKey
 					shard.mu.RLock()
 					for key, entry := range shard.m {
-						last := atomic.LoadInt64(&entry.LastActivity)
-						if now-last > timeout {
-							stale = append(stale, key)
+						if now-atomic.LoadInt64(&entry.LastActivity) > timeout {
+							candidates = append(candidates, key)
 						}
 					}
 					shard.mu.RUnlock()
 
-					if len(stale) > 0 {
-						shard.mu.Lock()
-						hookPtr := ft.rawFlowCleanupHook.Load()
-						for _, key := range stale {
-							if hookPtr != nil {
-								if entry, ok := shard.m[key]; ok {
+					if len(candidates) == 0 {
+						continue
+					}
+					// Phase 2: delete under write lock with re-check (TOCTOU fix).
+					shard.mu.Lock()
+					hookPtr := ft.rawFlowCleanupHook.Load()
+					for _, key := range candidates {
+						if entry, ok := shard.m[key]; ok {
+							if now-atomic.LoadInt64(&entry.LastActivity) > timeout {
+								if hookPtr != nil {
 									(*hookPtr)(entry)
 								}
+								delete(shard.m, key)
+								totalRemoved++
 							}
-							delete(shard.m, key)
 						}
-						shard.mu.Unlock()
-						totalRemoved += len(stale)
 					}
+					shard.mu.Unlock()
 				}
 
 				if elapsed := time.Since(cleanupStart); elapsed > 5*time.Millisecond {
@@ -536,6 +584,38 @@ func (ft *FlowTable) IsUDPProxySourcePort(port uint16) bool {
 }
 
 // ---------------------------------------------------------------------------
+// Flow table statistics
+// ---------------------------------------------------------------------------
+
+// FlowTableStats holds the current entry counts for all flow tables.
+type FlowTableStats struct {
+	TCPEntries int
+	UDPEntries int
+	RawEntries int
+}
+
+// Stats returns the current entry counts across all shards.
+func (ft *FlowTable) Stats() FlowTableStats {
+	var s FlowTableStats
+	for i := range ft.tcp {
+		ft.tcp[i].mu.RLock()
+		s.TCPEntries += len(ft.tcp[i].m)
+		ft.tcp[i].mu.RUnlock()
+	}
+	for i := range ft.udp {
+		ft.udp[i].mu.RLock()
+		s.UDPEntries += len(ft.udp[i].m)
+		ft.udp[i].mu.RUnlock()
+	}
+	for i := range ft.raw {
+		ft.raw[i].mu.RLock()
+		s.RawEntries += len(ft.raw[i].m)
+		ft.raw[i].mu.RUnlock()
+	}
+	return s
+}
+
+// ---------------------------------------------------------------------------
 // NAT cleanup routines
 // ---------------------------------------------------------------------------
 
@@ -558,24 +638,30 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 
 				for i := range ft.tcp {
 					shard := &ft.tcp[i]
-					var stale []natKey
+					// Phase 1: collect candidates under read lock.
+					var candidates []natKey
 					shard.mu.RLock()
 					for key, entry := range shard.m {
-						last := atomic.LoadInt64(&entry.LastActivity)
-						if now-last > timeout {
-							stale = append(stale, key)
+						if now-atomic.LoadInt64(&entry.LastActivity) > timeout {
+							candidates = append(candidates, key)
 						}
 					}
 					shard.mu.RUnlock()
 
-					if len(stale) > 0 {
-						shard.mu.Lock()
-						for _, key := range stale {
-							delete(shard.m, key)
-						}
-						shard.mu.Unlock()
-						totalRemoved += len(stale)
+					if len(candidates) == 0 {
+						continue
 					}
+					// Phase 2: delete under write lock with re-check (TOCTOU fix).
+					shard.mu.Lock()
+					for _, key := range candidates {
+						if entry, ok := shard.m[key]; ok {
+							if now-atomic.LoadInt64(&entry.LastActivity) > timeout {
+								delete(shard.m, key)
+								totalRemoved++
+							}
+						}
+					}
+					shard.mu.Unlock()
 				}
 
 				if elapsed := time.Since(cleanupStart); elapsed > 5*time.Millisecond {
@@ -607,28 +693,38 @@ func (ft *FlowTable) StartUDPCleanup(ctx context.Context) {
 
 				for i := range ft.udp {
 					shard := &ft.udp[i]
-					var stale []natKey
+					// Phase 1: collect candidates under read lock.
+					type udpCandidate struct {
+						key     natKey
+						timeout int64
+					}
+					var candidates []udpCandidate
 					shard.mu.RLock()
 					for key, entry := range shard.m {
 						var timeout int64 = 120
 						if entry.OriginalDstPort == 53 {
 							timeout = 10
 						}
-						last := atomic.LoadInt64(&entry.LastActivity)
-						if now-last > timeout {
-							stale = append(stale, key)
+						if now-atomic.LoadInt64(&entry.LastActivity) > timeout {
+							candidates = append(candidates, udpCandidate{key, timeout})
 						}
 					}
 					shard.mu.RUnlock()
 
-					if len(stale) > 0 {
-						shard.mu.Lock()
-						for _, key := range stale {
-							delete(shard.m, key)
-						}
-						shard.mu.Unlock()
-						totalRemoved += len(stale)
+					if len(candidates) == 0 {
+						continue
 					}
+					// Phase 2: delete under write lock with re-check (TOCTOU fix).
+					shard.mu.Lock()
+					for _, c := range candidates {
+						if entry, ok := shard.m[c.key]; ok {
+							if now-atomic.LoadInt64(&entry.LastActivity) > c.timeout {
+								delete(shard.m, c.key)
+								totalRemoved++
+							}
+						}
+					}
+					shard.mu.Unlock()
 				}
 
 				if elapsed := time.Since(cleanupStart); elapsed > 5*time.Millisecond {

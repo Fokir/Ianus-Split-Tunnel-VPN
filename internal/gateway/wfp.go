@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-
 	"awg-split-tunnel/internal/core"
 
 	"golang.org/x/sys/windows"
@@ -32,11 +31,35 @@ var (
 	}
 )
 
+// dualStackLayers pairs IPv4 and IPv6 ALE layers for dual-stack rule creation.
+// Every per-process or interface-scoped rule must be applied on both stacks to
+// prevent traffic leaks through IPv6 dual-stack sockets.
+var dualStackLayers = []struct {
+	connect wf.LayerID
+	recv    wf.LayerID
+	tag     string // suffix for rule names
+}{
+	{wf.LayerALEAuthConnectV4, wf.LayerALEAuthRecvAcceptV4, ""},
+	{wf.LayerALEAuthConnectV6, wf.LayerALEAuthRecvAcceptV6, " V6"},
+}
+
+// isWin11_24H2OrLater detects Windows 11 24H2 (build 26100+) where WFP
+// ActionBlock on UDP at ALE layers causes system-wide DNS hang.
+func isWin11_24H2OrLater() (bool, uint32) {
+	info := windows.RtlGetVersion()
+	return info.BuildNumber >= 26100, info.BuildNumber
+}
+
 // WFPManager manages WFP per-process interface blocking rules.
 // Uses Dynamic=true session so all rules auto-cleanup on process exit.
 type WFPManager struct {
 	session  *wf.Session
 	tunLUID  uint64
+
+	// skipUDPBlock is true on Win11 24H2+ to avoid kernel UDP hang.
+	// When set, BLOCK rules only match TCP (protocol 6), and UDP DNS
+	// block rules are skipped entirely.
+	skipUDPBlock bool
 
 	mu      sync.Mutex
 	rules   map[string][]wf.RuleID // exePath (lowered) → rule IDs
@@ -46,8 +69,69 @@ type WFPManager struct {
 	directIPs map[[4]byte][]wf.RuleID
 }
 
+// CleanupOrphanedOwnFilters removes WFP rules, sublayers, and provider left
+// behind by a previous instance that did not shut down cleanly (BSOD, power
+// loss, taskkill /F). Opens a temporary non-dynamic session, enumerates all
+// WFP objects belonging to awgProviderID, and deletes them.
+// Safe to call even if no orphaned artifacts exist.
+func CleanupOrphanedOwnFilters() {
+	sess, err := wf.New(&wf.Options{
+		Name:        "AWG Orphan Cleanup",
+		Description: "Temporary session for removing orphaned AWG WFP artifacts",
+		Dynamic:     false, // deletions must persist after session closes
+	})
+	if err != nil {
+		core.Log.Warnf("WFP", "Open orphan cleanup session: %v", err)
+		return
+	}
+	defer sess.Close()
+
+	// Step 1: delete orphaned rules belonging to our provider.
+	rules, err := sess.Rules()
+	if err != nil {
+		core.Log.Warnf("WFP", "Enumerate rules for orphan cleanup: %v", err)
+	} else {
+		var deleted int
+		for _, r := range rules {
+			if r.Provider == awgProviderID {
+				if err := sess.DeleteRule(r.ID); err != nil {
+					core.Log.Warnf("WFP", "Delete orphaned rule %v: %v", r.ID, err)
+				} else {
+					deleted++
+				}
+			}
+		}
+		if deleted > 0 {
+			core.Log.Infof("WFP", "Removed %d orphaned WFP filters from previous session", deleted)
+		}
+	}
+
+	// Step 2: delete orphaned sublayers.
+	sublayers, err := sess.Sublayers(awgProviderID)
+	if err != nil {
+		core.Log.Warnf("WFP", "Enumerate sublayers for orphan cleanup: %v", err)
+	} else {
+		for _, sl := range sublayers {
+			if err := sess.DeleteSublayer(sl.ID); err != nil {
+				core.Log.Warnf("WFP", "Delete orphaned sublayer %v: %v", sl.ID, err)
+			} else {
+				core.Log.Infof("WFP", "Removed orphaned sublayer %q", sl.Name)
+			}
+		}
+	}
+
+	// Step 3: delete the orphaned provider itself.
+	if err := sess.DeleteProvider(awgProviderID); err != nil {
+		// Expected if no orphaned provider exists — not an error.
+	} else {
+		core.Log.Infof("WFP", "Removed orphaned provider")
+	}
+}
+
 // NewWFPManager creates a WFP session with dynamic rules.
 func NewWFPManager(tunLUID uint64) (*WFPManager, error) {
+	// Clean up any orphaned WFP artifacts from a previous unclean shutdown.
+	CleanupOrphanedOwnFilters()
 	sess, err := wf.New(&wf.Options{
 		Name:        "AWG Split Tunnel",
 		Description: "Per-process interface blocking for split tunneling",
@@ -81,13 +165,18 @@ func NewWFPManager(tunLUID uint64) (*WFPManager, error) {
 		return nil, fmt.Errorf("[WFP] add sublayer: %w", err)
 	}
 
-	core.Log.Infof("WFP", "Session opened (Dynamic=true, TUN LUID=0x%x)", tunLUID)
+	skipUDP, buildNum := isWin11_24H2OrLater()
+	if skipUDP {
+		core.Log.Warnf("WFP", "Win11 24H2+ detected (build %d): UDP BLOCK rules disabled to prevent kernel hang", buildNum)
+	}
+	core.Log.Infof("WFP", "Session opened (Dynamic=true, TUN LUID=0x%x, build=%d)", tunLUID, buildNum)
 
 	return &WFPManager{
-		session:   sess,
-		tunLUID:   tunLUID,
-		rules:     make(map[string][]wf.RuleID),
-		directIPs: make(map[[4]byte][]wf.RuleID),
+		session:      sess,
+		tunLUID:      tunLUID,
+		skipUDPBlock: skipUDP,
+		rules:        make(map[string][]wf.RuleID),
+		directIPs:    make(map[[4]byte][]wf.RuleID),
 	}, nil
 }
 
@@ -109,11 +198,12 @@ func (w *WFPManager) EnsureBlocked(exePath string) {
 }
 
 // BlockProcessOnRealNIC adds WFP rules that block the given process on any
-// interface except the TUN adapter.
+// interface except the TUN adapter. Rules are applied on both V4 and V6 ALE
+// layers to prevent traffic leaks through IPv6 dual-stack sockets.
 //
-// Rules:
-// 1. ALE_AUTH_CONNECT_V4: Block if AppID matches AND LocalInterface != TUN LUID
-// 2. ALE_AUTH_RECV_ACCEPT_V4: Block inbound (e.g. STUN responses) on non-TUN interface
+// Rules (per IP version):
+// 1. ALE_AUTH_CONNECT: Block if AppID matches AND LocalInterface != TUN LUID
+// 2. ALE_AUTH_RECV_ACCEPT: Block inbound (e.g. STUN responses) on non-TUN interface
 func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 	key := strings.ToLower(exePath)
 
@@ -133,16 +223,12 @@ func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 
 	var ruleIDs []wf.RuleID
 
-	// Rule 1: Block outbound connections on non-TUN interfaces.
-	// Exclude loopback traffic so localhost (127.0.0.1) remains reachable.
-	connectRuleID := w.nextRuleID()
-	if err := w.session.AddRule(&wf.Rule{
-		ID:       connectRuleID,
-		Name:     fmt.Sprintf("AWG block connect: %s", key),
-		Layer:    wf.LayerALEAuthConnectV4,
-		Sublayer: awgSublayerID,
-		Weight:   1000,
-		Conditions: []*wf.Match{
+	// Block outbound connections and inbound accept on non-TUN interfaces.
+	// Applied on both V4 and V6 ALE layers to prevent dual-stack socket bypass.
+	// Exclude loopback traffic so localhost remains reachable.
+	// On Win11 24H2+, only block TCP to avoid kernel UDP hang.
+	for _, ds := range dualStackLayers {
+		conditions := []*wf.Match{
 			{
 				Field: wf.FieldALEAppID,
 				Op:    wf.MatchTypeEqual,
@@ -158,49 +244,52 @@ func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 				Op:    wf.MatchTypeFlagsNoneSet,
 				Value: wf.ConditionFlagIsLoopback,
 			},
-		},
-		Action: wf.ActionBlock,
-	}); err != nil {
-		return fmt.Errorf("[WFP] add connect rule: %w", err)
-	}
-	ruleIDs = append(ruleIDs, connectRuleID)
+		}
+		if w.skipUDPBlock {
+			conditions = append(conditions, &wf.Match{
+				Field: wf.FieldIPProtocol,
+				Op:    wf.MatchTypeEqual,
+				Value: uint8(6), // TCP only
+			})
+		}
 
-	// Rule 2: Block inbound accept (STUN responses) on non-TUN interfaces.
-	// Exclude loopback traffic so localhost (127.0.0.1) remains reachable.
-	recvRuleID := w.nextRuleID()
-	if err := w.session.AddRule(&wf.Rule{
-		ID:       recvRuleID,
-		Name:     fmt.Sprintf("AWG block recv: %s", key),
-		Layer:    wf.LayerALEAuthRecvAcceptV4,
-		Sublayer: awgSublayerID,
-		Weight:   1000,
-		Conditions: []*wf.Match{
-			{
-				Field: wf.FieldALEAppID,
-				Op:    wf.MatchTypeEqual,
-				Value: appID,
-			},
-			{
-				Field: wf.FieldIPLocalInterface,
-				Op:    wf.MatchTypeNotEqual,
-				Value: uint64(w.tunLUID),
-			},
-			{
-				Field: wf.FieldFlags,
-				Op:    wf.MatchTypeFlagsNoneSet,
-				Value: wf.ConditionFlagIsLoopback,
-			},
-		},
-		Action: wf.ActionBlock,
-	}); err != nil {
-		// Rollback the first rule.
-		w.session.DeleteRule(connectRuleID)
-		return fmt.Errorf("[WFP] add recv rule: %w", err)
+		connectRuleID := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:         connectRuleID,
+			Name:       fmt.Sprintf("AWG block connect%s: %s", ds.tag, key),
+			Layer:      ds.connect,
+			Sublayer:   awgSublayerID,
+			Weight:     1000,
+			Conditions: conditions,
+			Action:     wf.ActionBlock,
+		}); err != nil {
+			for _, id := range ruleIDs {
+				w.session.DeleteRule(id)
+			}
+			return fmt.Errorf("[WFP] add connect%s rule: %w", ds.tag, err)
+		}
+		ruleIDs = append(ruleIDs, connectRuleID)
+
+		recvRuleID := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:         recvRuleID,
+			Name:       fmt.Sprintf("AWG block recv%s: %s", ds.tag, key),
+			Layer:      ds.recv,
+			Sublayer:   awgSublayerID,
+			Weight:     1000,
+			Conditions: conditions,
+			Action:     wf.ActionBlock,
+		}); err != nil {
+			for _, id := range ruleIDs {
+				w.session.DeleteRule(id)
+			}
+			return fmt.Errorf("[WFP] add recv%s rule: %w", ds.tag, err)
+		}
+		ruleIDs = append(ruleIDs, recvRuleID)
 	}
-	ruleIDs = append(ruleIDs, recvRuleID)
 
 	w.rules[key] = ruleIDs
-	core.Log.Debugf("WFP", "Blocked %s on real NIC (%d rules)", key, len(ruleIDs))
+	core.Log.Debugf("WFP", "Blocked %s on real NIC (%d rules, dual-stack)", key, len(ruleIDs))
 	return nil
 }
 
@@ -400,45 +489,57 @@ func (w *WFPManager) BlockDNSOnInterface(ifLUID uint64) error {
 
 	var ruleIDs []wf.RuleID
 
-	for _, proto := range []uint8{17, 6} {
-		protoName := "UDP"
-		if proto == 6 {
-			protoName = "TCP"
-		}
+	// Block DNS on both V4 and V6 ALE layers to prevent dual-stack DNS leaks.
+	// On Win11 24H2+, skip UDP DNS block to avoid kernel hang.
+	for _, ds := range dualStackLayers {
+		for _, proto := range []uint8{17, 6} {
+			if proto == 17 && w.skipUDPBlock {
+				continue // skip UDP DNS block on 24H2+
+			}
 
-		ruleID := w.nextRuleID()
-		if err := w.session.AddRule(&wf.Rule{
-			ID:       ruleID,
-			Name:     fmt.Sprintf("AWG block DNS leak: %s:53 on LUID 0x%x", protoName, ifLUID),
-			Layer:    wf.LayerALEAuthConnectV4,
-			Sublayer: awgSublayerID,
-			Weight:   3000,
-			Conditions: []*wf.Match{
-				{
-					Field: wf.FieldIPProtocol,
-					Op:    wf.MatchTypeEqual,
-					Value: proto,
+			protoName := "UDP"
+			if proto == 6 {
+				protoName = "TCP"
+			}
+
+			ruleID := w.nextRuleID()
+			if err := w.session.AddRule(&wf.Rule{
+				ID:       ruleID,
+				Name:     fmt.Sprintf("AWG block DNS leak%s: %s:53 on LUID 0x%x", ds.tag, protoName, ifLUID),
+				Layer:    ds.connect,
+				Sublayer: awgSublayerID,
+				Weight:   3000,
+				Conditions: []*wf.Match{
+					{
+						Field: wf.FieldIPProtocol,
+						Op:    wf.MatchTypeEqual,
+						Value: proto,
+					},
+					{
+						Field: wf.FieldIPRemotePort,
+						Op:    wf.MatchTypeEqual,
+						Value: uint16(53),
+					},
+					{
+						Field: wf.FieldIPLocalInterface,
+						Op:    wf.MatchTypeEqual,
+						Value: ifLUID,
+					},
 				},
-				{
-					Field: wf.FieldIPRemotePort,
-					Op:    wf.MatchTypeEqual,
-					Value: uint16(53),
-				},
-				{
-					Field: wf.FieldIPLocalInterface,
-					Op:    wf.MatchTypeEqual,
-					Value: ifLUID,
-				},
-			},
-			Action: wf.ActionBlock,
-		}); err != nil {
-			return fmt.Errorf("[WFP] block DNS leak %s: %w", protoName, err)
+				Action: wf.ActionBlock,
+			}); err != nil {
+				return fmt.Errorf("[WFP] block DNS leak%s %s: %w", ds.tag, protoName, err)
+			}
+			ruleIDs = append(ruleIDs, ruleID)
 		}
-		ruleIDs = append(ruleIDs, ruleID)
 	}
 
 	w.rules[wfpDNSBlockKey] = ruleIDs
-	core.Log.Infof("WFP", "DNS blocked on interface LUID 0x%x (port 53 UDP+TCP)", ifLUID)
+	if w.skipUDPBlock {
+		core.Log.Infof("WFP", "DNS blocked on interface LUID 0x%x (port 53 TCP-only, dual-stack, UDP skipped for 24H2+)", ifLUID)
+	} else {
+		core.Log.Infof("WFP", "DNS blocked on interface LUID 0x%x (port 53 UDP+TCP, dual-stack)", ifLUID)
+	}
 	return nil
 }
 
@@ -473,50 +574,53 @@ func (w *WFPManager) PermitDNSForSelf(ifLUID uint64) error {
 
 	var ruleIDs []wf.RuleID
 
-	for _, proto := range []uint8{17, 6} {
-		protoName := "UDP"
-		if proto == 6 {
-			protoName = "TCP"
-		}
+	// Permit DNS on both V4 and V6 ALE layers (dual-stack).
+	for _, ds := range dualStackLayers {
+		for _, proto := range []uint8{17, 6} {
+			protoName := "UDP"
+			if proto == 6 {
+				protoName = "TCP"
+			}
 
-		ruleID := w.nextRuleID()
-		if err := w.session.AddRule(&wf.Rule{
-			ID:       ruleID,
-			Name:     fmt.Sprintf("AWG permit DNS self: %s:53 on LUID 0x%x", protoName, ifLUID),
-			Layer:    wf.LayerALEAuthConnectV4,
-			Sublayer: awgSublayerID,
-			Weight:   4000,
-			Conditions: []*wf.Match{
-				{
-					Field: wf.FieldALEAppID,
-					Op:    wf.MatchTypeEqual,
-					Value: appID,
+			ruleID := w.nextRuleID()
+			if err := w.session.AddRule(&wf.Rule{
+				ID:       ruleID,
+				Name:     fmt.Sprintf("AWG permit DNS self%s: %s:53 on LUID 0x%x", ds.tag, protoName, ifLUID),
+				Layer:    ds.connect,
+				Sublayer: awgSublayerID,
+				Weight:   4000,
+				Conditions: []*wf.Match{
+					{
+						Field: wf.FieldALEAppID,
+						Op:    wf.MatchTypeEqual,
+						Value: appID,
+					},
+					{
+						Field: wf.FieldIPProtocol,
+						Op:    wf.MatchTypeEqual,
+						Value: proto,
+					},
+					{
+						Field: wf.FieldIPRemotePort,
+						Op:    wf.MatchTypeEqual,
+						Value: uint16(53),
+					},
+					{
+						Field: wf.FieldIPLocalInterface,
+						Op:    wf.MatchTypeEqual,
+						Value: ifLUID,
+					},
 				},
-				{
-					Field: wf.FieldIPProtocol,
-					Op:    wf.MatchTypeEqual,
-					Value: proto,
-				},
-				{
-					Field: wf.FieldIPRemotePort,
-					Op:    wf.MatchTypeEqual,
-					Value: uint16(53),
-				},
-				{
-					Field: wf.FieldIPLocalInterface,
-					Op:    wf.MatchTypeEqual,
-					Value: ifLUID,
-				},
-			},
-			Action: wf.ActionPermit,
-		}); err != nil {
-			return fmt.Errorf("[WFP] permit DNS self %s: %w", protoName, err)
+				Action: wf.ActionPermit,
+			}); err != nil {
+				return fmt.Errorf("[WFP] permit DNS self%s %s: %w", ds.tag, protoName, err)
+			}
+			ruleIDs = append(ruleIDs, ruleID)
 		}
-		ruleIDs = append(ruleIDs, ruleID)
 	}
 
 	w.rules[wfpDNSPermitSelfKey] = ruleIDs
-	core.Log.Infof("WFP", "DNS self-permit on interface LUID 0x%x (port 53 UDP+TCP)", ifLUID)
+	core.Log.Infof("WFP", "DNS self-permit on interface LUID 0x%x (port 53 UDP+TCP, dual-stack)", ifLUID)
 	return nil
 }
 
@@ -563,15 +667,10 @@ func (w *WFPManager) EnableDefaultBlock() error {
 
 	var ruleIDs []wf.RuleID
 
-	// Rule 1: Block ALL outbound connections on non-TUN, non-loopback interfaces.
-	blockConnectID := w.nextRuleID()
-	if err := w.session.AddRule(&wf.Rule{
-		ID:       blockConnectID,
-		Name:     "AWG default block connect",
-		Layer:    wf.LayerALEAuthConnectV4,
-		Sublayer: awgSublayerID,
-		Weight:   100,
-		Conditions: []*wf.Match{
+	// Block ALL traffic and permit self on both V4 and V6 ALE layers (dual-stack).
+	// On Win11 24H2+, only block TCP to avoid kernel UDP hang.
+	for _, ds := range dualStackLayers {
+		blockConditions := []*wf.Match{
 			{
 				Field: wf.FieldIPLocalInterface,
 				Op:    wf.MatchTypeNotEqual,
@@ -582,99 +681,112 @@ func (w *WFPManager) EnableDefaultBlock() error {
 				Op:    wf.MatchTypeFlagsNoneSet,
 				Value: wf.ConditionFlagIsLoopback,
 			},
-		},
-		Action: wf.ActionBlock,
-	}); err != nil {
-		return fmt.Errorf("[WFP] add default block connect: %w", err)
-	}
-	ruleIDs = append(ruleIDs, blockConnectID)
-
-	// Rule 2: Block ALL inbound on non-TUN, non-loopback interfaces.
-	blockRecvID := w.nextRuleID()
-	if err := w.session.AddRule(&wf.Rule{
-		ID:       blockRecvID,
-		Name:     "AWG default block recv",
-		Layer:    wf.LayerALEAuthRecvAcceptV4,
-		Sublayer: awgSublayerID,
-		Weight:   100,
-		Conditions: []*wf.Match{
-			{
-				Field: wf.FieldIPLocalInterface,
-				Op:    wf.MatchTypeNotEqual,
-				Value: uint64(w.tunLUID),
-			},
-			{
-				Field: wf.FieldFlags,
-				Op:    wf.MatchTypeFlagsNoneSet,
-				Value: wf.ConditionFlagIsLoopback,
-			},
-		},
-		Action: wf.ActionBlock,
-	}); err != nil {
-		w.session.DeleteRule(blockConnectID)
-		return fmt.Errorf("[WFP] add default block recv: %w", err)
-	}
-	ruleIDs = append(ruleIDs, blockRecvID)
-
-	// Rule 3: PERMIT our own process outbound on non-TUN (for direct proxy, DNS).
-	selfConnectID := w.nextRuleID()
-	if err := w.session.AddRule(&wf.Rule{
-		ID:       selfConnectID,
-		Name:     "AWG default self permit connect",
-		Layer:    wf.LayerALEAuthConnectV4,
-		Sublayer: awgSublayerID,
-		Weight:   200,
-		Conditions: []*wf.Match{
-			{
-				Field: wf.FieldALEAppID,
+		}
+		if w.skipUDPBlock {
+			blockConditions = append(blockConditions, &wf.Match{
+				Field: wf.FieldIPProtocol,
 				Op:    wf.MatchTypeEqual,
-				Value: appID,
-			},
-			{
-				Field: wf.FieldIPLocalInterface,
-				Op:    wf.MatchTypeNotEqual,
-				Value: uint64(w.tunLUID),
-			},
-		},
-		Action: wf.ActionPermit,
-	}); err != nil {
-		w.session.DeleteRule(blockConnectID)
-		w.session.DeleteRule(blockRecvID)
-		return fmt.Errorf("[WFP] add default self permit connect: %w", err)
-	}
-	ruleIDs = append(ruleIDs, selfConnectID)
+				Value: uint8(6), // TCP only
+			})
+		}
 
-	// Rule 4: PERMIT our own process inbound on non-TUN.
-	selfRecvID := w.nextRuleID()
-	if err := w.session.AddRule(&wf.Rule{
-		ID:       selfRecvID,
-		Name:     "AWG default self permit recv",
-		Layer:    wf.LayerALEAuthRecvAcceptV4,
-		Sublayer: awgSublayerID,
-		Weight:   200,
-		Conditions: []*wf.Match{
-			{
-				Field: wf.FieldALEAppID,
-				Op:    wf.MatchTypeEqual,
-				Value: appID,
+		// Block outbound connections on non-TUN, non-loopback interfaces.
+		blockConnectID := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:         blockConnectID,
+			Name:       fmt.Sprintf("AWG default block connect%s", ds.tag),
+			Layer:      ds.connect,
+			Sublayer:   awgSublayerID,
+			Weight:     100,
+			Conditions: blockConditions,
+			Action:     wf.ActionBlock,
+		}); err != nil {
+			for _, id := range ruleIDs {
+				w.session.DeleteRule(id)
+			}
+			return fmt.Errorf("[WFP] add default block connect%s: %w", ds.tag, err)
+		}
+		ruleIDs = append(ruleIDs, blockConnectID)
+
+		// Block inbound on non-TUN, non-loopback interfaces.
+		blockRecvID := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:         blockRecvID,
+			Name:       fmt.Sprintf("AWG default block recv%s", ds.tag),
+			Layer:      ds.recv,
+			Sublayer:   awgSublayerID,
+			Weight:     100,
+			Conditions: blockConditions,
+			Action:     wf.ActionBlock,
+		}); err != nil {
+			for _, id := range ruleIDs {
+				w.session.DeleteRule(id)
+			}
+			return fmt.Errorf("[WFP] add default block recv%s: %w", ds.tag, err)
+		}
+		ruleIDs = append(ruleIDs, blockRecvID)
+
+		// PERMIT our own process outbound on non-TUN (for direct proxy, DNS).
+		selfConnectID := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:       selfConnectID,
+			Name:     fmt.Sprintf("AWG default self permit connect%s", ds.tag),
+			Layer:    ds.connect,
+			Sublayer: awgSublayerID,
+			Weight:   200,
+			Conditions: []*wf.Match{
+				{
+					Field: wf.FieldALEAppID,
+					Op:    wf.MatchTypeEqual,
+					Value: appID,
+				},
+				{
+					Field: wf.FieldIPLocalInterface,
+					Op:    wf.MatchTypeNotEqual,
+					Value: uint64(w.tunLUID),
+				},
 			},
-			{
-				Field: wf.FieldIPLocalInterface,
-				Op:    wf.MatchTypeNotEqual,
-				Value: uint64(w.tunLUID),
+			Action: wf.ActionPermit,
+		}); err != nil {
+			for _, id := range ruleIDs {
+				w.session.DeleteRule(id)
+			}
+			return fmt.Errorf("[WFP] add default self permit connect%s: %w", ds.tag, err)
+		}
+		ruleIDs = append(ruleIDs, selfConnectID)
+
+		// PERMIT our own process inbound on non-TUN.
+		selfRecvID := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:       selfRecvID,
+			Name:     fmt.Sprintf("AWG default self permit recv%s", ds.tag),
+			Layer:    ds.recv,
+			Sublayer: awgSublayerID,
+			Weight:   200,
+			Conditions: []*wf.Match{
+				{
+					Field: wf.FieldALEAppID,
+					Op:    wf.MatchTypeEqual,
+					Value: appID,
+				},
+				{
+					Field: wf.FieldIPLocalInterface,
+					Op:    wf.MatchTypeNotEqual,
+					Value: uint64(w.tunLUID),
+				},
 			},
-		},
-		Action: wf.ActionPermit,
-	}); err != nil {
-		w.session.DeleteRule(blockConnectID)
-		w.session.DeleteRule(blockRecvID)
-		w.session.DeleteRule(selfConnectID)
-		return fmt.Errorf("[WFP] add default self permit recv: %w", err)
+			Action: wf.ActionPermit,
+		}); err != nil {
+			for _, id := range ruleIDs {
+				w.session.DeleteRule(id)
+			}
+			return fmt.Errorf("[WFP] add default self permit recv%s: %w", ds.tag, err)
+		}
+		ruleIDs = append(ruleIDs, selfRecvID)
 	}
-	ruleIDs = append(ruleIDs, selfRecvID)
 
 	w.rules[wfpDefaultBlockKey] = ruleIDs
-	core.Log.Infof("WFP", "Default block enabled (%d rules, self-permit for %s)", len(ruleIDs), exePath)
+	core.Log.Infof("WFP", "Default block enabled (%d rules, dual-stack, self-permit for %s)", len(ruleIDs), exePath)
 	return nil
 }
 

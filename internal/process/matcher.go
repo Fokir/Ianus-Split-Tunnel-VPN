@@ -28,9 +28,36 @@ func getOrCompileRegex(expr string) (*regexp.Regexp, error) {
 
 // cachedPath holds a cached process path with pre-computed lowercase variants.
 type cachedPath struct {
-	exePath   string // original full path
-	exeLower  string // strings.ToLower(exePath)
-	baseLower string // filepath.Base(exeLower)
+	exePath   string    // original full path
+	exeLower  string    // strings.ToLower(exePath)
+	baseLower string    // filepath.Base(exeLower)
+	cachedAt  time.Time // when this entry was cached
+}
+
+// cacheTTL is the maximum age of a cache entry before it's re-verified.
+// Short TTL reduces the window for PID reuse races: between FindPIDByPort()
+// returning a PID and GetExePathLower() resolving its path, the PID could
+// theoretically be reused by a different process.
+const cacheTTL = 2 * time.Second
+
+// systemProcesses lists OS-critical processes that must never be matched to
+// a VPN tunnel or blocked by WFP rules. Keyed by lowercased base name.
+var systemProcesses = map[string]bool{
+	"system":       true,
+	"smss.exe":     true,
+	"csrss.exe":    true,
+	"wininit.exe":  true,
+	"winlogon.exe": true,
+	"services.exe": true,
+	"lsass.exe":    true,
+	"svchost.exe":  true,
+	"dwm.exe":      true,
+}
+
+// IsSystemProcess returns true for OS-critical processes that must never be
+// routed through a VPN tunnel or blocked by WFP per-process rules.
+func IsSystemProcess(baseLower string) bool {
+	return systemProcesses[baseLower]
 }
 
 // maxCacheSize is the maximum number of entries in the process path cache.
@@ -52,6 +79,7 @@ func NewMatcher() *Matcher {
 
 // GetExePath returns the full executable path for a given PID.
 // Results are cached for performance on the hot path.
+// Returns false for system-critical processes that must never be routed.
 func (m *Matcher) GetExePath(pid uint32) (string, bool) {
 	if cp := m.getCached(pid); cp != nil {
 		return cp.exePath, true
@@ -64,10 +92,18 @@ func (m *Matcher) GetExePath(pid uint32) (string, bool) {
 	}
 
 	lower := strings.ToLower(path)
+	base := filepath.Base(lower)
+
+	// Never route system-critical processes through VPN tunnels.
+	if IsSystemProcess(base) {
+		return "", false
+	}
+
 	cp := &cachedPath{
 		exePath:   path,
 		exeLower:  lower,
-		baseLower: filepath.Base(lower),
+		baseLower: base,
+		cachedAt:  time.Now(),
 	}
 
 	m.mu.Lock()
@@ -91,6 +127,7 @@ func (m *Matcher) GetExePath(pid uint32) (string, bool) {
 // GetExePathLower returns the full path plus pre-lowered path and base name.
 // Zero allocations on cache hit. Used by TUNRouter.resolveFlow() to avoid
 // per-flow strings.ToLower allocations.
+// Returns false for system-critical processes that must never be routed.
 func (m *Matcher) GetExePathLower(pid uint32) (exePath, exeLower, baseLower string, ok bool) {
 	if cp := m.getCached(pid); cp != nil {
 		return cp.exePath, cp.exeLower, cp.baseLower, true
@@ -104,10 +141,17 @@ func (m *Matcher) GetExePathLower(pid uint32) (exePath, exeLower, baseLower stri
 
 	lower := strings.ToLower(path)
 	base := filepath.Base(lower)
+
+	// Never route system-critical processes through VPN tunnels.
+	if IsSystemProcess(base) {
+		return "", "", "", false
+	}
+
 	cp := &cachedPath{
 		exePath:   path,
 		exeLower:  lower,
 		baseLower: base,
+		cachedAt:  time.Now(),
 	}
 
 	m.mu.Lock()
@@ -127,11 +171,14 @@ func (m *Matcher) GetExePathLower(pid uint32) (exePath, exeLower, baseLower stri
 	return path, lower, base, true
 }
 
-// getCached returns the cached entry for a PID, or nil on miss.
+// getCached returns the cached entry for a PID, or nil on miss or TTL expiry.
 func (m *Matcher) getCached(pid uint32) *cachedPath {
 	m.mu.RLock()
 	cp := m.cache[pid]
 	m.mu.RUnlock()
+	if cp != nil && time.Since(cp.cachedAt) > cacheTTL {
+		return nil // expired — force re-verification
+	}
 	return cp
 }
 
