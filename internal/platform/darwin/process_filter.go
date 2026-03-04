@@ -358,6 +358,12 @@ func (f *ProcessFilter) PermitDirectIPs(ips []netip.Addr) error {
 // RemoveDirectIPs is a no-op on macOS.
 func (f *ProcessFilter) RemoveDirectIPs(ips []netip.Addr) {}
 
+// PermitVirtualAdapters is a no-op on macOS (no Hyper-V/Docker vEthernet adapters).
+func (f *ProcessFilter) PermitVirtualAdapters() error { return nil }
+
+// RemoveVirtualAdapterPermits is a no-op on macOS.
+func (f *ProcessFilter) RemoveVirtualAdapterPermits() {}
+
 // --- Cleanup ---
 
 // Close flushes all PF anchor rules, restores original pf.conf config,

@@ -203,6 +203,7 @@ var (
 	procCreateUnicastIpAddressEntry     = modIPHlpAPI.NewProc("CreateUnicastIpAddressEntry")
 	procGetIpInterfaceEntry             = modIPHlpAPI.NewProc("GetIpInterfaceEntry")
 	procSetIpInterfaceEntry             = modIPHlpAPI.NewProc("SetIpInterfaceEntry")
+	procConvertInterfaceIndexToLuid     = modIPHlpAPI.NewProc("ConvertInterfaceIndexToLuid")
 )
 
 // MIB_UNICASTIPADDRESS_ROW (simplified for IPv4).

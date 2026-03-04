@@ -268,3 +268,71 @@ func buildUDPPacket(srcIP, dstIP [4]byte, srcPort, dstPort uint16, payload []byt
 
 	return pkt
 }
+
+// buildUDPPacketBuf is like buildUDPPacket but writes into a caller-provided buffer
+// to avoid per-packet heap allocation. buf must have capacity >= 28+len(payload).
+// Returns the sub-slice of buf containing the assembled packet.
+func buildUDPPacketBuf(buf []byte, srcIP, dstIP [4]byte, srcPort, dstPort uint16, payload []byte) []byte {
+	const ipHdrLen = 20
+	const udpHdrLen = 8
+	totalLen := ipHdrLen + udpHdrLen + len(payload)
+
+	pkt := buf[:totalLen]
+
+	// === IPv4 header ===
+	pkt[0] = 0x45                                             // Version=4, IHL=5 (20 bytes)
+	pkt[1] = 0                                                // DSCP/ECN
+	binary.BigEndian.PutUint16(pkt[2:], uint16(totalLen))     // Total length
+	pkt[4] = 0                                                // Identification
+	pkt[5] = 0
+	pkt[6] = 0                                                // Flags/Fragment
+	pkt[7] = 0
+	pkt[8] = 64                                               // TTL
+	pkt[9] = protoUDP                                         // Protocol
+	pkt[10] = 0                                               // Checksum (zeroed before calc)
+	pkt[11] = 0
+	copy(pkt[12:16], srcIP[:])                                // Source IP
+	copy(pkt[16:20], dstIP[:])                                // Destination IP
+
+	// IP header checksum.
+	var ipSum uint32
+	for i := 0; i < ipHdrLen; i += 2 {
+		ipSum += uint32(binary.BigEndian.Uint16(pkt[i:]))
+	}
+	binary.BigEndian.PutUint16(pkt[10:], ^checksumFold(ipSum))
+
+	// === UDP header ===
+	binary.BigEndian.PutUint16(pkt[ipHdrLen:], srcPort)
+	binary.BigEndian.PutUint16(pkt[ipHdrLen+2:], dstPort)
+	binary.BigEndian.PutUint16(pkt[ipHdrLen+4:], uint16(udpHdrLen+len(payload)))
+	pkt[ipHdrLen+6] = 0 // UDP checksum zeroed before calculation
+	pkt[ipHdrLen+7] = 0
+
+	// === Payload ===
+	copy(pkt[ipHdrLen+udpHdrLen:], payload)
+
+	// === UDP checksum (pseudo-header + header + payload) ===
+	var udpSum uint32
+	// Pseudo-header: srcIP, dstIP, zero, protocol, UDP length.
+	udpSum += uint32(binary.BigEndian.Uint16(srcIP[:2]))
+	udpSum += uint32(binary.BigEndian.Uint16(srcIP[2:]))
+	udpSum += uint32(binary.BigEndian.Uint16(dstIP[:2]))
+	udpSum += uint32(binary.BigEndian.Uint16(dstIP[2:]))
+	udpSum += uint32(protoUDP)
+	udpLen := uint16(udpHdrLen + len(payload))
+	udpSum += uint32(udpLen)
+	// UDP header + payload (checksum field is 0 during calculation).
+	for i := ipHdrLen; i+1 < totalLen; i += 2 {
+		udpSum += uint32(binary.BigEndian.Uint16(pkt[i:]))
+	}
+	if totalLen%2 == 1 {
+		udpSum += uint32(pkt[totalLen-1]) << 8
+	}
+	ck := ^checksumFold(udpSum)
+	if ck == 0 {
+		ck = 0xFFFF // RFC 768: checksum 0 means "no checksum", use 0xFFFF instead.
+	}
+	binary.BigEndian.PutUint16(pkt[ipHdrLen+6:], ck)
+
+	return pkt
+}

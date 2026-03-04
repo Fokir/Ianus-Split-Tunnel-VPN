@@ -31,6 +31,10 @@ func NewPlatform() *platform.Platform {
 		NewInterfaceBinder: func() platform.InterfaceBinder { return &InterfaceBinder{} },
 		Notifier:           &Notifier{},
 
+		NewNetworkMonitor: func(onChange func()) (platform.NetworkMonitor, error) {
+			return NewNetworkMonitor(onChange)
+		},
+
 		PreStartup: func() error {
 			return gateway.CleanupConflictingWFP()
 		},

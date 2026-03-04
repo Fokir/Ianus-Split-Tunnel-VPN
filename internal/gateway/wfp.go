@@ -4,10 +4,13 @@ package gateway
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"strings"
 	"sync"
+	"unsafe"
+
 	"awg-split-tunnel/internal/core"
 
 	"golang.org/x/sys/windows"
@@ -469,9 +472,10 @@ func (w *WFPManager) RemoveDirectIPs(ips []netip.Addr) {
 
 // Special keys for WFP rules.
 const (
-	wfpDNSBlockKey      = "__dns_block__"
-	wfpDNSPermitSelfKey = "__dns_self_permit__"
-	wfpDefaultBlockKey  = "__default_block__"
+	wfpDNSBlockKey            = "__dns_block__"
+	wfpDNSPermitSelfKey       = "__dns_self_permit__"
+	wfpDefaultBlockKey        = "__default_block__"
+	wfpVirtualAdapterKey      = "__virtual_adapter__"
 )
 
 // BlockDNSOnInterface adds WFP rules to block DNS (UDP/TCP port 53) on a
@@ -796,6 +800,161 @@ func (w *WFPManager) DisableDefaultBlock() {
 	core.Log.Debugf("WFP", "Default block disabled")
 }
 
+// PermitVirtualAdapters discovers Hyper-V, WSL2, and Docker virtual network
+// adapters and adds WFP PERMIT rules (weight 1500) so their traffic bypasses
+// the default block and per-process BLOCK rules. This prevents the VPN from
+// breaking containerized networking.
+//
+// Call after EnableDefaultBlock and on network changes (NetworkMonitor callback).
+func (w *WFPManager) PermitVirtualAdapters() error {
+	luids, names := discoverVirtualAdapters(w.tunLUID)
+	if len(luids) == 0 {
+		return nil
+	}
+
+	// Remove stale rules before re-adding.
+	w.removeRulesByKey(wfpVirtualAdapterKey)
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	var ruleIDs []wf.RuleID
+
+	for i, luid := range luids {
+		for _, ds := range dualStackLayers {
+			// Permit outbound on virtual adapter.
+			connectID := w.nextRuleID()
+			if err := w.session.AddRule(&wf.Rule{
+				ID:       connectID,
+				Name:     fmt.Sprintf("AWG permit vAdapter connect: %s%s", names[i], ds.tag),
+				Layer:    ds.connect,
+				Sublayer: awgSublayerID,
+				Weight:   1500,
+				Conditions: []*wf.Match{
+					{
+						Field: wf.FieldIPLocalInterface,
+						Op:    wf.MatchTypeEqual,
+						Value: luid,
+					},
+				},
+				Action: wf.ActionPermit,
+			}); err != nil {
+				for _, id := range ruleIDs {
+					w.session.DeleteRule(id)
+				}
+				return fmt.Errorf("[WFP] permit vAdapter connect %s%s: %w", names[i], ds.tag, err)
+			}
+			ruleIDs = append(ruleIDs, connectID)
+
+			// Permit inbound on virtual adapter.
+			recvID := w.nextRuleID()
+			if err := w.session.AddRule(&wf.Rule{
+				ID:       recvID,
+				Name:     fmt.Sprintf("AWG permit vAdapter recv: %s%s", names[i], ds.tag),
+				Layer:    ds.recv,
+				Sublayer: awgSublayerID,
+				Weight:   1500,
+				Conditions: []*wf.Match{
+					{
+						Field: wf.FieldIPLocalInterface,
+						Op:    wf.MatchTypeEqual,
+						Value: luid,
+					},
+				},
+				Action: wf.ActionPermit,
+			}); err != nil {
+				for _, id := range ruleIDs {
+					w.session.DeleteRule(id)
+				}
+				return fmt.Errorf("[WFP] permit vAdapter recv %s%s: %w", names[i], ds.tag, err)
+			}
+			ruleIDs = append(ruleIDs, recvID)
+		}
+	}
+
+	w.rules[wfpVirtualAdapterKey] = ruleIDs
+	core.Log.Infof("WFP", "Permitted %d virtual adapters (%d rules): %v", len(luids), len(ruleIDs), names)
+	return nil
+}
+
+// RemoveVirtualAdapterPermits removes WFP rules for virtual adapters.
+func (w *WFPManager) RemoveVirtualAdapterPermits() {
+	w.removeRulesByKey(wfpVirtualAdapterKey)
+}
+
+// discoverVirtualAdapters enumerates network interfaces and returns LUIDs and
+// names of Hyper-V, WSL2, Docker, and VMware virtual adapters. The TUN adapter
+// LUID is excluded.
+func discoverVirtualAdapters(tunLUID uint64) (luids []uint64, names []string) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		core.Log.Warnf("WFP", "Failed to enumerate interfaces for virtual adapter detection: %v", err)
+		return nil, nil
+	}
+
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue // skip down interfaces
+		}
+
+		name := iface.Name
+		nameLower := strings.ToLower(name)
+
+		if !isVirtualAdapterName(nameLower) {
+			continue
+		}
+
+		luid, err := convertInterfaceIndexToLuid(uint32(iface.Index))
+		if err != nil {
+			core.Log.Warnf("WFP", "Failed to get LUID for %s (index %d): %v", name, iface.Index, err)
+			continue
+		}
+
+		if luid == tunLUID {
+			continue // skip our own TUN adapter
+		}
+
+		luids = append(luids, luid)
+		names = append(names, name)
+	}
+	return
+}
+
+// isVirtualAdapterName returns true if the interface name matches known
+// virtualization adapter patterns (Hyper-V, Docker, WSL2, VMware).
+func isVirtualAdapterName(nameLower string) bool {
+	// Hyper-V / WSL2 / Docker Desktop virtual switches.
+	if strings.Contains(nameLower, "vethernet") {
+		return true
+	}
+	// Docker internal networks.
+	if strings.Contains(nameLower, "docker") {
+		return true
+	}
+	// VMware virtual adapters.
+	if strings.Contains(nameLower, "vmnet") || strings.Contains(nameLower, "vmware") {
+		return true
+	}
+	// VirtualBox host-only / bridged adapters.
+	if strings.Contains(nameLower, "virtualbox") || strings.Contains(nameLower, "vboxnet") {
+		return true
+	}
+	return false
+}
+
+// convertInterfaceIndexToLuid converts a network interface index to its LUID.
+func convertInterfaceIndexToLuid(ifIndex uint32) (uint64, error) {
+	var luid uint64
+	r, _, _ := procConvertInterfaceIndexToLuid.Call(
+		uintptr(ifIndex),
+		uintptr(unsafe.Pointer(&luid)),
+	)
+	if r != 0 {
+		return 0, fmt.Errorf("ConvertInterfaceIndexToLuid: error %d", r)
+	}
+	return luid, nil
+}
+
 // UnblockAllProcesses removes all per-process WFP rules (but not IPv6, DNS,
 // default block, or bypass rules). Used when deactivating the gateway so that
 // previously blocked apps can reach the real NIC directly.
@@ -804,7 +963,7 @@ func (w *WFPManager) UnblockAllProcesses() {
 	var toDelete []wf.RuleID
 	for key, ids := range w.rules {
 		switch key {
-		case "__ipv6_block__", wfpDNSBlockKey, wfpDNSPermitSelfKey, wfpDefaultBlockKey:
+		case "__ipv6_block__", wfpDNSBlockKey, wfpDNSPermitSelfKey, wfpDefaultBlockKey, wfpVirtualAdapterKey:
 			continue // keep these
 		}
 		toDelete = append(toDelete, ids...)

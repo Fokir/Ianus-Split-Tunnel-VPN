@@ -77,6 +77,12 @@ type ProcessFilter interface {
 	EnableDefaultBlock() error
 	// DisableDefaultBlock removes the default block rules.
 	DisableDefaultBlock()
+	// PermitVirtualAdapters discovers Hyper-V/WSL2/Docker virtual adapters
+	// and adds PERMIT rules so their traffic bypasses the default block.
+	// No-op on platforms without virtualization adapters.
+	PermitVirtualAdapters() error
+	// RemoveVirtualAdapterPermits removes previously added virtual adapter permits.
+	RemoveVirtualAdapterPermits()
 	// Close tears down the filter session (rules auto-removed on Windows).
 	Close() error
 }

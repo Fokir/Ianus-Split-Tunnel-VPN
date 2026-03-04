@@ -19,6 +19,15 @@ import (
 // DirectTunnelID is the special tunnel ID for unmatched traffic routed via real NIC.
 const DirectTunnelID = "__direct__"
 
+// packetPool reuses maxPacketSize buffers for packet assembly (DNS hijack, etc.).
+// Stored as *[]byte to avoid interface allocation on Put.
+var packetPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, maxPacketSize)
+		return &b
+	},
+}
+
 // TUNRouter reads packets from the TUN adapter and performs:
 // - Process identification (platform-specific PID lookup)
 // - Rule matching via RuleEngine
@@ -754,12 +763,16 @@ func (r *TUNRouter) hijackDNS(pkt []byte, m pktMeta) {
 	if udpPayloadOff >= len(pkt) {
 		return
 	}
-	query := make([]byte, len(pkt)-udpPayloadOff)
-	copy(query, pkt[udpPayloadOff:])
 
-	if len(query) < 12 {
+	queryLen := len(pkt) - udpPayloadOff
+	if queryLen < 12 {
 		return // too small for DNS header
 	}
+
+	// Copy query into a pooled buffer (pkt is reused by packetLoop).
+	qBufPtr := packetPool.Get().(*[]byte)
+	query := (*qBufPtr)[:queryLen]
+	copy(query, pkt[udpPayloadOff:])
 
 	srcIP := m.srcIP
 	srcPort := m.srcP
@@ -769,6 +782,7 @@ func (r *TUNRouter) hijackDNS(pkt []byte, m pktMeta) {
 	case r.dnsHijackSem <- struct{}{}:
 		go func() {
 			defer func() { <-r.dnsHijackSem }()
+			defer packetPool.Put(qBufPtr)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -781,11 +795,14 @@ func (r *TUNRouter) hijackDNS(pkt []byte, m pktMeta) {
 			// Build response: src=originalDst:53, dst=originalSrc:originalSrcPort.
 			// Using the original destination IP as source ensures the client
 			// accepts the response (it expects a reply from the server it queried).
-			respPkt := buildUDPPacket(dstIP, srcIP, 53, srcPort, resp)
+			pBufPtr := packetPool.Get().(*[]byte)
+			respPkt := buildUDPPacketBuf((*pBufPtr)[:cap(*pBufPtr)], dstIP, srcIP, 53, srcPort, resp)
 			r.writePacket(respPkt)
+			packetPool.Put(pBufPtr)
 		}()
 	default:
 		// Too many concurrent DNS hijacks — drop (client will retry).
+		packetPool.Put(qBufPtr)
 	}
 }
 
