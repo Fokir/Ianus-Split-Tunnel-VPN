@@ -172,17 +172,21 @@ type FlowTable struct {
 	wg sync.WaitGroup
 }
 
+// initialShardCapacity is the initial map capacity per shard, chosen to avoid
+// early rehashing while keeping memory usage reasonable.
+const initialShardCapacity = 64
+
 // NewFlowTable creates an initialized flow table.
 func NewFlowTable() *FlowTable {
 	ft := &FlowTable{}
 	for i := range ft.tcp {
-		ft.tcp[i].m = make(map[natKey]*NATEntry)
+		ft.tcp[i].m = make(map[natKey]*NATEntry, initialShardCapacity)
 	}
 	for i := range ft.udp {
-		ft.udp[i].m = make(map[natKey]*UDPNATEntry)
+		ft.udp[i].m = make(map[natKey]*UDPNATEntry, initialShardCapacity)
 	}
 	for i := range ft.raw {
-		ft.raw[i].m = make(map[rawFlowKey]*RawFlowEntry)
+		ft.raw[i].m = make(map[rawFlowKey]*RawFlowEntry, initialShardCapacity)
 	}
 	emptyTCP := make(map[uint16]struct{})
 	emptyUDP := make(map[uint16]struct{})
@@ -459,6 +463,8 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 		defer ft.wg.Done()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
+		// Preallocate candidates slice — reused across ticks to avoid GC churn.
+		candidates := make([]rawFlowKey, 0, 128)
 		for {
 			select {
 			case <-ctx.Done():
@@ -472,7 +478,7 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 				for i := range ft.raw {
 					shard := &ft.raw[i]
 					// Phase 1: collect candidates under read lock.
-					var candidates []rawFlowKey
+					candidates = candidates[:0]
 					shard.mu.RLock()
 					for key, entry := range shard.m {
 						if now-atomic.LoadInt64(&entry.LastActivity) > timeout {
@@ -498,7 +504,21 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 							}
 						}
 					}
+					// Shrink map if >75% was evicted to free unused memory.
+					remaining := len(shard.m)
 					shard.mu.Unlock()
+
+					if totalRemoved > 0 && remaining < maxEntriesPerShard/4 && remaining > 0 {
+						shard.mu.Lock()
+						if len(shard.m) < maxEntriesPerShard/4 {
+							newMap := make(map[rawFlowKey]*RawFlowEntry, len(shard.m)*2)
+							for k, v := range shard.m {
+								newMap[k] = v
+							}
+							shard.m = newMap
+						}
+						shard.mu.Unlock()
+					}
 				}
 
 				if elapsed := time.Since(cleanupStart); elapsed > 5*time.Millisecond {
@@ -626,6 +646,8 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 		defer ft.wg.Done()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
+		// Preallocate candidates slice — reused across ticks to avoid GC churn.
+		candidates := make([]natKey, 0, 128)
 		for {
 			select {
 			case <-ctx.Done():
@@ -639,7 +661,7 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 				for i := range ft.tcp {
 					shard := &ft.tcp[i]
 					// Phase 1: collect candidates under read lock.
-					var candidates []natKey
+					candidates = candidates[:0]
 					shard.mu.RLock()
 					for key, entry := range shard.m {
 						if now-atomic.LoadInt64(&entry.LastActivity) > timeout {
@@ -661,7 +683,21 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 							}
 						}
 					}
+					// Shrink map if load dropped significantly.
+					remaining := len(shard.m)
 					shard.mu.Unlock()
+
+					if totalRemoved > 0 && remaining < maxEntriesPerShard/4 && remaining > 0 {
+						shard.mu.Lock()
+						if len(shard.m) < maxEntriesPerShard/4 {
+							newMap := make(map[natKey]*NATEntry, len(shard.m)*2)
+							for k, v := range shard.m {
+								newMap[k] = v
+							}
+							shard.m = newMap
+						}
+						shard.mu.Unlock()
+					}
 				}
 
 				if elapsed := time.Since(cleanupStart); elapsed > 5*time.Millisecond {
@@ -682,6 +718,12 @@ func (ft *FlowTable) StartUDPCleanup(ctx context.Context) {
 		defer ft.wg.Done()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
+		// Preallocate candidates slice — reused across ticks to avoid GC churn.
+		type udpCandidate struct {
+			key     natKey
+			timeout int64
+		}
+		candidates := make([]udpCandidate, 0, 128)
 		for {
 			select {
 			case <-ctx.Done():
@@ -694,11 +736,7 @@ func (ft *FlowTable) StartUDPCleanup(ctx context.Context) {
 				for i := range ft.udp {
 					shard := &ft.udp[i]
 					// Phase 1: collect candidates under read lock.
-					type udpCandidate struct {
-						key     natKey
-						timeout int64
-					}
-					var candidates []udpCandidate
+					candidates = candidates[:0]
 					shard.mu.RLock()
 					for key, entry := range shard.m {
 						var timeout int64 = 120
@@ -724,7 +762,21 @@ func (ft *FlowTable) StartUDPCleanup(ctx context.Context) {
 							}
 						}
 					}
+					// Shrink map if load dropped significantly.
+					remaining := len(shard.m)
 					shard.mu.Unlock()
+
+					if totalRemoved > 0 && remaining < maxEntriesPerShard/4 && remaining > 0 {
+						shard.mu.Lock()
+						if len(shard.m) < maxEntriesPerShard/4 {
+							newMap := make(map[natKey]*UDPNATEntry, len(shard.m)*2)
+							for k, v := range shard.m {
+								newMap[k] = v
+							}
+							shard.m = newMap
+						}
+						shard.mu.Unlock()
+					}
 				}
 
 				if elapsed := time.Since(cleanupStart); elapsed > 5*time.Millisecond {

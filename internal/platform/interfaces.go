@@ -55,6 +55,11 @@ type ProcessFilter interface {
 	BlockDNSOnInterface(ifLUID uint64) error
 	// UnblockDNSOnInterface removes DNS blocking rules.
 	UnblockDNSOnInterface()
+	// BlockDoHDoTOnInterface blocks DNS-over-HTTPS (port 443) and DNS-over-TLS
+	// (port 853) to well-known public DNS resolvers on the given interface.
+	BlockDoHDoTOnInterface(ifLUID uint64) error
+	// UnblockDoHDoTOnInterface removes DoH/DoT blocking rules.
+	UnblockDoHDoTOnInterface()
 	// PermitDNSForSelf allows DNS traffic for the current process on the given interface.
 	PermitDNSForSelf(ifLUID uint64) error
 	// RemoveDNSPermitForSelf removes DNS self-permit rules.

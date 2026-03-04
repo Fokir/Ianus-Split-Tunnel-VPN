@@ -12,6 +12,16 @@ import (
 	"awg-split-tunnel/internal/core"
 )
 
+// maxUDPSessions limits the number of concurrent UDP sessions to prevent
+// goroutine exhaustion under UDP floods. Each session spawns a readFromTunnel
+// goroutine, so this bounds goroutine count.
+const maxUDPSessions = 4096
+
+// udpTunnelReadTimeout is the read deadline for tunnel connections.
+// If no data arrives within this duration, readFromTunnel exits to prevent
+// goroutine leaks from broken tunnel connections.
+const udpTunnelReadTimeout = 2*time.Minute + 30*time.Second
+
 // udpBufPool reuses 65535-byte buffers for tunnel read goroutines.
 var udpBufPool = sync.Pool{
 	New: func() any {
@@ -169,6 +179,15 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 		return
 	}
 
+	// Check session count before creating a new one.
+	up.sessionsMu.RLock()
+	sessionCount := len(up.sessions)
+	up.sessionsMu.RUnlock()
+	if sessionCount >= maxUDPSessions {
+		core.Log.Warnf("Proxy", "UDP session limit reached (%d), dropping datagram from %s", maxUDPSessions, clientAddr)
+		return
+	}
+
 	// Slow path: create new session (string allocation acceptable here).
 	addrStr := clientAddr.String()
 	info, ok := up.natLookup(addrStr)
@@ -238,12 +257,19 @@ func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, sk net
 		default:
 		}
 
+		// Set read deadline to prevent indefinite blocking on broken tunnel
+		// connections. The deadline is extended on each successful read.
+		sess.tunnelConn.SetReadDeadline(time.Now().Add(udpTunnelReadTimeout))
 		n, err := sess.tunnelConn.Read(buf)
 		if err != nil {
 			select {
 			case <-ctx.Done():
 			default:
-				core.Log.Errorf("Proxy", "UDP tunnel read error for %s: %v", sess.clientAddr, err)
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					core.Log.Debugf("Proxy", "UDP tunnel read timeout for %s, closing session", sess.clientAddr)
+				} else {
+					core.Log.Errorf("Proxy", "UDP tunnel read error for %s: %v", sess.clientAddr, err)
+				}
 			}
 			return
 		}
@@ -291,6 +317,9 @@ func (up *UDPProxy) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
+	// Preallocated slice reused across ticks to avoid GC churn.
+	stale := make([]netip.AddrPort, 0, 64)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -298,7 +327,7 @@ func (up *UDPProxy) cleanupLoop(ctx context.Context) {
 		case <-ticker.C:
 			now := up.nowSec.Load()
 			const timeout int64 = 120 // 2 minutes
-			var stale []netip.AddrPort
+			stale = stale[:0]
 
 			up.sessionsMu.RLock()
 			for sk, sess := range up.sessions {

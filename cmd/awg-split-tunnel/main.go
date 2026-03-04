@@ -112,6 +112,14 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		}
 	}
 
+	// === 4a2. Detect conflicting WFP callout drivers ===
+	if conflicts, err := gateway.DetectConflictingWFPCallouts(); err == nil && len(conflicts) > 0 {
+		for _, c := range conflicts {
+			core.Log.Warnf("WFP", "Conflicting callout driver detected: %q (%d callout rules, %d total) — may interfere with split tunneling",
+				c.Name, c.CalloutRules, c.TotalRules)
+		}
+	}
+
 	// === 4b. Block all IPv6 traffic ===
 	if err := procFilter.BlockAllIPv6(); err != nil {
 		core.Log.Warnf("Core", "Failed to block IPv6: %v", err)
@@ -280,6 +288,9 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 			if err := procFilter.BlockDNSOnInterface(realNIC.LUID); err != nil {
 				core.Log.Warnf("DNS", "Failed to add DNS leak protection: %v", err)
 			}
+			if err := procFilter.BlockDoHDoTOnInterface(realNIC.LUID); err != nil {
+				core.Log.Warnf("DNS", "Failed to add DoH/DoT leak protection: %v", err)
+			}
 			if err := procFilter.PermitDNSForSelf(realNIC.LUID); err != nil {
 				core.Log.Warnf("DNS", "Failed to add DNS self-permit: %v", err)
 			}
@@ -327,6 +338,7 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 
 		if hasDNSResolver {
 			procFilter.UnblockDNSOnInterface()
+			procFilter.UnblockDoHDoTOnInterface()
 			procFilter.RemoveDNSPermitForSelf()
 			if err := adapter.ClearDNS(); err != nil {
 				core.Log.Warnf("DNS", "Failed to clear TUN DNS: %v", err)
@@ -499,9 +511,13 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 				}
 				// Remove stale DNS leak protection rules (old NIC LUID) and re-add for new NIC.
 				procFilter.UnblockDNSOnInterface()
+				procFilter.UnblockDoHDoTOnInterface()
 				procFilter.RemoveDNSPermitForSelf()
 				if err := procFilter.BlockDNSOnInterface(newNIC.LUID); err != nil {
 					core.Log.Warnf("DNS", "Re-apply DNS leak protection: %v", err)
+				}
+				if err := procFilter.BlockDoHDoTOnInterface(newNIC.LUID); err != nil {
+					core.Log.Warnf("DNS", "Re-apply DoH/DoT leak protection: %v", err)
 				}
 				if err := procFilter.PermitDNSForSelf(newNIC.LUID); err != nil {
 					core.Log.Warnf("DNS", "Re-apply DNS self-permit: %v", err)

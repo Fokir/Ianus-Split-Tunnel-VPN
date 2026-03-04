@@ -203,6 +203,18 @@ func (f *ProcessFilter) UnblockDNSOnInterface() {
 	core.Log.Infof("PF", "DNS block rules removed")
 }
 
+// BlockDoHDoTOnInterface blocks DoH/DoT to known public DNS resolvers.
+// Not yet implemented on macOS — PF-based approach TBD.
+func (f *ProcessFilter) BlockDoHDoTOnInterface(ifLUID uint64) error {
+	core.Log.Debugf("PF", "DoH/DoT leak protection not yet implemented on macOS")
+	return nil
+}
+
+// UnblockDoHDoTOnInterface removes DoH/DoT blocking rules.
+func (f *ProcessFilter) UnblockDoHDoTOnInterface() {
+	// no-op on macOS
+}
+
 // PermitDNSForSelf allows our daemon process (running as root) to send DNS
 // queries on the physical NIC. Weight overrides BlockDNSOnInterface via PF
 // rule ordering (pass before block, both with "quick").

@@ -38,6 +38,10 @@ var knownConflictingServices = []struct {
 	{"WinDivert1.4", "WinDivert 1.4 Driver", "WinDivert 1.4 kernel driver intercepts network packets and conflicts with WFP rules"},
 	{"gunetfilter", "GearUP Net Filter", "GearUP Booster WFP driver intercepts packets and conflicts with TUN routing"},
 	{"hostpacket", "GearUP Host Packet", "GearUP Booster kernel packet driver conflicts with TUN routing"},
+	{"NetLimiter", "NetLimiter Service", "NetLimiter WFP callout driver conflicts with per-process traffic routing"},
+	{"GWFiltSrv", "GlassWire Firewall", "GlassWire WFP callout driver may conflict with TUN routing"},
+	{"simplewall", "simplewall", "simplewall WFP firewall may block VPN tunnel traffic"},
+	{"fortfw", "Fort Firewall", "Fort Firewall WFP driver may conflict with per-process routing"},
 }
 
 // knownConflictingProcesses lists user-space processes that use WinDivert or

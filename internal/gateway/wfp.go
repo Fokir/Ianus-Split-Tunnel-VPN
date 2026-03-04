@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"awg-split-tunnel/internal/core"
@@ -16,6 +17,20 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/tailscale/wf"
+)
+
+const (
+	// wfpTxnTimeout is the WFP session transaction timeout.
+	// If BFE (Base Filtering Engine) is busy, WFP operations wait up to this
+	// duration to acquire the global transaction lock before returning an error.
+	// Default WFP timeout is 15s; we use 5s for faster failure detection.
+	wfpTxnTimeout = 5 * time.Second
+
+	// wfpRetryDelay is the delay before retrying a failed WFP operation.
+	wfpRetryDelay = 100 * time.Millisecond
+
+	// wfpMaxRetries is the number of retry attempts for transient WFP failures.
+	wfpMaxRetries = 2
 )
 
 // WFP GUIDs for our provider and sublayer.
@@ -79,9 +94,10 @@ type WFPManager struct {
 // Safe to call even if no orphaned artifacts exist.
 func CleanupOrphanedOwnFilters() {
 	sess, err := wf.New(&wf.Options{
-		Name:        "AWG Orphan Cleanup",
-		Description: "Temporary session for removing orphaned AWG WFP artifacts",
-		Dynamic:     false, // deletions must persist after session closes
+		Name:                    "AWG Orphan Cleanup",
+		Description:             "Temporary session for removing orphaned AWG WFP artifacts",
+		Dynamic:                 false, // deletions must persist after session closes
+		TransactionStartTimeout: wfpTxnTimeout,
 	})
 	if err != nil {
 		core.Log.Warnf("WFP", "Open orphan cleanup session: %v", err)
@@ -136,36 +152,50 @@ func NewWFPManager(tunLUID uint64) (*WFPManager, error) {
 	// Clean up any orphaned WFP artifacts from a previous unclean shutdown.
 	CleanupOrphanedOwnFilters()
 	sess, err := wf.New(&wf.Options{
-		Name:        "AWG Split Tunnel",
-		Description: "Per-process interface blocking for split tunneling",
-		Dynamic:     true,
+		Name:                    "AWG Split Tunnel",
+		Description:             "Per-process interface blocking for split tunneling",
+		Dynamic:                 true,
+		TransactionStartTimeout: wfpTxnTimeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("[WFP] open session: %w", err)
 	}
 
-	// Register our provider.
-	if err := sess.AddProvider(&wf.Provider{
+	// Register our provider. If it already exists (e.g. another instance's
+	// dynamic session is still alive), delete it and retry once.
+	provider := &wf.Provider{
 		ID:          awgProviderID,
 		Name:        "AWG Split Tunnel",
 		Description: "AWG Split Tunnel WFP Provider",
-	}); err != nil {
-		sess.Close()
-		return nil, fmt.Errorf("[WFP] add provider: %w", err)
+	}
+	if err := sess.AddProvider(provider); err != nil {
+		core.Log.Warnf("WFP", "Provider already exists, deleting and retrying: %v", err)
+		_ = sess.DeleteProvider(awgProviderID)
+		if err := sess.AddProvider(provider); err != nil {
+			sess.Close()
+			return nil, fmt.Errorf("[WFP] add provider (retry): %w", err)
+		}
 	}
 
 	// Register our sublayer with maximum weight to ensure our rules take
 	// precedence over third-party WFP filters (antivirus, firewalls, etc.).
 	// Callout drivers bypass weight-based arbitration, so they must be
 	// detected and stopped separately.
-	if err := sess.AddSublayer(&wf.Sublayer{
+	// If the sublayer already exists (e.g. stale dynamic session from a crashed
+	// instance that BFE hasn't cleaned up yet), delete and retry once.
+	sublayer := &wf.Sublayer{
 		ID:       awgSublayerID,
 		Name:     "AWG Split Tunnel Rules",
 		Provider: awgProviderID,
 		Weight:   0xFFFF, // maximum priority
-	}); err != nil {
-		sess.Close()
-		return nil, fmt.Errorf("[WFP] add sublayer: %w", err)
+	}
+	if err := sess.AddSublayer(sublayer); err != nil {
+		core.Log.Warnf("WFP", "Sublayer already exists, deleting and retrying: %v", err)
+		_ = sess.DeleteSublayer(awgSublayerID)
+		if err := sess.AddSublayer(sublayer); err != nil {
+			sess.Close()
+			return nil, fmt.Errorf("[WFP] add sublayer (retry): %w — another instance may be running", err)
+		}
 	}
 
 	skipUDP, buildNum := isWin11_24H2OrLater()
@@ -181,6 +211,23 @@ func NewWFPManager(tunLUID uint64) (*WFPManager, error) {
 		rules:        make(map[string][]wf.RuleID),
 		directIPs:    make(map[[4]byte][]wf.RuleID),
 	}, nil
+}
+
+// addRuleWithRetry attempts to add a WFP rule, retrying on transient BFE
+// failures (e.g. lock contention). Returns the error from the last attempt.
+func (w *WFPManager) addRuleWithRetry(rule *wf.Rule) error {
+	var err error
+	for attempt := 0; attempt <= wfpMaxRetries; attempt++ {
+		if err = w.session.AddRule(rule); err == nil {
+			return nil
+		}
+		if attempt < wfpMaxRetries {
+			core.Log.Warnf("WFP", "AddRule %q attempt %d failed (retrying in %v): %v",
+				rule.Name, attempt+1, wfpRetryDelay, err)
+			time.Sleep(wfpRetryDelay)
+		}
+	}
+	return err
 }
 
 // EnsureBlocked idempotently ensures the process at exePath can only connect
@@ -257,7 +304,7 @@ func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 		}
 
 		connectRuleID := w.nextRuleID()
-		if err := w.session.AddRule(&wf.Rule{
+		if err := w.addRuleWithRetry(&wf.Rule{
 			ID:         connectRuleID,
 			Name:       fmt.Sprintf("AWG block connect%s: %s", ds.tag, key),
 			Layer:      ds.connect,
@@ -274,7 +321,7 @@ func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 		ruleIDs = append(ruleIDs, connectRuleID)
 
 		recvRuleID := w.nextRuleID()
-		if err := w.session.AddRule(&wf.Rule{
+		if err := w.addRuleWithRetry(&wf.Rule{
 			ID:         recvRuleID,
 			Name:       fmt.Sprintf("AWG block recv%s: %s", ds.tag, key),
 			Layer:      ds.recv,
@@ -473,10 +520,50 @@ func (w *WFPManager) RemoveDirectIPs(ips []netip.Addr) {
 // Special keys for WFP rules.
 const (
 	wfpDNSBlockKey            = "__dns_block__"
+	wfpDoHDoTBlockKey         = "__doh_dot_block__"
 	wfpDNSPermitSelfKey       = "__dns_self_permit__"
 	wfpDefaultBlockKey        = "__default_block__"
 	wfpVirtualAdapterKey      = "__virtual_adapter__"
 )
+
+// knownDoHDoTServers contains well-known public DNS resolver IPs that support
+// DNS-over-HTTPS (port 443) and DNS-over-TLS (port 853). Blocking these on
+// the physical NIC prevents DNS leaks via encrypted DNS protocols.
+var knownDoHDoTServers = []netip.Addr{
+	// Google Public DNS
+	netip.MustParseAddr("8.8.8.8"),
+	netip.MustParseAddr("8.8.4.4"),
+	netip.MustParseAddr("2001:4860:4860::8888"),
+	netip.MustParseAddr("2001:4860:4860::8844"),
+	// Cloudflare DNS
+	netip.MustParseAddr("1.1.1.1"),
+	netip.MustParseAddr("1.0.0.1"),
+	netip.MustParseAddr("2606:4700:4700::1111"),
+	netip.MustParseAddr("2606:4700:4700::1001"),
+	// Quad9
+	netip.MustParseAddr("9.9.9.9"),
+	netip.MustParseAddr("149.112.112.112"),
+	netip.MustParseAddr("2620:fe::fe"),
+	netip.MustParseAddr("2620:fe::9"),
+	// OpenDNS (Cisco)
+	netip.MustParseAddr("208.67.222.222"),
+	netip.MustParseAddr("208.67.220.220"),
+	netip.MustParseAddr("2620:119:35::35"),
+	netip.MustParseAddr("2620:119:53::53"),
+	// NextDNS
+	netip.MustParseAddr("45.90.28.0"),
+	netip.MustParseAddr("45.90.30.0"),
+	netip.MustParseAddr("2a07:a8c0::"),
+	netip.MustParseAddr("2a07:a8c1::"),
+	// AdGuard DNS
+	netip.MustParseAddr("94.140.14.14"),
+	netip.MustParseAddr("94.140.15.15"),
+	netip.MustParseAddr("2a10:50c0::ad1:ff"),
+	netip.MustParseAddr("2a10:50c0::ad2:ff"),
+	// CleanBrowsing
+	netip.MustParseAddr("185.228.168.9"),
+	netip.MustParseAddr("185.228.169.9"),
+}
 
 // BlockDNSOnInterface adds WFP rules to block DNS (UDP/TCP port 53) on a
 // specific interface (typically the physical NIC). This prevents ISP DPI from
@@ -507,7 +594,7 @@ func (w *WFPManager) BlockDNSOnInterface(ifLUID uint64) error {
 			}
 
 			ruleID := w.nextRuleID()
-			if err := w.session.AddRule(&wf.Rule{
+			if err := w.addRuleWithRetry(&wf.Rule{
 				ID:       ruleID,
 				Name:     fmt.Sprintf("AWG block DNS leak%s: %s:53 on LUID 0x%x", ds.tag, protoName, ifLUID),
 				Layer:    ds.connect,
@@ -551,6 +638,88 @@ func (w *WFPManager) BlockDNSOnInterface(ifLUID uint64) error {
 func (w *WFPManager) UnblockDNSOnInterface() {
 	w.removeRulesByKey(wfpDNSBlockKey)
 	core.Log.Infof("WFP", "DNS block rules removed")
+}
+
+// BlockDoHDoTOnInterface adds WFP rules to block DNS-over-HTTPS (port 443) and
+// DNS-over-TLS (port 853) to well-known public DNS resolvers on the specified
+// interface. This prevents DNS leaks via encrypted DNS protocols that bypass
+// the standard port-53 block.
+// Idempotent: no-op if already blocked.
+func (w *WFPManager) BlockDoHDoTOnInterface(ifLUID uint64) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if _, exists := w.rules[wfpDoHDoTBlockKey]; exists {
+		return nil // already blocked
+	}
+
+	var ruleIDs []wf.RuleID
+
+	// Ports to block: 443 (DoH) and 853 (DoT).
+	dohDotPorts := []uint16{443, 853}
+
+	for _, ds := range dualStackLayers {
+		for _, ip := range knownDoHDoTServers {
+			// Match IP version to layer: skip IPv6 addrs on V4 layer and vice versa.
+			if ip.Is4() && ds.tag == " V6" {
+				continue
+			}
+			if ip.Is6() && ds.tag == "" {
+				continue
+			}
+
+			prefix := netip.PrefixFrom(ip, ip.BitLen())
+
+			for _, port := range dohDotPorts {
+				// TCP only — DoH uses HTTPS (TCP:443), DoT uses TLS (TCP:853).
+				ruleID := w.nextRuleID()
+				if err := w.addRuleWithRetry(&wf.Rule{
+					ID:       ruleID,
+					Name:     fmt.Sprintf("AWG block DoH/DoT%s: TCP:%d to %s on LUID 0x%x", ds.tag, port, ip, ifLUID),
+					Layer:    ds.connect,
+					Sublayer: awgSublayerID,
+					Weight:   3000,
+					Conditions: []*wf.Match{
+						{
+							Field: wf.FieldIPProtocol,
+							Op:    wf.MatchTypeEqual,
+							Value: uint8(6), // TCP
+						},
+						{
+							Field: wf.FieldIPRemotePort,
+							Op:    wf.MatchTypeEqual,
+							Value: port,
+						},
+						{
+							Field: wf.FieldIPRemoteAddress,
+							Op:    wf.MatchTypeEqual,
+							Value: prefix,
+						},
+						{
+							Field: wf.FieldIPLocalInterface,
+							Op:    wf.MatchTypeEqual,
+							Value: ifLUID,
+						},
+					},
+					Action: wf.ActionBlock,
+				}); err != nil {
+					return fmt.Errorf("[WFP] block DoH/DoT%s TCP:%d to %s: %w", ds.tag, port, ip, err)
+				}
+				ruleIDs = append(ruleIDs, ruleID)
+			}
+		}
+	}
+
+	w.rules[wfpDoHDoTBlockKey] = ruleIDs
+	core.Log.Infof("WFP", "DoH/DoT blocked on interface LUID 0x%x (%d rules for %d resolvers, ports 443+853)",
+		ifLUID, len(ruleIDs), len(knownDoHDoTServers))
+	return nil
+}
+
+// UnblockDoHDoTOnInterface removes DoH/DoT blocking rules added by BlockDoHDoTOnInterface.
+func (w *WFPManager) UnblockDoHDoTOnInterface() {
+	w.removeRulesByKey(wfpDoHDoTBlockKey)
+	core.Log.Infof("WFP", "DoH/DoT block rules removed")
 }
 
 // PermitDNSForSelf adds WFP PERMIT rules allowing our own process to send DNS
@@ -1088,9 +1257,10 @@ func (w *WFPManager) Close() error {
 // Safe to call even if no conflicting artifacts exist.
 func CleanupConflictingWFP() error {
 	sess, err := wf.New(&wf.Options{
-		Name:        "AWG Conflicting WFP Cleanup",
-		Description: "Temporary session for removing conflicting WFP artifacts",
-		Dynamic:     false, // deletions must persist after session closes
+		Name:                    "AWG Conflicting WFP Cleanup",
+		Description:             "Temporary session for removing conflicting WFP artifacts",
+		Dynamic:                 false, // deletions must persist after session closes
+		TransactionStartTimeout: wfpTxnTimeout,
 	})
 	if err != nil {
 		return fmt.Errorf("[WFP] open cleanup session: %w", err)
@@ -1165,13 +1335,18 @@ func CleanupConflictingWFP() error {
 }
 
 // isConflictingWFPName checks whether a WFP object name/description belongs to
-// known conflicting software (WinDivert, GearUP Booster, etc.).
+// known conflicting software that installs WFP callout drivers or packet filters.
 func isConflictingWFPName(s string) bool {
 	lower := strings.ToLower(s)
 	return strings.Contains(lower, "windivert") ||
 		strings.Contains(lower, "gearup") ||
 		strings.Contains(lower, "gunetfilter") ||
-		strings.Contains(lower, "hostpacket")
+		strings.Contains(lower, "hostpacket") ||
+		strings.Contains(lower, "netlimiter") ||
+		strings.Contains(lower, "glasswire") ||
+		strings.Contains(lower, "simplewall") ||
+		strings.Contains(lower, "fort firewall") ||
+		strings.Contains(lower, "proxifier")
 }
 
 // providerIn checks whether pid is in the list.
@@ -1203,9 +1378,10 @@ type ConflictingWFPProvider struct {
 // no conflicts are found.
 func DetectConflictingWFPCallouts() ([]ConflictingWFPProvider, error) {
 	sess, err := wf.New(&wf.Options{
-		Name:        "AWG WFP Conflict Detection",
-		Description: "Temporary session for detecting conflicting WFP callouts",
-		Dynamic:     true,
+		Name:                    "AWG WFP Conflict Detection",
+		Description:             "Temporary session for detecting conflicting WFP callouts",
+		Dynamic:                 true,
+		TransactionStartTimeout: wfpTxnTimeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("[WFP] open detection session: %w", err)

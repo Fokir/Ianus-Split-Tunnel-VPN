@@ -85,8 +85,21 @@ func (p *Provider) Connect(ctx context.Context) error {
 		p.adapterIP = localAddresses[0]
 	}
 
-	// 3. Create userspace TUN via netstack (no real Wintun adapter).
-	tunDev, tnet, err := netstack.CreateNetTUN(localAddresses, parsed.DNSServers, parsed.MTU)
+	// 3. Validate and clamp MTU to safe range for netstack.
+	mtu := parsed.MTU
+	if mtu < 576 {
+		core.Log.Warnf("AWG", "MTU %d too small, clamping to 576", mtu)
+		mtu = 576
+	} else if mtu > 1500 {
+		core.Log.Warnf("AWG", "MTU %d exceeds 1500, clamping to 1500", mtu)
+		mtu = 1500
+	}
+
+	// Create userspace TUN via netstack (no real Wintun adapter).
+	// The netstack library applies optimized TCP settings internally:
+	// SACK enabled, CUBIC congestion control, 4MB default / 8MB max TCP buffers,
+	// and automatic receive buffer tuning.
+	tunDev, tnet, err := netstack.CreateNetTUN(localAddresses, parsed.DNSServers, mtu)
 	if err != nil {
 		p.state = core.TunnelStateError
 		return fmt.Errorf("[AWG] create netstack TUN: %w", err)
@@ -114,7 +127,7 @@ func (p *Provider) Connect(ctx context.Context) error {
 	p.tnet = tnet
 	p.peerEndpoints = parsed.PeerEndpoints
 	p.state = core.TunnelStateUp
-	core.Log.Infof("AWG", "Tunnel %q is UP (ip=%s, mtu=%d)", p.name, p.adapterIP, parsed.MTU)
+	core.Log.Infof("AWG", "Tunnel %q is UP (ip=%s, mtu=%d)", p.name, p.adapterIP, mtu)
 	return nil
 }
 

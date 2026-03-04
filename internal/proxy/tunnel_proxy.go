@@ -166,11 +166,14 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 		}
 	}()
 
-	// Tune client-side loopback socket: disable Nagle, enlarge buffers.
+	// Tune client-side loopback socket: disable Nagle, enlarge buffers,
+	// enable keepalive to detect dead peers and prevent zombie goroutines.
 	if tc, ok := clientConn.(*net.TCPConn); ok {
 		tc.SetNoDelay(true)
 		tc.SetReadBuffer(sockBufSize)
 		tc.SetWriteBuffer(sockBufSize)
+		tc.SetKeepAlive(true)
+		tc.SetKeepAlivePeriod(30 * time.Second)
 	}
 
 	tp.trackConn(clientConn)
