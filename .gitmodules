@@ -28,3 +28,15 @@
 [submodule "refs/gopsutil"]
 	path = refs/gopsutil
 	url = https://github.com/shirou/gopsutil
+[submodule "refs/win-split-tunnel"]
+	path = refs/win-split-tunnel
+	url = https://github.com/mullvad/win-split-tunnel.git
+[submodule "refs/wireguard-windows"]
+	path = refs/wireguard-windows
+	url = https://github.com/WireGuard/wireguard-windows.git
+[submodule "refs/mullvadvpn-app"]
+	path = refs/mullvadvpn-app
+	url = https://github.com/mullvad/mullvadvpn-app.git
+[submodule "refs/noisysockets"]
+	path = refs/noisysockets
+	url = https://github.com/noisysockets/noisysockets.git
