@@ -88,6 +88,9 @@ type credentials struct {
 // Supports single-round (all fields in one form) and multi-round (2FA in
 // a separate form) authentication.
 func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentials, cid clientID) (*sessionInfo, error) {
+	core.Log.Infof("AnyConnect", "Client identity: UA=%q version=%q device=%q platform=%q",
+		cid.UserAgent, cid.Version, cid.DeviceType, cid.PlatformVer)
+
 	// Phase 1: init request.
 	// group-access tells Cisco ASA which tunnel group (connection profile) to use.
 	// Without it, the server may default to DefaultWEBVPNGroup which might not accept the user.
@@ -106,6 +109,7 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 			`</config-auth>`,
 		cid.Version, cid.DeviceType, cid.PlatformVer, cid.DeviceType, groupAccessXML, groupSelectXML)
 
+	core.Log.Infof("AnyConnect", "Init XML: %s", initXML)
 	result, err := doAuthPost(br, conn, host, "/", initXML, nil, cid)
 	if err != nil {
 		return nil, fmt.Errorf("init request: %w", err)
@@ -113,22 +117,29 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 	resp := result.config
 	cookies := result.cookies
 
-	// Log form fields from the server for debugging.
-	if resp.Auth != nil && resp.Auth.Form != nil {
-		for _, inp := range resp.Auth.Form.Inputs {
-			core.Log.Debugf("AnyConnect", "Init form field: name=%q type=%q label=%q value=%q",
-				inp.Name, inp.Type, inp.Label, inp.Value)
+	// Log init response details.
+	core.Log.Infof("AnyConnect", "Init response: type=%q", resp.Type)
+	if resp.Auth != nil {
+		core.Log.Infof("AnyConnect", "Auth element: id=%q title=%q message=%q error=%q",
+			resp.Auth.ID, resp.Auth.Title, resp.Auth.Message, resp.Auth.Error)
+		if resp.Auth.Form != nil {
+			core.Log.Infof("AnyConnect", "Form: action=%q method=%q fields=%d",
+				resp.Auth.Form.Action, resp.Auth.Form.Method, len(resp.Auth.Form.Inputs))
+			for _, inp := range resp.Auth.Form.Inputs {
+				core.Log.Infof("AnyConnect", "  Field: name=%q type=%q label=%q value=%q",
+					inp.Name, inp.Type, inp.Label, inp.Value)
+			}
 		}
 	}
-	if resp.Auth != nil && resp.Auth.Message != "" {
-		core.Log.Debugf("AnyConnect", "Init message: %s", resp.Auth.Message)
+	if resp.Error != "" {
+		core.Log.Warnf("AnyConnect", "Init error: %s", resp.Error)
 	}
 	if len(cookies) > 0 {
 		var names []string
 		for _, c := range cookies {
 			names = append(names, c.Name)
 		}
-		core.Log.Debugf("AnyConnect", "Cookies from server: %v", names)
+		core.Log.Infof("AnyConnect", "Cookies from server: %v", names)
 	}
 
 	action := "/"
@@ -142,13 +153,35 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 
 	// Phase 2: fill the form the server sent us.
 	authXML := buildFormReply(resp, creds, opaque, host, cid)
-	core.Log.Debugf("AnyConnect", "Auth reply XML: %s", authXML)
+	core.Log.Infof("AnyConnect", "Auth reply XML (credentials masked): %s", maskCredentials(authXML, creds))
 	result, err = doAuthPost(br, conn, host, action, authXML, cookies, cid)
 	if err != nil {
 		return nil, fmt.Errorf("auth request: %w", err)
 	}
 	resp = result.config
 	cookies = result.cookies
+	core.Log.Infof("AnyConnect", "Auth response: type=%q", resp.Type)
+	if resp.Auth != nil {
+		if resp.Auth.Error != "" {
+			core.Log.Warnf("AnyConnect", "Auth response error: %s", resp.Auth.Error)
+		}
+		if resp.Auth.Message != "" {
+			core.Log.Infof("AnyConnect", "Auth response message: %s", resp.Auth.Message)
+		}
+		if resp.Auth.Banner != "" {
+			core.Log.Infof("AnyConnect", "Auth response banner: %s", resp.Auth.Banner)
+		}
+		if resp.Auth.Form != nil {
+			core.Log.Infof("AnyConnect", "Auth response has form: action=%q fields=%d",
+				resp.Auth.Form.Action, len(resp.Auth.Form.Inputs))
+			for _, inp := range resp.Auth.Form.Inputs {
+				core.Log.Infof("AnyConnect", "  Field: name=%q type=%q label=%q", inp.Name, inp.Type, inp.Label)
+			}
+		}
+	}
+	if resp.Error != "" {
+		core.Log.Warnf("AnyConnect", "Auth response top-level error: %s", resp.Error)
+	}
 
 	// Multi-round: server may ask for more credentials (e.g. 2FA in a separate round).
 	const maxRounds = 5
@@ -156,6 +189,7 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 		if resp.Type != "auth-request" {
 			break
 		}
+		core.Log.Infof("AnyConnect", "Multi-round auth: round %d, type=%q", round+2, resp.Type)
 		if resp.Auth != nil && resp.Auth.Error != "" {
 			return nil, fmt.Errorf("auth error: %s", resp.Auth.Error)
 		}
@@ -171,13 +205,21 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 			action = resp.Auth.Form.Action
 		}
 
+		if resp.Auth != nil && resp.Auth.Form != nil {
+			for _, inp := range resp.Auth.Form.Inputs {
+				core.Log.Infof("AnyConnect", "  Round %d field: name=%q type=%q label=%q", round+2, inp.Name, inp.Type, inp.Label)
+			}
+		}
+
 		authXML = buildFormReply(resp, creds, opaque, host, cid)
+		core.Log.Infof("AnyConnect", "Round %d reply (masked): %s", round+2, maskCredentials(authXML, creds))
 		result, err = doAuthPost(br, conn, host, action, authXML, cookies, cid)
 		if err != nil {
 			return nil, fmt.Errorf("auth round %d: %w", round+2, err)
 		}
 		resp = result.config
 		cookies = result.cookies
+		core.Log.Infof("AnyConnect", "Round %d response: type=%q", round+2, resp.Type)
 	}
 
 	// Check for errors.
@@ -357,6 +399,8 @@ func doAuthPost(br *bufio.Reader, conn io.Writer, host, path, body string, cooki
 			"\r\n%s",
 			path, host, cid.UserAgent, cid.DeviceType, cookieHeader, len(body), body)
 
+		core.Log.Infof("AnyConnect", "POST %s (host=%s, body=%d bytes)", path, host, len(body))
+
 		if _, err := io.WriteString(conn, reqStr); err != nil {
 			return nil, fmt.Errorf("write request: %w", err)
 		}
@@ -365,6 +409,9 @@ func doAuthPost(br *bufio.Reader, conn io.Writer, host, path, body string, cooki
 		if err != nil {
 			return nil, fmt.Errorf("read response: %w", err)
 		}
+
+		core.Log.Infof("AnyConnect", "Response: HTTP %d, Content-Type=%q",
+			resp.StatusCode, resp.Header.Get("Content-Type"))
 
 		// Handle redirects (301, 302, 303, 307, 308).
 		if isRedirect(resp.StatusCode) {
@@ -400,6 +447,9 @@ func doAuthPost(br *bufio.Reader, conn io.Writer, host, path, body string, cooki
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
+			errBody, _ := io.ReadAll(resp.Body)
+			core.Log.Warnf("AnyConnect", "HTTP %d error, body (%d bytes): %s",
+				resp.StatusCode, len(errBody), string(errBody))
 			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 		}
 
@@ -408,7 +458,7 @@ func doAuthPost(br *bufio.Reader, conn io.Writer, host, path, body string, cooki
 			return nil, fmt.Errorf("read body: %w", err)
 		}
 
-		core.Log.Debugf("AnyConnect", "Response (HTTP %d, %d bytes): %s", resp.StatusCode, len(respBody), string(respBody))
+		core.Log.Infof("AnyConnect", "Response body (%d bytes): %s", len(respBody), string(respBody))
 
 		var ca configAuth
 		if err := xml.Unmarshal(respBody, &ca); err != nil {
@@ -467,4 +517,16 @@ func xmlEscape(s string) string {
 		return s
 	}
 	return b.String()
+}
+
+// maskCredentials replaces sensitive values in XML with "***" for safe logging.
+func maskCredentials(xmlStr string, creds credentials) string {
+	masked := xmlStr
+	if creds.Password != "" {
+		masked = strings.ReplaceAll(masked, xmlEscape(creds.Password), "***")
+	}
+	if creds.OTPCode != "" {
+		masked = strings.ReplaceAll(masked, xmlEscape(creds.OTPCode), "***")
+	}
+	return masked
 }
