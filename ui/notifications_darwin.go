@@ -95,6 +95,24 @@ func (nm *NotificationManager) NotifyReconnected(tunnelID string) {
 	go nm.send("Переподключено", "Туннель "+tunnelID+" восстановлен")
 }
 
+// NotifyAuthRequired sends a notification that a tunnel needs re-authentication (OTP).
+func (nm *NotificationManager) NotifyAuthRequired(tunnelID string) {
+	nm.mu.Lock()
+	if !nm.enabled || !nm.tunnelErr {
+		nm.mu.Unlock()
+		return
+	}
+	key := "auth_required:" + tunnelID
+	if time.Since(nm.lastNotif[key]) < nm.throttle {
+		nm.mu.Unlock()
+		return
+	}
+	nm.lastNotif[key] = time.Now()
+	nm.mu.Unlock()
+
+	go nm.send("Требуется авторизация", "Сессия "+tunnelID+" истекла. Введите OTP код для повторного подключения.")
+}
+
 // NotifyUpdateAvailable sends a notification about a new version.
 func (nm *NotificationManager) NotifyUpdateAvailable(version string) {
 	nm.mu.Lock()

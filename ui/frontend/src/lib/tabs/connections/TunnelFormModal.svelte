@@ -24,7 +24,7 @@
   // HTTP Proxy
   let httpServer = '', httpPort = '8080', httpUsername = '', httpPassword = '', httpTls = false, httpTlsSkipVerify = false;
   // AnyConnect
-  let acServer = '', acPort = '443', acUsername = '', acPassword = '', acGroup = '', acTlsSkipVerify = false;
+  let acServer = '', acPort = '443', acUsername = '', acPassword = '', acGroup = '', acTlsSkipVerify = false, acUserAgent = '';
   // VLESS
   let vlessAddress = '', vlessPort = '443', vlessUuid = '', vlessFlow = 'xtls-rprx-vision';
   let vlessSecurity = 'reality', vlessNetwork = 'tcp';
@@ -47,7 +47,7 @@
     modalName = ''; modalSaving = false; modalError = '';
     socks5Server = ''; socks5Port = '1080'; socks5Username = ''; socks5Password = ''; socks5UdpEnabled = true;
     httpServer = ''; httpPort = '8080'; httpUsername = ''; httpPassword = ''; httpTls = false; httpTlsSkipVerify = false;
-    acServer = ''; acPort = '443'; acUsername = ''; acPassword = ''; acGroup = ''; acTlsSkipVerify = false;
+    acServer = ''; acPort = '443'; acUsername = ''; acPassword = ''; acGroup = ''; acTlsSkipVerify = false; acUserAgent = '';
     vlessAddress = ''; vlessPort = '443'; vlessUuid = ''; vlessFlow = 'xtls-rprx-vision';
     vlessSecurity = 'reality'; vlessNetwork = 'tcp';
     vlessRealityPublicKey = ''; vlessRealityShortId = ''; vlessRealityServerName = ''; vlessRealityFingerprint = 'chrome';
@@ -82,6 +82,7 @@
       acPassword = s.password || '';
       acGroup = s.group || '';
       acTlsSkipVerify = s.tls_skip_verify === 'true';
+      acUserAgent = s.user_agent || '';
     } else if (protocol === 'vless') {
       vlessAddress = s.address || '';
       vlessPort = s.port || '443';
@@ -152,6 +153,7 @@
           username: acUsername, password: acPassword,
           group: acGroup,
           tls_skip_verify: acTlsSkipVerify ? 'true' : 'false',
+          user_agent: acUserAgent,
         };
       } else if (protocol === 'vless') {
         if (!vlessAddress) { modalError = $t('connections.serverRequired'); modalSaving = false; return; }
@@ -220,7 +222,7 @@
         bind:username={httpUsername} bind:password={httpPassword} bind:tls={httpTls} bind:tlsSkipVerify={httpTlsSkipVerify} />
     {:else if protocol === 'anyconnect'}
       <AnyConnectForm bind:server={acServer} bind:port={acPort}
-        bind:username={acUsername} bind:password={acPassword} bind:group={acGroup} bind:tlsSkipVerify={acTlsSkipVerify} />
+        bind:username={acUsername} bind:password={acPassword} bind:group={acGroup} bind:tlsSkipVerify={acTlsSkipVerify} bind:userAgent={acUserAgent} />
     {:else if protocol === 'vless'}
       <VlessForm bind:address={vlessAddress} bind:port={vlessPort} bind:uuid={vlessUuid}
         bind:flow={vlessFlow} bind:security={vlessSecurity} bind:network={vlessNetwork}

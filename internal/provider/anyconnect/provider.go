@@ -1,5 +1,3 @@
-//go:build windows
-
 package anyconnect
 
 import (
@@ -25,6 +23,8 @@ type Provider struct {
 	config Config
 	state  core.TunnelState
 	name   string
+
+	cid clientID // effective client identity (UA, version, device type)
 
 	adapterIP       netip.Addr
 	serverEndpoints []netip.AddrPort
@@ -64,6 +64,7 @@ func New(name string, cfg Config) (*Provider, error) {
 		name:   name,
 		config: cfg,
 		state:  core.TunnelStateDown,
+		cid:    resolveClientID(cfg.UserAgent),
 	}, nil
 }
 
@@ -194,7 +195,7 @@ func (p *Provider) Connect(ctx context.Context) error {
 		}
 		p.authParams = nil
 	}
-	sess, err := authenticate(br, tlsConn, p.config.Server, creds)
+	sess, err := authenticate(br, tlsConn, p.config.Server, creds, p.cid)
 	if err != nil {
 		tlsConn.Close()
 		p.state = core.TunnelStateError
@@ -203,7 +204,7 @@ func (p *Provider) Connect(ctx context.Context) error {
 	core.Log.Infof("AnyConnect", "Authentication successful")
 
 	// 4. Establish CSTP tunnel.
-	params, err := establishTunnel(br, tlsConn, p.config.Server, sess.Cookie)
+	params, err := establishTunnel(br, tlsConn, p.config.Server, sess.Cookie, p.cid)
 	if err != nil {
 		tlsConn.Close()
 		p.state = core.TunnelStateError

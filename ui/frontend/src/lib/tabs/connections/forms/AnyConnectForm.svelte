@@ -7,6 +7,7 @@
   export let password = '';
   export let group = '';
   export let tlsSkipVerify = false;
+  export let userAgent = '';
 </script>
 
 <div>
@@ -42,3 +43,8 @@
   <input type="checkbox" bind:checked={tlsSkipVerify} class="rounded border-zinc-600 bg-zinc-800 text-blue-500 focus:ring-blue-500" />
   {$t('connections.tlsSkipVerify')}
 </label>
+<div>
+  <label for="ac-ua" class="block text-xs font-medium text-zinc-400 mb-1">User-Agent <span class="text-zinc-500">({$t('connections.loginOptional')})</span></label>
+  <input id="ac-ua" type="text" bind:value={userAgent} placeholder="AnyConnect Windows 5.1.15.287"
+    class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none font-mono" />
+</div>

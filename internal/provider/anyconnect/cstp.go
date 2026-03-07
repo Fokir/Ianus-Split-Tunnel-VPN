@@ -1,5 +1,3 @@
-//go:build windows
-
 package anyconnect
 
 import (
@@ -68,7 +66,7 @@ type cstpConn struct {
 }
 
 // establishTunnel sends the CONNECT request and parses the response headers.
-func establishTunnel(br *bufio.Reader, conn io.Writer, host, cookie string) (*tunnelParams, error) {
+func establishTunnel(br *bufio.Reader, conn io.Writer, host, cookie string, cid clientID) (*tunnelParams, error) {
 	reqStr := fmt.Sprintf("CONNECT /CSCOSSLC/tunnel HTTP/1.1\r\n"+
 		"Host: %s\r\n"+
 		"User-Agent: %s\r\n"+
@@ -82,7 +80,7 @@ func establishTunnel(br *bufio.Reader, conn io.Writer, host, cookie string) (*tu
 		"X-Transcend-Version: 1\r\n"+
 		"X-Aggregate-Auth: 1\r\n"+
 		"\r\n",
-		host, userAgent, cookie, host)
+		host, cid.UserAgent, cookie, host)
 
 	if _, err := io.WriteString(conn, reqStr); err != nil {
 		return nil, fmt.Errorf("write CONNECT: %w", err)

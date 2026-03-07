@@ -1,5 +1,3 @@
-//go:build windows
-
 package anyconnect
 
 // Config holds AnyConnect provider configuration parsed from TunnelConfig.Settings.
@@ -11,4 +9,5 @@ type Config struct {
 	Password      string // Login password
 	Group         string // Connection profile/group (optional)
 	TLSSkipVerify bool   // Skip TLS certificate verification
+	UserAgent     string // Custom User-Agent override (empty = auto-detect)
 }

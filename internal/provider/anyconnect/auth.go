@@ -1,5 +1,3 @@
-//go:build windows
-
 package anyconnect
 
 import (
@@ -61,12 +59,8 @@ type sessionInfo struct {
 	Cookie string // webvpn session cookie
 }
 
-const (
-	userAgent   = "AnyConnect Windows 4.10.07061"
-	agentVer    = "4.10.07061"
-	deviceType  = "win"
-	platformVer = "10.0.19045"
-)
+// Platform-specific constants (userAgent, agentVer, deviceType, platformVer)
+// are defined in platform_windows.go and platform_darwin.go.
 
 // credentials holds all available auth values for form filling.
 type credentials struct {
@@ -80,7 +74,7 @@ type credentials struct {
 // HTTP connection. It dynamically parses server forms and fills fields.
 // Supports single-round (all fields in one form) and multi-round (2FA in
 // a separate form) authentication.
-func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentials) (*sessionInfo, error) {
+func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentials, cid clientID) (*sessionInfo, error) {
 	// Phase 1: init request.
 	// group-access tells Cisco ASA which tunnel group (connection profile) to use.
 	// Without it, the server may default to DefaultWEBVPNGroup which might not accept the user.
@@ -94,12 +88,12 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 		`<?xml version="1.0" encoding="UTF-8"?>`+
 			`<config-auth client="vpn" type="init" aggregate-auth-version="2">`+
 			`<version who="vpn">%s</version>`+
-			`<device-id device-type="%s" platform-version="%s">win</device-id>`+
+			`<device-id device-type="%s" platform-version="%s">%s</device-id>`+
 			`%s%s`+
 			`</config-auth>`,
-		agentVer, deviceType, platformVer, groupAccessXML, groupSelectXML)
+		cid.Version, cid.DeviceType, cid.PlatformVer, cid.DeviceType, groupAccessXML, groupSelectXML)
 
-	result, err := doAuthPost(br, conn, host, "/", initXML, nil)
+	result, err := doAuthPost(br, conn, host, "/", initXML, nil, cid)
 	if err != nil {
 		return nil, fmt.Errorf("init request: %w", err)
 	}
@@ -134,9 +128,9 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 	}
 
 	// Phase 2: fill the form the server sent us.
-	authXML := buildFormReply(resp, creds, opaque, host)
+	authXML := buildFormReply(resp, creds, opaque, host, cid)
 	core.Log.Debugf("AnyConnect", "Auth reply XML: %s", authXML)
-	result, err = doAuthPost(br, conn, host, action, authXML, cookies)
+	result, err = doAuthPost(br, conn, host, action, authXML, cookies, cid)
 	if err != nil {
 		return nil, fmt.Errorf("auth request: %w", err)
 	}
@@ -164,8 +158,8 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 			action = resp.Auth.Form.Action
 		}
 
-		authXML = buildFormReply(resp, creds, opaque, host)
-		result, err = doAuthPost(br, conn, host, action, authXML, cookies)
+		authXML = buildFormReply(resp, creds, opaque, host, cid)
+		result, err = doAuthPost(br, conn, host, action, authXML, cookies, cid)
 		if err != nil {
 			return nil, fmt.Errorf("auth round %d: %w", round+2, err)
 		}
@@ -197,12 +191,12 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 // buildFormReply inspects the server's form fields and fills them from creds.
 // It handles any combination: username+password, username+password+otp,
 // otp-only (second round), etc.
-func buildFormReply(resp *configAuth, creds credentials, opaque, host string) string {
+func buildFormReply(resp *configAuth, creds credentials, opaque, host string, cid clientID) string {
 	var sb strings.Builder
 	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
 	sb.WriteString(`<config-auth client="vpn" type="auth-reply" aggregate-auth-version="2">`)
-	sb.WriteString(fmt.Sprintf(`<version who="vpn">%s</version>`, agentVer))
-	sb.WriteString(fmt.Sprintf(`<device-id device-type="%s" platform-version="%s">win</device-id>`, deviceType, platformVer))
+	sb.WriteString(fmt.Sprintf(`<version who="vpn">%s</version>`, cid.Version))
+	sb.WriteString(fmt.Sprintf(`<device-id device-type="%s" platform-version="%s">%s</device-id>`, cid.DeviceType, cid.PlatformVer, cid.DeviceType))
 
 	if opaque != "" {
 		sb.WriteString(`<opaque is-for="sg">`)
@@ -319,7 +313,7 @@ type authPostResult struct {
 	cookies []*http.Cookie
 }
 
-func doAuthPost(br *bufio.Reader, conn io.Writer, host, path, body string, cookies []*http.Cookie) (*authPostResult, error) {
+func doAuthPost(br *bufio.Reader, conn io.Writer, host, path, body string, cookies []*http.Cookie, cid clientID) (*authPostResult, error) {
 	var cookieHeader string
 	if len(cookies) > 0 {
 		var parts []string
@@ -341,7 +335,7 @@ func doAuthPost(br *bufio.Reader, conn io.Writer, host, path, body string, cooki
 		"%s"+
 		"Content-Length: %d\r\n"+
 		"\r\n%s",
-		path, host, userAgent, deviceType, cookieHeader, len(body), body)
+		path, host, cid.UserAgent, cid.DeviceType, cookieHeader, len(body), body)
 
 	if _, err := io.WriteString(conn, reqStr); err != nil {
 		return nil, fmt.Errorf("write request: %w", err)
