@@ -25,6 +25,7 @@
   let httpServer = '', httpPort = '8080', httpUsername = '', httpPassword = '', httpTls = false, httpTlsSkipVerify = false;
   // AnyConnect
   let acServer = '', acPort = '443', acUsername = '', acPassword = '', acGroup = '', acTlsSkipVerify = false, acUserAgent = '';
+  let acClientCertMode = '', acClientCert = '', acClientKey = '';
   // VLESS
   let vlessAddress = '', vlessPort = '443', vlessUuid = '', vlessFlow = 'xtls-rprx-vision';
   let vlessSecurity = 'reality', vlessNetwork = 'tcp';
@@ -48,6 +49,7 @@
     socks5Server = ''; socks5Port = '1080'; socks5Username = ''; socks5Password = ''; socks5UdpEnabled = true;
     httpServer = ''; httpPort = '8080'; httpUsername = ''; httpPassword = ''; httpTls = false; httpTlsSkipVerify = false;
     acServer = ''; acPort = '443'; acUsername = ''; acPassword = ''; acGroup = ''; acTlsSkipVerify = false; acUserAgent = '';
+    acClientCertMode = ''; acClientCert = ''; acClientKey = '';
     vlessAddress = ''; vlessPort = '443'; vlessUuid = ''; vlessFlow = 'xtls-rprx-vision';
     vlessSecurity = 'reality'; vlessNetwork = 'tcp';
     vlessRealityPublicKey = ''; vlessRealityShortId = ''; vlessRealityServerName = ''; vlessRealityFingerprint = 'chrome';
@@ -83,6 +85,14 @@
       acGroup = s.group || '';
       acTlsSkipVerify = s.tls_skip_verify === 'true';
       acUserAgent = s.user_agent || '';
+      const cc = s.client_cert || '';
+      if (cc === 'auto') {
+        acClientCertMode = 'auto'; acClientCert = ''; acClientKey = '';
+      } else if (cc) {
+        acClientCertMode = 'file'; acClientCert = cc; acClientKey = s.client_key || '';
+      } else {
+        acClientCertMode = ''; acClientCert = ''; acClientKey = '';
+      }
     } else if (protocol === 'vless') {
       vlessAddress = s.address || '';
       vlessPort = s.port || '443';
@@ -155,6 +165,12 @@
           tls_skip_verify: acTlsSkipVerify ? 'true' : 'false',
           user_agent: acUserAgent,
         };
+        if (acClientCertMode === 'auto') {
+          settings.client_cert = 'auto';
+        } else if (acClientCertMode === 'file') {
+          settings.client_cert = acClientCert;
+          settings.client_key = acClientKey;
+        }
       } else if (protocol === 'vless') {
         if (!vlessAddress) { modalError = $t('connections.serverRequired'); modalSaving = false; return; }
         if (!vlessUuid) { modalError = $t('connections.uuidRequired'); modalSaving = false; return; }
@@ -222,7 +238,8 @@
         bind:username={httpUsername} bind:password={httpPassword} bind:tls={httpTls} bind:tlsSkipVerify={httpTlsSkipVerify} />
     {:else if protocol === 'anyconnect'}
       <AnyConnectForm bind:server={acServer} bind:port={acPort}
-        bind:username={acUsername} bind:password={acPassword} bind:group={acGroup} bind:tlsSkipVerify={acTlsSkipVerify} bind:userAgent={acUserAgent} />
+        bind:username={acUsername} bind:password={acPassword} bind:group={acGroup} bind:tlsSkipVerify={acTlsSkipVerify} bind:userAgent={acUserAgent}
+        bind:clientCertMode={acClientCertMode} bind:clientCert={acClientCert} bind:clientKey={acClientKey} />
     {:else if protocol === 'vless'}
       <VlessForm bind:address={vlessAddress} bind:port={vlessPort} bind:uuid={vlessUuid}
         bind:flow={vlessFlow} bind:security={vlessSecurity} bind:network={vlessNetwork}

@@ -629,6 +629,8 @@ func CreateProvider(cfg core.TunnelConfig) (provider.TunnelProvider, error) {
 			Group:         getStringSetting(cfg.Settings, "group", ""),
 			TLSSkipVerify: getBoolSetting(cfg.Settings, "tls_skip_verify", false),
 			UserAgent:     getStringSetting(cfg.Settings, "user_agent", ""),
+			ClientCert:    getStringSetting(cfg.Settings, "client_cert", ""),
+			ClientKey:     getStringSetting(cfg.Settings, "client_key", ""),
 		}
 		return anyconnect.New(cfg.Name, acCfg)
 	default:

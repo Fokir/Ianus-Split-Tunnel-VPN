@@ -10,4 +10,6 @@ type Config struct {
 	Group         string // Connection profile/group (optional)
 	TLSSkipVerify bool   // Skip TLS certificate verification
 	UserAgent     string // Custom User-Agent override (empty = auto-detect)
+	ClientCert    string // Path to PEM client certificate (for cert-based auth)
+	ClientKey     string // Path to PEM client private key (for cert-based auth)
 }

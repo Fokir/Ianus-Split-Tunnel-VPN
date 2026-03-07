@@ -33,8 +33,15 @@ type configAuth struct {
 	Opaque  *opaqueElement `xml:"opaque"`
 	Error   string         `xml:"error"`
 
+	// Present when the server requests client certificate authentication.
+	ClientCertRequest *clientCertRequest `xml:"client-cert-request"`
+
 	// Fields present in "complete" response.
 	SessionToken string `xml:"session-token"`
+}
+
+type clientCertRequest struct {
+	XMLName xml.Name `xml:"client-cert-request"`
 }
 
 type authElement struct {
@@ -48,10 +55,11 @@ type authElement struct {
 }
 
 type authForm struct {
-	XMLName xml.Name    `xml:"form"`
-	Action  string      `xml:"action,attr"`
-	Method  string      `xml:"method,attr"`
-	Inputs  []formInput `xml:"input"`
+	XMLName xml.Name     `xml:"form"`
+	Action  string       `xml:"action,attr"`
+	Method  string       `xml:"method,attr"`
+	Inputs  []formInput  `xml:"input"`
+	Selects []formSelect `xml:"select"`
 }
 
 type formInput struct {
@@ -60,6 +68,19 @@ type formInput struct {
 	Name    string   `xml:"name,attr"`
 	Label   string   `xml:"label,attr"`
 	Value   string   `xml:"value,attr"`
+}
+
+type formSelect struct {
+	XMLName xml.Name       `xml:"select"`
+	Name    string         `xml:"name,attr"`
+	Label   string         `xml:"label,attr"`
+	Options []selectOption `xml:"option"`
+}
+
+type selectOption struct {
+	XMLName  xml.Name `xml:"option"`
+	Value    string   `xml:",chardata"`
+	Selected string   `xml:"selected,attr"`
 }
 
 type opaqueElement struct {
@@ -123,11 +144,22 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 		core.Log.Infof("AnyConnect", "Auth element: id=%q title=%q message=%q error=%q",
 			resp.Auth.ID, resp.Auth.Title, resp.Auth.Message, resp.Auth.Error)
 		if resp.Auth.Form != nil {
-			core.Log.Infof("AnyConnect", "Form: action=%q method=%q fields=%d",
-				resp.Auth.Form.Action, resp.Auth.Form.Method, len(resp.Auth.Form.Inputs))
+			core.Log.Infof("AnyConnect", "Form: action=%q method=%q inputs=%d selects=%d",
+				resp.Auth.Form.Action, resp.Auth.Form.Method, len(resp.Auth.Form.Inputs), len(resp.Auth.Form.Selects))
 			for _, inp := range resp.Auth.Form.Inputs {
 				core.Log.Infof("AnyConnect", "  Field: name=%q type=%q label=%q value=%q",
 					inp.Name, inp.Type, inp.Label, inp.Value)
+			}
+			for _, sel := range resp.Auth.Form.Selects {
+				var opts []string
+				for _, o := range sel.Options {
+					mark := ""
+					if o.Selected == "true" {
+						mark = "*"
+					}
+					opts = append(opts, mark+o.Value)
+				}
+				core.Log.Infof("AnyConnect", "  Select: name=%q label=%q options=%v", sel.Name, sel.Label, opts)
 			}
 		}
 	}
@@ -149,6 +181,40 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 	}
 	if resp.Opaque != nil {
 		opaque = resp.Opaque.Inner
+	}
+
+	// Handle client-cert-request: if the server asks for a certificate and
+	// there is no login form, the TLS client cert was already presented
+	// during the handshake. Send a cert-ack auth-reply.
+	if resp.ClientCertRequest != nil && (resp.Auth == nil || resp.Auth.Form == nil) {
+		core.Log.Infof("AnyConnect", "Server requested client certificate authentication (no form)")
+		certReplyXML := buildCertAuthReply(opaque, host, cid)
+		core.Log.Infof("AnyConnect", "Cert auth reply XML: %s", certReplyXML)
+		result, err = doAuthPost(br, conn, host, action, certReplyXML, cookies, cid)
+		if err != nil {
+			return nil, fmt.Errorf("cert auth request: %w", err)
+		}
+		resp = result.config
+		cookies = result.cookies
+		core.Log.Infof("AnyConnect", "Cert auth response: type=%q", resp.Type)
+		if resp.Error != "" {
+			core.Log.Warnf("AnyConnect", "Cert auth error: %s", resp.Error)
+		}
+		// If cert auth succeeded with "complete", skip to session extraction.
+		// If server returns another auth-request (e.g. cert + password), fall through.
+		if resp.Type == "complete" {
+			if resp.SessionToken == "" {
+				return nil, fmt.Errorf("no session token in cert auth response")
+			}
+			return &sessionInfo{Cookie: resp.SessionToken}, nil
+		}
+		// Server wants more auth (cert + password combo); update opaque/action and continue.
+		if resp.Opaque != nil {
+			opaque = resp.Opaque.Inner
+		}
+		if resp.Auth != nil && resp.Auth.Form != nil && resp.Auth.Form.Action != "" {
+			action = resp.Auth.Form.Action
+		}
 	}
 
 	// Phase 2: fill the form the server sent us.
@@ -243,6 +309,30 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 	}, nil
 }
 
+// buildCertAuthReply builds an auth-reply for certificate-based authentication.
+// The client certificate was already presented during the TLS handshake;
+// this XML tells the server to proceed with cert-based identity.
+func buildCertAuthReply(opaque, host string, cid clientID) string {
+	var sb strings.Builder
+	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+	sb.WriteString(`<config-auth client="vpn" type="auth-reply" aggregate-auth-version="2">`)
+	sb.WriteString(fmt.Sprintf(`<version who="vpn">%s</version>`, cid.Version))
+	sb.WriteString(fmt.Sprintf(`<device-id device-type="%s" platform-version="%s">%s</device-id>`, cid.DeviceType, cid.PlatformVer, cid.DeviceType))
+	if opaque != "" {
+		sb.WriteString(`<opaque is-for="sg">`)
+		sb.WriteString(opaque)
+		sb.WriteString(`</opaque>`)
+	}
+	sb.WriteString(`<auth>`)
+	sb.WriteString(`<client-cert-authenticated/>`)
+	sb.WriteString(`</auth>`)
+	if host != "" {
+		sb.WriteString(fmt.Sprintf(`<group-access>https://%s</group-access>`, xmlEscape(host)))
+	}
+	sb.WriteString(`</config-auth>`)
+	return sb.String()
+}
+
 // buildFormReply inspects the server's form fields and fills them from creds.
 // It handles any combination: username+password, username+password+otp,
 // otp-only (second round), etc.
@@ -281,6 +371,11 @@ func buildFormReply(resp *configAuth, creds credentials, opaque, host string, ci
 				}
 			}
 			sb.WriteString(fmt.Sprintf(`<%s>%s</%s>`, elemName, xmlEscape(val), elemName))
+		}
+		// Fill <select> fields (e.g. group_list).
+		for _, sel := range resp.Auth.Form.Selects {
+			val := matchSelectValue(sel, creds)
+			sb.WriteString(fmt.Sprintf(`<%s>%s</%s>`, sel.Name, xmlEscape(val), sel.Name))
 		}
 	} else {
 		// Fallback: no form info, send username + password.
@@ -332,6 +427,31 @@ func matchFieldValue(input formInput, creds credentials) string {
 		return creds.Username
 	}
 
+	return ""
+}
+
+// matchSelectValue determines the value for a <select> element.
+// If the creds.Group matches one of the options, use it.
+// Otherwise, use the option marked selected="true", or the first option.
+func matchSelectValue(sel formSelect, creds credentials) string {
+	// If the user configured a group and it matches an option, prefer it.
+	if creds.Group != "" {
+		for _, opt := range sel.Options {
+			if strings.EqualFold(opt.Value, creds.Group) {
+				return opt.Value
+			}
+		}
+	}
+	// Use the server's default (selected="true").
+	for _, opt := range sel.Options {
+		if opt.Selected == "true" {
+			return opt.Value
+		}
+	}
+	// Fallback: first option.
+	if len(sel.Options) > 0 {
+		return sel.Options[0].Value
+	}
 	return ""
 }
 

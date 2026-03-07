@@ -38,8 +38,13 @@ func resolveClientID(customUA string) clientID {
 
 		// Detect device type and platform version from custom UA so that
 		// the XML identity matches the HTTP User-Agent header.
+		// Check "windows" before "mac" because "mac" is a substring that could
+		// false-match other strings; "windows" is unambiguous.
 		lower := strings.ToLower(customUA)
 		switch {
+		case strings.Contains(lower, "windows") || strings.Contains(lower, "win"):
+			cid.DeviceType = "win"
+			cid.PlatformVer = "10.0.26100"
 		case strings.Contains(lower, "macos") || strings.Contains(lower, "darwin") || strings.Contains(lower, "mac"):
 			cid.DeviceType = "mac-intel"
 			cid.PlatformVer = "15.3.0"

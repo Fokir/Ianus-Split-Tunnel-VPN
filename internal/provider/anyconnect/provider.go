@@ -17,6 +17,19 @@ import (
 	"awg-split-tunnel/internal/platform"
 )
 
+// loadClientCert loads a TLS client certificate+key pair if configured.
+func loadClientCert(cfg Config) ([]tls.Certificate, error) {
+	if cfg.ClientCert == "" || cfg.ClientCert == "auto" {
+		return nil, nil
+	}
+	cert, err := tls.LoadX509KeyPair(cfg.ClientCert, cfg.ClientKey)
+	if err != nil {
+		return nil, fmt.Errorf("load client cert: %w", err)
+	}
+	core.Log.Infof("AnyConnect", "Client certificate loaded from %s", cfg.ClientCert)
+	return []tls.Certificate{cert}, nil
+}
+
 // Provider implements provider.TunnelProvider, provider.RawForwarder,
 // provider.EndpointProvider, provider.SplitRouteProvider, and provider.AuthParamSetter
 // for the Cisco AnyConnect (CSTP) protocol.
@@ -26,7 +39,8 @@ type Provider struct {
 	state  core.TunnelState
 	name   string
 
-	cid clientID // effective client identity (UA, version, device type)
+	cid      clientID         // effective client identity (UA, version, device type)
+	tlsCerts []tls.Certificate // client certificate for mutual TLS (optional)
 
 	adapterIP       netip.Addr
 	serverEndpoints []netip.AddrPort
@@ -62,11 +76,16 @@ func New(name string, cfg Config) (*Provider, error) {
 	if cfg.Port <= 0 {
 		cfg.Port = 443
 	}
+	certs, err := loadClientCert(cfg)
+	if err != nil {
+		return nil, err
+	}
 	return &Provider{
-		name:   name,
-		config: cfg,
-		state:  core.TunnelStateDown,
-		cid:    resolveClientID(cfg.UserAgent),
+		name:     name,
+		config:   cfg,
+		state:    core.TunnelStateDown,
+		cid:      resolveClientID(cfg.UserAgent),
+		tlsCerts: certs,
 	}, nil
 }
 
@@ -192,10 +211,19 @@ func (p *Provider) Connect(ctx context.Context) error {
 
 		// TLS dial via real NIC.
 		dialer := &net.Dialer{Timeout: 15 * time.Second, Control: controlFn}
-		tlsConn, err = tls.DialWithDialer(dialer, "tcp", serverAddr, &tls.Config{
+		tlsCfg := &tls.Config{
 			InsecureSkipVerify: p.config.TLSSkipVerify,
 			ServerName:         server,
-		})
+		}
+		if len(p.tlsCerts) > 0 {
+			// Explicit cert file(s) provided.
+			tlsCfg.Certificates = p.tlsCerts
+		} else if p.config.ClientCert == "auto" {
+			// Auto-discover from system certificate store.
+			core.Log.Infof("AnyConnect", "Client cert mode: auto (system store)")
+			tlsCfg.GetClientCertificate = findSystemCertificate
+		}
+		tlsConn, err = tls.DialWithDialer(dialer, "tcp", serverAddr, tlsCfg)
 		if err != nil {
 			p.state = core.TunnelStateError
 			return fmt.Errorf("[AnyConnect] TLS dial: %w", err)
