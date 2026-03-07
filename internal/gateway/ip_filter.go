@@ -76,6 +76,34 @@ func (t *PrefixTrie) Contains(ip [4]byte) bool {
 	return false
 }
 
+// LongestMatch returns the prefix length of the longest matching prefix for ip.
+// Returns -1 if no prefix matches.
+func (t *PrefixTrie) LongestMatch(ip [4]byte) int {
+	if len(t.nodes) == 0 {
+		return -1
+	}
+	idx := int32(0)
+	best := -1
+	if t.nodes[0].terminal {
+		best = 0
+	}
+	for i := 0; i < 32; i++ {
+		byteIdx := i / 8
+		bitIdx := uint(7 - i%8)
+		bit := (ip[byteIdx] >> bitIdx) & 1
+
+		child := t.nodes[idx].children[bit]
+		if child == -1 {
+			break
+		}
+		idx = child
+		if t.nodes[idx].terminal {
+			best = i + 1
+		}
+	}
+	return best
+}
+
 // IsEmpty returns true if the trie has no prefixes.
 func (t *PrefixTrie) IsEmpty() bool {
 	// Only root node and it's not terminal.
@@ -305,6 +333,81 @@ func buildTrie(cidrs []string) *PrefixTrie {
 
 		ones, _ := ipNet.Mask.Size()
 		t.Insert(ip4, ones)
+	}
+	return t
+}
+
+// WithUpdatedTunnelAllowedIPs returns a shallow copy of the IPFilter with the
+// specified tunnel's AllowedIPs replaced. Other tunnel filters are shared.
+// This is used by providers like AnyConnect that receive routes dynamically
+// from the server at connect time.
+func (f *IPFilter) WithUpdatedTunnelAllowedIPs(tunnelID string, prefixes []netip.Prefix) *IPFilter {
+	cp := &IPFilter{
+		globalDisallowedIPs:  f.globalDisallowedIPs,
+		globalAllowedIPs:     f.globalAllowedIPs,
+		globalHasAllowedIPs:  f.globalHasAllowedIPs,
+		globalDisallowedApps: f.globalDisallowedApps,
+		localBypassIPs:       f.localBypassIPs,
+		tunnels:              make(map[string]*tunnelFilter, len(f.tunnels)+1),
+	}
+	for k, v := range f.tunnels {
+		cp.tunnels[k] = v
+	}
+	trie := buildTrieFromPrefixes(prefixes)
+	existing := f.tunnels[tunnelID]
+	if existing != nil {
+		cp.tunnels[tunnelID] = &tunnelFilter{
+			disallowedIPs:  existing.disallowedIPs,
+			allowedIPs:     trie,
+			hasAllowedIPs:  len(prefixes) > 0,
+			disallowedApps: existing.disallowedApps,
+		}
+	} else {
+		cp.tunnels[tunnelID] = &tunnelFilter{
+			disallowedIPs:  NewPrefixTrie(),
+			allowedIPs:     trie,
+			hasAllowedIPs:  len(prefixes) > 0,
+		}
+	}
+	return cp
+}
+
+// FindTunnelByAllowedIP checks if the IP matches any tunnel's per-tunnel AllowedIPs
+// (e.g. AnyConnect split-include routes). Returns the tunnel ID with the most
+// specific (longest prefix) match among active tunnels.
+// isActive filters tunnels (e.g. check UP state); pass nil to skip the check.
+// This enables IP-based routing: traffic to corporate subnets always goes through
+// the tunnel that owns those subnets, regardless of process-based rules.
+func (f *IPFilter) FindTunnelByAllowedIP(dstIP [4]byte, isActive func(string) bool) (string, bool) {
+	bestTunnel := ""
+	bestLen := -1
+	for tunnelID, tf := range f.tunnels {
+		if !tf.hasAllowedIPs {
+			continue
+		}
+		if isActive != nil && !isActive(tunnelID) {
+			continue
+		}
+		matchLen := tf.allowedIPs.LongestMatch(dstIP)
+		if matchLen > bestLen {
+			bestLen = matchLen
+			bestTunnel = tunnelID
+		}
+	}
+	if bestLen >= 0 {
+		return bestTunnel, true
+	}
+	return "", false
+}
+
+// buildTrieFromPrefixes builds a PrefixTrie from netip.Prefix values.
+func buildTrieFromPrefixes(prefixes []netip.Prefix) *PrefixTrie {
+	t := NewPrefixTrie()
+	for _, pfx := range prefixes {
+		if !pfx.Addr().Is4() {
+			continue
+		}
+		t.Insert(pfx.Addr().As4(), pfx.Bits())
 	}
 	return t
 }

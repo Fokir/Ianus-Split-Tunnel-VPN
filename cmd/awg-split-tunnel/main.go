@@ -251,6 +251,7 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		// being delivered to the socket-based resolver. The TUN router
 		// intercepts these and calls Resolve() directly.
 		tunRouter.SetDNSResolver(dnsResolver)
+		tunnelCtrl.SetDNSResolver(dnsResolver)
 	}
 
 	// === 11a. Gateway activation controller ===

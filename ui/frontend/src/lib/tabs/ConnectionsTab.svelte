@@ -8,6 +8,7 @@
   import { t } from '../i18n';
   import TunnelFormModal from './connections/TunnelFormModal.svelte';
   import VlessUriModal from './connections/VlessUriModal.svelte';
+  import OtpDialog from './connections/OtpDialog.svelte';
 
   let tunnels = [];
   let loading = true;
@@ -17,6 +18,7 @@
   // Stats map: tunnelId → { speedTx, speedRx, bytesTx, bytesRx, ... }
   let statsMap = {};
   let statsUnsub;
+  let authRequiredUnsub;
 
   // Form modal
   let showFormModal = false;
@@ -32,6 +34,11 @@
 
   // Delete confirmation
   let confirmRemoveId = '';
+
+  // OTP dialog
+  let showOtpDialog = false;
+  let otpTunnelId = '';
+  let otpTunnelName = '';
 
   // Drag & drop reorder
   let dragIndex = -1;
@@ -98,10 +105,20 @@
       }
       statsMap = newMap;
     });
+
+    authRequiredUnsub = Events.On('auth-required', (event) => {
+      const { tunnelId } = event.data || {};
+      if (!tunnelId) return;
+      const tunnel = tunnels.find(t => t.id === tunnelId);
+      otpTunnelId = tunnelId;
+      otpTunnelName = tunnel ? (tunnel.name || tunnel.id) : tunnelId;
+      showOtpDialog = true;
+    });
   });
 
   onDestroy(() => {
     if (statsUnsub) statsUnsub();
+    if (authRequiredUnsub) authRequiredUnsub();
   });
 
   async function refresh() {
@@ -118,7 +135,26 @@
   }
 
   async function connect(id) {
+    const tunnel = tunnels.find(t => t.id === id);
+    if (tunnel && tunnel.protocol === 'anyconnect') {
+      otpTunnelId = id;
+      otpTunnelName = tunnel.name || tunnel.id;
+      showOtpDialog = true;
+      return;
+    }
     try { await api.connectTunnel(id); await refresh(); } catch (e) { error = e.message; }
+  }
+
+  async function connectWithOtp(e) {
+    showOtpDialog = false;
+    const { otpCode } = e.detail;
+    try {
+      const authParams = otpCode ? { otp_code: otpCode } : {};
+      await api.connectTunnelWithAuth(otpTunnelId, authParams);
+      await refresh();
+    } catch (err) {
+      error = err.message;
+    }
   }
   async function disconnect(id) {
     try { await api.disconnectTunnel(id); await refresh(); } catch (e) { error = e.message; }
@@ -217,6 +253,7 @@
       case 'socks5': return 'SOCKS5';
       case 'httpproxy': return 'HTTP';
       case 'vless': return 'VLESS';
+      case 'anyconnect': return 'AC';
       default: return proto.toUpperCase();
     }
   }
@@ -285,6 +322,10 @@
             <button class="w-full px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-700/50 transition-colors"
               on:click={() => openFormModal('vless')}>
               VLESS (Xray)
+            </button>
+            <button class="w-full px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-700/50 transition-colors"
+              on:click={() => openFormModal('anyconnect')}>
+              AnyConnect
             </button>
           </div>
         {/if}
@@ -436,4 +477,10 @@
 <VlessUriModal open={showUriModal}
   on:close={() => { showUriModal = false; }}
   on:added={handleTunnelAdded}
+/>
+
+<!-- OTP dialog for AnyConnect -->
+<OtpDialog open={showOtpDialog} tunnelName={otpTunnelName}
+  on:cancel={() => { showOtpDialog = false; }}
+  on:connect={connectWithOtp}
 />

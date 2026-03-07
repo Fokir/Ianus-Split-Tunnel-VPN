@@ -78,6 +78,9 @@ func (b *BindingService) runStatsStream() {
 		return
 	}
 
+	// Cache tunnel protocols for auth-required detection.
+	tunnelProtocols := b.loadTunnelProtocols()
+
 	// Track previous tunnel states for transition detection.
 	prevStates := make(map[string]vpnapi.TunnelState)
 
@@ -105,19 +108,45 @@ func (b *BindingService) runStatsStream() {
 			prev, hasPrev := prevStates[t.TunnelId]
 			if hasPrev {
 				if prev == vpnapi.TunnelState_TUNNEL_STATE_UP && t.State == vpnapi.TunnelState_TUNNEL_STATE_ERROR {
-					b.notifMgr.NotifyTunnelError(t.TunnelId, "Connection lost")
+					if tunnelProtocols[t.TunnelId] == "anyconnect" {
+						b.notifMgr.NotifyAuthRequired(t.TunnelId)
+						app.Event.Emit("auth-required", map[string]interface{}{
+							"tunnelId": t.TunnelId,
+						})
+					} else {
+						b.notifMgr.NotifyTunnelError(t.TunnelId, "Connection lost")
+					}
 				}
 				if prev == vpnapi.TunnelState_TUNNEL_STATE_ERROR && t.State == vpnapi.TunnelState_TUNNEL_STATE_UP {
 					b.notifMgr.NotifyReconnected(t.TunnelId)
 				}
 			}
 			prevStates[t.TunnelId] = t.State
+
+			// Update protocol cache for new tunnels.
+			if _, known := tunnelProtocols[t.TunnelId]; !known {
+				tunnelProtocols = b.loadTunnelProtocols()
+			}
 		}
 
 		app.Event.Emit("stats-update", map[string]interface{}{
 			"tunnels": tunnels,
 		})
 	}
+}
+
+// loadTunnelProtocols fetches tunnel list and returns a map of tunnelID → protocol.
+func (b *BindingService) loadTunnelProtocols() map[string]string {
+	result := make(map[string]string)
+	tunnels, err := b.ListTunnels()
+	if err != nil {
+		log.Printf("[UI] Failed to load tunnel protocols: %v", err)
+		return result
+	}
+	for _, t := range tunnels {
+		result[t.ID] = t.Protocol
+	}
+	return result
 }
 
 func logLevelStr(l vpnapi.LogLevel) string {

@@ -41,7 +41,8 @@ const (
 	ProtocolWireGuard  = "wireguard"
 	ProtocolSOCKS5     = "socks5"
 	ProtocolHTTPProxy  = "httpproxy"
-	ProtocolVLESS      = "vless"
+	ProtocolVLESS       = "vless"
+	ProtocolAnyConnect  = "anyconnect"
 )
 
 // FallbackPolicy defines what happens when a tunnel is unavailable.

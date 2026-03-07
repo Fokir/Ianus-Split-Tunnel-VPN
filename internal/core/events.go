@@ -16,7 +16,14 @@ const (
 	EventConfigReloaded
 	EventSubscriptionUpdated
 	EventUpdateAvailable
+	EventAuthRequired // Tunnel needs interactive re-authentication (OTP/MFA)
 )
+
+// AuthRequiredPayload is the payload for EventAuthRequired.
+type AuthRequiredPayload struct {
+	TunnelID string
+	Reason   string
+}
 
 // Event carries data about something that happened in the system.
 type Event struct {

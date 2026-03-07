@@ -98,10 +98,15 @@ func (rm *ReconnectManager) SetIntent(tunnelID string, shouldBeConnected bool) {
 }
 
 // LoadIntents loads persisted active tunnels as reconnect intents.
+// Tunnels requiring interactive auth (e.g. AnyConnect OTP) are skipped.
 func (rm *ReconnectManager) LoadIntents(tunnelIDs []string) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	for _, id := range tunnelIDs {
+		if rm.requiresInteractiveAuth(id) {
+			core.Log.Infof("Core", "Reconnect: skipping restore for %q (requires interactive auth)", id)
+			continue
+		}
 		rm.intentMap[id] = true
 	}
 }
@@ -142,6 +147,11 @@ func (rm *ReconnectManager) handleStateChange(e core.Event) {
 	case core.TunnelStateError:
 		// Tunnel failed — start reconnect if intent exists and not already retrying.
 		if rm.intentMap[payload.TunnelID] {
+			// Skip auto-reconnect for tunnels requiring interactive auth (e.g. AnyConnect OTP).
+			if rm.requiresInteractiveAuth(payload.TunnelID) {
+				core.Log.Infof("Core", "Reconnect: skipping %q (requires interactive auth)", payload.TunnelID)
+				return
+			}
 			if _, alreadyRetrying := rm.retrying[payload.TunnelID]; !alreadyRetrying {
 				retryCtx, retryCancel := context.WithCancel(rm.ctx)
 				rm.retrying[payload.TunnelID] = retryCancel
@@ -225,6 +235,16 @@ func (rm *ReconnectManager) getInterval() time.Duration {
 		}
 	}
 	return 10 * time.Second // default
+}
+
+// requiresInteractiveAuth checks if a tunnel needs user input (OTP/MFA) to connect.
+func (rm *ReconnectManager) requiresInteractiveAuth(tunnelID string) bool {
+	entry, ok := rm.registry.Get(tunnelID)
+	if !ok {
+		return false
+	}
+	// AnyConnect requires OTP code at each connection.
+	return entry.Config.Protocol == "anyconnect"
 }
 
 func (rm *ReconnectManager) hasNetworkConnectivity() bool {

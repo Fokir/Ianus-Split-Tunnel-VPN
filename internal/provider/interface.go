@@ -66,6 +66,28 @@ type EndpointProvider interface {
 	GetServerEndpoints() []netip.AddrPort
 }
 
+// AuthParamSetter is optionally implemented by providers that accept ephemeral
+// authentication parameters at connect time (e.g. OTP codes that change every minute).
+// These params are NOT saved to config.
+type AuthParamSetter interface {
+	SetAuthParams(params map[string]string)
+}
+
+// SplitRouteProvider is optionally implemented by providers that receive split-tunnel
+// routes dynamically from the server (e.g. AnyConnect X-CSTP-Split-Include).
+// The tunnel controller uses these to update IPFilter AllowedIPs after Connect.
+type SplitRouteProvider interface {
+	GetSplitInclude() []netip.Prefix
+	GetSplitExclude() []netip.Prefix
+}
+
+// DNSProvider is optionally implemented by providers that receive DNS server
+// addresses from the VPN server (e.g. AnyConnect X-CSTP-DNS).
+// These servers are registered as per-tunnel DNS for domain-based routing.
+type DNSProvider interface {
+	GetDNS() []string
+}
+
 // HealthCheckable is optionally implemented by providers that support WireGuard-style
 // IPC health queries. Used by the health monitor to detect stale peers via
 // last_handshake_time inspection.

@@ -79,7 +79,16 @@
     "confirmRemoveHint": "This action cannot be undone",
     "yes": "Yes",
     "no": "No",
-    "clickToRename": "Double-click to rename"
+    "clickToRename": "Double-click to rename",
+    "group": "Group",
+    "tlsSkipVerify": "Skip TLS verification",
+    "usernameRequired": "Enter username",
+    "passwordRequired": "Enter password",
+    "connecting": "Connecting...",
+    "otpTitle": "Two-factor authentication",
+    "otpDescription": "Enter the one-time code from your authenticator app to connect.",
+    "otpLabel": "OTP code",
+    "otpSkip": "Skip"
   },
   "subscriptions": {
     "title": "Subscriptions",

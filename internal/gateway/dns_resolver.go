@@ -95,6 +95,10 @@ type DNSResolver struct {
 	prefetchCh chan prefetchRequest
 	prefetchWg sync.WaitGroup
 
+	// tunnelDNS stores per-tunnel DNS servers (tunnelID → []netip.Addr).
+	// Used for tunnels like AnyConnect that provide their own DNS servers.
+	tunnelDNS sync.Map
+
 	started atomic.Bool
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
@@ -146,6 +150,18 @@ func (r *DNSResolver) SetDomainTable(dt *DomainTable) {
 // SetFakeIPPool sets the FakeIP pool for DNS response rewriting.
 func (r *DNSResolver) SetFakeIPPool(pool *FakeIPPool) {
 	r.fakeIPPool.Store(pool)
+}
+
+// SetTunnelDNS registers per-tunnel DNS servers. When a domain rule routes
+// a query through this tunnel, these servers are used instead of global ones.
+func (r *DNSResolver) SetTunnelDNS(tunnelID string, servers []netip.Addr) {
+	r.tunnelDNS.Store(tunnelID, servers)
+	core.Log.Infof("DNS", "Per-tunnel DNS for %q: %v", tunnelID, servers)
+}
+
+// RemoveTunnelDNS removes per-tunnel DNS servers for a tunnel.
+func (r *DNSResolver) RemoveTunnelDNS(tunnelID string) {
+	r.tunnelDNS.Delete(tunnelID)
 }
 
 // Start begins listening for DNS queries on UDP and TCP.
@@ -312,6 +328,10 @@ func (r *DNSResolver) Resolve(ctx context.Context, query []byte) []byte {
 				routeTunnelID = DirectTunnelID
 			case core.DomainRoute:
 				routeTunnelID = domainResult.TunnelID
+				// If the target tunnel has its own DNS servers, route DNS through it.
+				if _, ok := r.tunnelDNS.Load(domainResult.TunnelID); ok {
+					tunnelIDs = []string{domainResult.TunnelID}
+				}
 			}
 		}
 	}
@@ -388,7 +408,11 @@ func (r *DNSResolver) forwardUDP(ctx context.Context, tunnelID string, query []b
 		return nil, netip.Addr{}, fmt.Errorf("tunnel %q not up", tunnelID)
 	}
 
+	// Per-tunnel DNS servers override global ones (e.g. AnyConnect corporate DNS).
 	servers := r.config.Servers
+	if val, ok := r.tunnelDNS.Load(tunnelID); ok {
+		servers = val.([]netip.Addr)
+	}
 	if len(servers) == 0 {
 		return nil, netip.Addr{}, fmt.Errorf("no DNS servers configured")
 	}
@@ -621,6 +645,10 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 				routeTunnelID = DirectTunnelID
 			case core.DomainRoute:
 				routeTunnelID = domainResult.TunnelID
+				// If the target tunnel has its own DNS servers, route DNS through it.
+				if _, ok := r.tunnelDNS.Load(domainResult.TunnelID); ok {
+					tunnelIDs = []string{domainResult.TunnelID}
+				}
 			}
 		}
 	}
@@ -698,7 +726,11 @@ func (r *DNSResolver) forwardTCP(ctx context.Context, tunnelID string, query []b
 		return nil, netip.Addr{}, fmt.Errorf("tunnel %q not up", tunnelID)
 	}
 
+	// Per-tunnel DNS servers override global ones.
 	servers := r.config.Servers
+	if val, ok := r.tunnelDNS.Load(tunnelID); ok {
+		servers = val.([]netip.Addr)
+	}
 	if len(servers) == 0 {
 		return nil, netip.Addr{}, fmt.Errorf("no DNS servers configured")
 	}
@@ -876,6 +908,9 @@ func (r *DNSResolver) executePrefetch(ctx context.Context, req prefetchRequest) 
 				routeTunnelID = DirectTunnelID
 			case core.DomainRoute:
 				routeTunnelID = domainResult.TunnelID
+				if _, ok := r.tunnelDNS.Load(domainResult.TunnelID); ok {
+					tunnelIDs = []string{domainResult.TunnelID}
+				}
 			}
 		}
 	}

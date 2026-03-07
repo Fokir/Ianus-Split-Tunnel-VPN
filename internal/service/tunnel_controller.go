@@ -19,6 +19,7 @@ import (
 	"awg-split-tunnel/internal/provider/direct"
 	"awg-split-tunnel/internal/provider/httpproxy"
 	"awg-split-tunnel/internal/provider/socks5"
+	"awg-split-tunnel/internal/provider/anyconnect"
 	"awg-split-tunnel/internal/provider/vless"
 	"awg-split-tunnel/internal/provider/wireguard"
 	"awg-split-tunnel/internal/proxy"
@@ -44,7 +45,8 @@ type ControllerDeps struct {
 	RouteMgr  platform.RouteManager
 	WFPMgr    platform.ProcessFilter
 	Adapter   platform.TUNAdapter
-	DNSRouter *gateway.DNSRouter
+	DNSRouter   *gateway.DNSRouter
+	DNSResolver *gateway.DNSResolver
 
 	// RealNIC info for direct provider and bypass routes.
 	RealNICIndex   uint32
@@ -158,6 +160,12 @@ func (tc *TunnelControllerImpl) Shutdown() {
 // ─── TunnelController interface implementation ──────────────────────
 
 func (tc *TunnelControllerImpl) ConnectTunnel(ctx context.Context, tunnelID string) error {
+	return tc.ConnectTunnelWithAuth(ctx, tunnelID, nil)
+}
+
+// ConnectTunnelWithAuth connects a tunnel, optionally passing ephemeral auth
+// parameters (e.g. OTP codes) that are NOT saved to config.
+func (tc *TunnelControllerImpl) ConnectTunnelWithAuth(ctx context.Context, tunnelID string, authParams map[string]string) error {
 	tc.mu.Lock()
 	inst, ok := tc.instances[tunnelID]
 	tc.mu.Unlock()
@@ -181,13 +189,40 @@ func (tc *TunnelControllerImpl) ConnectTunnel(ctx context.Context, tunnelID stri
 		}
 	}
 
-	// Pass real NIC index and binder to VLESS providers so they can resolve
-	// hostnames through the real NIC, bypassing TUN DNS (10.255.0.1).
+	// Pass ephemeral auth params (e.g. OTP code) to providers that support it.
+	if len(authParams) > 0 {
+		if ap, ok := inst.provider.(provider.AuthParamSetter); ok {
+			ap.SetAuthParams(authParams)
+		}
+	}
+
+	// Pass real NIC index and binder to providers that need to bypass TUN DNS (FakeIP).
 	if vp, ok := inst.provider.(*vless.Provider); ok && tc.deps.RealNICIndex > 0 {
 		vp.SetRealNICIndex(tc.deps.RealNICIndex)
 		if tc.deps.InterfaceBinder != nil {
 			vp.SetInterfaceBinder(tc.deps.InterfaceBinder)
 		}
+	}
+	if ap, ok := inst.provider.(*anyconnect.Provider); ok {
+		if tc.deps.RealNICIndex > 0 {
+			ap.SetRealNICIndex(tc.deps.RealNICIndex)
+		}
+		if tc.deps.InterfaceBinder != nil {
+			ap.SetInterfaceBinder(tc.deps.InterfaceBinder)
+		}
+		// Detect CSTP session drops and update registry state.
+		ap.SetOnSessionDrop(func(tunnelID string, err error) {
+			core.Log.Warnf("Core", "AnyConnect tunnel %q session dropped: %v", tunnelID, err)
+			tc.deps.Registry.SetState(tunnelID, core.TunnelStateError, fmt.Errorf("session expired: %v", err))
+			// Notify frontend that re-authentication (OTP) is required.
+			tc.deps.Bus.PublishAsync(core.Event{
+				Type: core.EventAuthRequired,
+				Payload: core.AuthRequiredPayload{
+					TunnelID: tunnelID,
+					Reason:   err.Error(),
+				},
+			})
+		})
 	}
 
 	// Use a bounded context so Connect() cannot hang forever (e.g. DNS or xray startup stalls).
@@ -202,6 +237,8 @@ func (tc *TunnelControllerImpl) ConnectTunnel(ctx context.Context, tunnelID stri
 	tc.deps.Registry.SetState(tunnelID, core.TunnelStateUp, nil)
 	tc.registerRawForwarder(tunnelID, inst.provider)
 	tc.addBypassRoutes(tunnelID, inst.provider)
+	tc.applySplitRoutes(tunnelID, inst.provider)
+	tc.registerTunnelDNS(tunnelID, inst.provider)
 
 	// Mark tunnel as active in rule engine and persist.
 	if tc.deps.Rules != nil {
@@ -230,6 +267,11 @@ func (tc *TunnelControllerImpl) DisconnectTunnel(tunnelID string) error {
 	}
 
 	tc.deps.Registry.SetState(tunnelID, core.TunnelStateDown, nil)
+
+	// Remove per-tunnel DNS servers.
+	if tc.deps.DNSResolver != nil {
+		tc.deps.DNSResolver.RemoveTunnelDNS(tunnelID)
+	}
 
 	// Mark tunnel as inactive in rule engine and persist.
 	if tc.deps.Rules != nil {
@@ -578,8 +620,64 @@ func CreateProvider(cfg core.TunnelConfig) (provider.TunnelProvider, error) {
 			}
 		}
 		return vless.New(cfg.Name, vlessCfg)
+	case core.ProtocolAnyConnect:
+		acCfg := anyconnect.Config{
+			Server:        getStringSetting(cfg.Settings, "server", ""),
+			Port:          getIntSetting(cfg.Settings, "port", 443),
+			Username:      getStringSetting(cfg.Settings, "username", ""),
+			Password:      getStringSetting(cfg.Settings, "password", ""),
+			Group:         getStringSetting(cfg.Settings, "group", ""),
+			TLSSkipVerify: getBoolSetting(cfg.Settings, "tls_skip_verify", false),
+		}
+		return anyconnect.New(cfg.Name, acCfg)
 	default:
 		return nil, fmt.Errorf("unknown protocol %q for tunnel %q", cfg.Protocol, cfg.ID)
+	}
+}
+
+// applySplitRoutes updates the IPFilter with dynamic AllowedIPs received from
+// providers that implement SplitRouteProvider (e.g. AnyConnect Split-Include).
+func (tc *TunnelControllerImpl) applySplitRoutes(tunnelID string, prov provider.TunnelProvider) {
+	sp, ok := prov.(provider.SplitRouteProvider)
+	if !ok {
+		return
+	}
+	routes := sp.GetSplitInclude()
+	if len(routes) == 0 {
+		return
+	}
+	core.Log.Infof("Core", "Applying %d split-include routes for tunnel %q", len(routes), tunnelID)
+	cur := tc.deps.TUNRouter.GetIPFilter()
+	if cur == nil {
+		return
+	}
+	updated := cur.WithUpdatedTunnelAllowedIPs(tunnelID, routes)
+	tc.deps.TUNRouter.SetIPFilter(updated)
+}
+
+// registerTunnelDNS registers per-tunnel DNS servers from providers that implement
+// DNSProvider (e.g. AnyConnect). These are used by the DNS resolver for domain-based
+// queries routed through this tunnel.
+func (tc *TunnelControllerImpl) registerTunnelDNS(tunnelID string, prov provider.TunnelProvider) {
+	dp, ok := prov.(provider.DNSProvider)
+	if !ok {
+		return
+	}
+	if tc.deps.DNSResolver == nil {
+		return
+	}
+	dnsStrs := dp.GetDNS()
+	if len(dnsStrs) == 0 {
+		return
+	}
+	var servers []netip.Addr
+	for _, s := range dnsStrs {
+		if addr, err := netip.ParseAddr(s); err == nil {
+			servers = append(servers, addr)
+		}
+	}
+	if len(servers) > 0 {
+		tc.deps.DNSResolver.SetTunnelDNS(tunnelID, servers)
 	}
 }
 
@@ -671,6 +769,13 @@ func (tc *TunnelControllerImpl) MarkTunnelUnhealthy(tunnelID string, reason erro
 
 // SetDomainMatchFunc updates the domain match function used for SNI-based routing.
 // Propagates to all existing tunnel proxies and is stored for future ones.
+// SetDNSResolver sets the DNS resolver for per-tunnel DNS registration.
+func (tc *TunnelControllerImpl) SetDNSResolver(resolver *gateway.DNSResolver) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.deps.DNSResolver = resolver
+}
+
 func (tc *TunnelControllerImpl) SetDomainMatchFunc(fn *core.DomainMatchFunc) {
 	tc.mu.Lock()
 	tc.domainMatchFn = fn

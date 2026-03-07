@@ -109,6 +109,11 @@ func NewTUNRouter(
 	}
 }
 
+// GetIPFilter returns the current IPFilter. May be nil if not set.
+func (r *TUNRouter) GetIPFilter() *IPFilter {
+	return r.ipFilter.Load()
+}
+
 // SetIPFilter atomically sets the IP/app filter. Safe for concurrent use.
 func (r *TUNRouter) SetIPFilter(filter *IPFilter) {
 	r.ipFilter.Store(filter)
@@ -911,6 +916,18 @@ func (r *TUNRouter) handleICMP(pkt []byte, m pktMeta) {
 func (r *TUNRouter) resolveICMPFlow(dstIP [4]byte) (tunnelID string, action flowAction) {
 	f := r.ipFilter.Load()
 
+	// Per-tunnel AllowedIPs routing (split-include).
+	if f != nil {
+		if tid, ok := f.FindTunnelByAllowedIP(dstIP, func(id string) bool {
+			entry, ok := r.registry.Get(id)
+			return ok && entry.State == core.TunnelStateUp
+		}); ok {
+			if _, _, ok := r.getRawForwarder(tid); ok {
+				return tid, flowRoute
+			}
+		}
+	}
+
 	// Drop local/private IPs — no direct route through TUN.
 	if f != nil && f.IsLocalBypassIP(dstIP) {
 		return "", flowDrop
@@ -1003,6 +1020,27 @@ type flowFallbackInfo struct {
 
 func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunnelID string, proxyPort uint16, action flowAction, rulePrio core.RulePriority, fb flowFallbackInfo) {
 	f := r.ipFilter.Load() // may be nil
+
+	// Per-tunnel AllowedIPs routing: if the dst IP is in a tunnel's split-include
+	// routes (e.g. AnyConnect corporate subnets), route through that tunnel.
+	// This takes priority over local bypass — corporate 10.x.x.x subnets overlap
+	// with RFC 1918 ranges but must be routed through the VPN tunnel.
+	// Uses longest-prefix match among UP tunnels to handle overlapping subnets.
+	if f != nil {
+		if tid, ok := f.FindTunnelByAllowedIP(dstIP, func(id string) bool {
+			entry, ok := r.registry.Get(id)
+			return ok && entry.State == core.TunnelStateUp
+		}); ok {
+			if regEntry, ok := r.registry.Get(tid); ok {
+				if isUDP {
+					if port, ok := r.registry.GetUDPProxyPort(tid); ok {
+						return tid, port, flowRoute, core.PriorityAuto, fb
+					}
+				}
+				return tid, regEntry.ProxyPort, flowRoute, core.PriorityAuto, fb
+			}
+		}
+	}
 
 	// Early drop: if a local/private IP reached TUN, there is no direct route
 	// through any local interface (Docker/WSL/Hyper-V vNIC is down or absent).

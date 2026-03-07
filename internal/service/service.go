@@ -21,6 +21,8 @@ import (
 type TunnelController interface {
 	// ConnectTunnel starts a tunnel by ID. Returns error if already connected or not found.
 	ConnectTunnel(ctx context.Context, tunnelID string) error
+	// ConnectTunnelWithAuth starts a tunnel with ephemeral auth params (e.g. OTP code).
+	ConnectTunnelWithAuth(ctx context.Context, tunnelID string, authParams map[string]string) error
 	// DisconnectTunnel stops a tunnel by ID. Returns error if not connected or not found.
 	DisconnectTunnel(tunnelID string) error
 	// RestartTunnel disconnects and reconnects a tunnel.

@@ -20,6 +20,10 @@ export function connectTunnel(tunnelID) {
   return BindingService.ConnectTunnel(tunnelID);
 }
 
+export function connectTunnelWithAuth(tunnelID, authParams) {
+  return BindingService.ConnectTunnelWithAuth(tunnelID, authParams);
+}
+
 export function disconnectTunnel(tunnelID) {
   return BindingService.DisconnectTunnel(tunnelID);
 }

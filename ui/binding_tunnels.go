@@ -74,7 +74,17 @@ func (b *BindingService) emitTunnelsChanged() {
 }
 
 func (b *BindingService) ConnectTunnel(tunnelID string) error {
-	resp, err := b.client.Service.Connect(context.Background(), &vpnapi.ConnectRequest{TunnelId: tunnelID})
+	return b.ConnectTunnelWithAuth(tunnelID, nil)
+}
+
+// ConnectTunnelWithAuth connects a tunnel with optional ephemeral auth params.
+// authParams can contain "otp_code" and other one-time credentials that are
+// NOT saved to config. The UI should prompt the user for OTP before calling this.
+func (b *BindingService) ConnectTunnelWithAuth(tunnelID string, authParams map[string]string) error {
+	resp, err := b.client.Service.Connect(context.Background(), &vpnapi.ConnectRequest{
+		TunnelId:   tunnelID,
+		AuthParams: authParams,
+	})
 	if err != nil {
 		return err
 	}

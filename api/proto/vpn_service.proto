@@ -205,6 +205,7 @@ message ProcessInfo {
 
 message ConnectRequest {
   string tunnel_id = 1;       // specific tunnel, or empty for all
+  map<string, string> auth_params = 2; // ephemeral auth params (e.g. otp_code) — not saved to config
 }
 
 message ConnectResponse {

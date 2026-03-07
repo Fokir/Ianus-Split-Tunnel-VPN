@@ -125,7 +125,11 @@ func (s *Service) Connect(ctx context.Context, req *vpnapi.ConnectRequest) (*vpn
 	if req.TunnelId == "" {
 		err = s.ctrl.ConnectAll(ctx)
 	} else {
-		err = s.ctrl.ConnectTunnel(ctx, req.TunnelId)
+		if len(req.AuthParams) > 0 {
+			err = s.ctrl.ConnectTunnelWithAuth(ctx, req.TunnelId, req.AuthParams)
+		} else {
+			err = s.ctrl.ConnectTunnel(ctx, req.TunnelId)
+		}
 		if err == nil && s.reconnectMgr != nil {
 			s.reconnectMgr.SetIntent(req.TunnelId, true)
 		}
