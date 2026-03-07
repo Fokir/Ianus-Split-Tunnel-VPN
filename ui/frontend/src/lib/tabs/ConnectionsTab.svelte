@@ -431,7 +431,7 @@
               <span class="px-1.5 py-0.5 text-[0.625rem] font-medium rounded bg-zinc-700/60 text-zinc-400 shrink-0 leading-none">
                 {protocolLabel(tunnel.protocol)}
               </span>
-              {#if tunnel.externalIp}
+              {#if tunnel.externalIp || tunnel.adapterIp}
                 <span class="text-xs text-zinc-500 shrink-0 flex items-center gap-1">
                   {#if tunnel.countryCode}
                     {@const flagUrl = countryFlagUrl(tunnel.countryCode)}
@@ -444,7 +444,11 @@
                       <span class="text-[0.625rem] text-zinc-600 font-medium">{tunnel.countryCode}</span>
                     {/if}
                   {/if}
-                  {tunnel.externalIp}
+                  {#if tunnel.adapterIp && tunnel.externalIp}
+                    {tunnel.adapterIp} / {tunnel.externalIp}
+                  {:else}
+                    {tunnel.adapterIp || tunnel.externalIp}
+                  {/if}
                 </span>
               {/if}
             </div>
