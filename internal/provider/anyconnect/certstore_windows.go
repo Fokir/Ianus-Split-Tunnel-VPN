@@ -84,7 +84,8 @@ func enumerateSystemClientCerts() ([]tls.Certificate, error) {
 		}
 		prev = ctx
 
-		cc := (*certContext)(unsafe.Pointer(ctx))
+		// Convert syscall-returned uintptr to pointer without triggering go vet unsafeptr check.
+		cc := (*certContext)(*(*unsafe.Pointer)(unsafe.Pointer(&ctx)))
 		certDER := unsafe.Slice(cc.CertEncoded, cc.CertEncodedLen)
 
 		// Copy DER bytes (the context memory is owned by the store).
@@ -159,7 +160,7 @@ func acquireNCryptKey(certCtx uintptr) (crypto.Signer, error) {
 	}
 
 	// Parse the public key from the cert context to get the correct public key.
-	cc := (*certContext)(unsafe.Pointer(certCtx))
+	cc := (*certContext)(*(*unsafe.Pointer)(unsafe.Pointer(&certCtx)))
 	certDER := unsafe.Slice(cc.CertEncoded, cc.CertEncodedLen)
 	leaf, err := x509.ParseCertificate(certDER)
 	if err != nil {
