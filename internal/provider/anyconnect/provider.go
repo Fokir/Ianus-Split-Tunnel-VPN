@@ -33,7 +33,7 @@ type Provider struct {
 	dns             []string
 
 	// authParams holds ephemeral auth params (e.g. otp_code) set at connect time.
-	// Not persisted to config.
+	// Not persisted to config. Cleared after each Connect attempt.
 	authParams map[string]string
 
 	// Real NIC info for bypassing TUN DNS and routing.
@@ -187,10 +187,12 @@ func (p *Provider) Connect(ctx context.Context) error {
 		Group:    p.config.Group,
 	}
 	// OTP code comes from ephemeral auth params (set by SetAuthParams before Connect).
+	// Consume and clear immediately so stale OTP is never reused on reconnect.
 	if p.authParams != nil {
 		if otp, ok := p.authParams["otp_code"]; ok {
 			creds.OTPCode = otp
 		}
+		p.authParams = nil
 	}
 	sess, err := authenticate(br, tlsConn, p.config.Server, creds)
 	if err != nil {
@@ -246,20 +248,32 @@ func (p *Provider) Connect(ctx context.Context) error {
 
 // Disconnect tears down the VPN tunnel.
 func (p *Provider) Disconnect() error {
+	// Extract cstp and cancel under the lock, then release before calling
+	// stop(). stop() waits for readLoop to finish, and readLoop's
+	// onDisconnect callback also acquires p.mu — holding the lock here
+	// would deadlock.
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	c := p.cstp
+	p.cstp = nil
+	cancel := p.cancel
+	p.cancel = nil
+	p.mu.Unlock()
 
-	if p.cstp != nil {
-		p.cstp.stop()
-		p.cstp = nil
+	if c != nil {
+		// Mark as clean shutdown so the readLoop's deferred onDisconnect
+		// does not fire a spurious session-drop / EventAuthRequired.
+		c.cleanShutdown.Store(true)
+		c.stop()
 	}
-	if p.cancel != nil {
-		p.cancel()
-		p.cancel = nil
+	if cancel != nil {
+		cancel()
 	}
 
+	p.mu.Lock()
 	p.state = core.TunnelStateDown
 	p.adapterIP = netip.Addr{}
+	p.mu.Unlock()
+
 	core.Log.Infof("AnyConnect", "Tunnel %q disconnected", p.name)
 	return nil
 }

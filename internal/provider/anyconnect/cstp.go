@@ -59,6 +59,10 @@ type cstpConn struct {
 	// onDisconnect is called when the CSTP readLoop exits (session drop, server terminate, I/O error).
 	onDisconnect func(error)
 
+	// cleanShutdown is set before stop() to suppress the onDisconnect callback
+	// on intentional disconnect (avoids spurious session-drop events).
+	cleanShutdown atomic.Bool
+
 	cancel  func()
 	stopped chan struct{}
 }
@@ -214,7 +218,7 @@ func (c *cstpConn) readLoop() {
 
 	var exitErr error
 	defer func() {
-		if c.onDisconnect != nil {
+		if c.onDisconnect != nil && !c.cleanShutdown.Load() {
 			c.onDisconnect(exitErr)
 		}
 	}()
