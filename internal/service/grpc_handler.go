@@ -466,6 +466,11 @@ func (s *Service) RestoreConnections(ctx context.Context, _ *emptypb.Empty) (*vp
 
 	var lastErr error
 	for _, tunnelID := range activeTunnels {
+		// Skip tunnels that require interactive auth (e.g. AnyConnect with OTP).
+		if entry, ok := s.registry.Get(tunnelID); ok && entry.Config.Protocol == "anyconnect" {
+			core.Log.Infof("Core", "RestoreConnections: skipping %q (requires interactive auth)", tunnelID)
+			continue
+		}
 		if err := s.ctrl.ConnectTunnel(ctx, tunnelID); err != nil {
 			core.Log.Warnf("Core", "RestoreConnections: failed to connect %q: %v", tunnelID, err)
 			lastErr = err

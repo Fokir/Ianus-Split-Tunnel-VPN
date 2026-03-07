@@ -990,9 +990,14 @@ func (tc *TunnelControllerImpl) saveActiveTunnels() {
 
 	var active []string
 	for _, id := range ids {
-		if tc.deps.Registry.GetState(id) == core.TunnelStateUp {
-			active = append(active, id)
+		if tc.deps.Registry.GetState(id) != core.TunnelStateUp {
+			continue
 		}
+		// Don't persist tunnels that require interactive auth (e.g. AnyConnect with OTP).
+		if entry, ok := tc.deps.Registry.Get(id); ok && entry.Config.Protocol == "anyconnect" {
+			continue
+		}
+		active = append(active, id)
 	}
 
 	cfg := tc.deps.Cfg.Get()
