@@ -6,10 +6,23 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"awg-split-tunnel/internal/core"
 )
+
+// RedirectError is returned when the server redirects to a different host,
+// requiring a new TLS connection.
+type RedirectError struct {
+	Host string // new host (without port)
+	Port string // new port (may be empty → default 443)
+	Path string // new path
+}
+
+func (e *RedirectError) Error() string {
+	return fmt.Sprintf("redirect to %s:%s%s", e.Host, e.Port, e.Path)
+}
 
 // ---- XML structures for AnyConnect authentication ----
 
@@ -313,70 +326,139 @@ type authPostResult struct {
 	cookies []*http.Cookie
 }
 
+const maxRedirects = 10
+
 func doAuthPost(br *bufio.Reader, conn io.Writer, host, path, body string, cookies []*http.Cookie, cid clientID) (*authPostResult, error) {
-	var cookieHeader string
-	if len(cookies) > 0 {
-		var parts []string
-		for _, c := range cookies {
-			parts = append(parts, c.Name+"="+c.Value)
+	for redirects := 0; ; redirects++ {
+		if redirects >= maxRedirects {
+			return nil, fmt.Errorf("too many redirects")
 		}
-		cookieHeader = "Cookie: " + strings.Join(parts, "; ") + "\r\n"
+
+		var cookieHeader string
+		if len(cookies) > 0 {
+			var parts []string
+			for _, c := range cookies {
+				parts = append(parts, c.Name+"="+c.Value)
+			}
+			cookieHeader = "Cookie: " + strings.Join(parts, "; ") + "\r\n"
+		}
+
+		reqStr := fmt.Sprintf("POST %s HTTP/1.1\r\n"+
+			"Host: %s\r\n"+
+			"User-Agent: %s\r\n"+
+			"Content-Type: application/xml; charset=utf-8\r\n"+
+			"Accept: */*\r\n"+
+			"Accept-Encoding: identity\r\n"+
+			"X-Transcend-Version: 1\r\n"+
+			"X-Aggregate-Auth: 1\r\n"+
+			"X-AnyConnect-Platform: %s\r\n"+
+			"%s"+
+			"Content-Length: %d\r\n"+
+			"\r\n%s",
+			path, host, cid.UserAgent, cid.DeviceType, cookieHeader, len(body), body)
+
+		if _, err := io.WriteString(conn, reqStr); err != nil {
+			return nil, fmt.Errorf("write request: %w", err)
+		}
+
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+
+		// Handle redirects (301, 302, 303, 307, 308).
+		if isRedirect(resp.StatusCode) {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+
+			// Merge cookies from redirect response.
+			for _, c := range resp.Cookies() {
+				cookies = mergeCookie(cookies, c)
+			}
+
+			loc := resp.Header.Get("Location")
+			if loc == "" {
+				return nil, fmt.Errorf("HTTP %d without Location header", resp.StatusCode)
+			}
+			core.Log.Infof("AnyConnect", "Redirect %d → %s", resp.StatusCode, loc)
+
+			newHost, newPort, newPath, err := parseRedirectLocation(loc, host)
+			if err != nil {
+				return nil, fmt.Errorf("parse redirect location %q: %w", loc, err)
+			}
+
+			// Same host — follow on the same TLS connection.
+			if newHost == host {
+				path = newPath
+				continue
+			}
+
+			// Different host — need a new TLS connection; bubble up.
+			return nil, &RedirectError{Host: newHost, Port: newPort, Path: newPath}
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read body: %w", err)
+		}
+
+		core.Log.Debugf("AnyConnect", "Response (HTTP %d, %d bytes): %s", resp.StatusCode, len(respBody), string(respBody))
+
+		var ca configAuth
+		if err := xml.Unmarshal(respBody, &ca); err != nil {
+			return nil, fmt.Errorf("parse XML: %w (body: %s)", err, string(respBody))
+		}
+
+		// Merge cookies: keep old, add/update new.
+		for _, c := range resp.Cookies() {
+			cookies = mergeCookie(cookies, c)
+		}
+
+		return &authPostResult{config: &ca, cookies: cookies}, nil
 	}
+}
 
-	reqStr := fmt.Sprintf("POST %s HTTP/1.1\r\n"+
-		"Host: %s\r\n"+
-		"User-Agent: %s\r\n"+
-		"Content-Type: application/xml; charset=utf-8\r\n"+
-		"Accept: */*\r\n"+
-		"Accept-Encoding: identity\r\n"+
-		"X-Transcend-Version: 1\r\n"+
-		"X-Aggregate-Auth: 1\r\n"+
-		"X-AnyConnect-Platform: %s\r\n"+
-		"%s"+
-		"Content-Length: %d\r\n"+
-		"\r\n%s",
-		path, host, cid.UserAgent, cid.DeviceType, cookieHeader, len(body), body)
+func isRedirect(code int) bool {
+	return code == 301 || code == 302 || code == 303 || code == 307 || code == 308
+}
 
-	if _, err := io.WriteString(conn, reqStr); err != nil {
-		return nil, fmt.Errorf("write request: %w", err)
+// parseRedirectLocation extracts host, port, and path from a Location header.
+// Handles both absolute URLs and relative paths.
+func parseRedirectLocation(loc, currentHost string) (host, port, path string, err error) {
+	if strings.HasPrefix(loc, "/") {
+		// Relative path — same host.
+		return currentHost, "", loc, nil
 	}
-
-	resp, err := http.ReadResponse(br, nil)
+	u, err := url.Parse(loc)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return "", "", "", err
 	}
-	defer resp.Body.Close()
+	host = u.Hostname()
+	port = u.Port()
+	path = u.RequestURI()
+	if path == "" {
+		path = "/"
+	}
+	if host == "" {
+		host = currentHost
+	}
+	return host, port, path, nil
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+func mergeCookie(cookies []*http.Cookie, c *http.Cookie) []*http.Cookie {
+	for i, existing := range cookies {
+		if existing.Name == c.Name {
+			cookies[i] = c
+			return cookies
+		}
 	}
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
-	}
-
-	core.Log.Debugf("AnyConnect", "Response (HTTP %d, %d bytes): %s", resp.StatusCode, len(respBody), string(respBody))
-
-	var ca configAuth
-	if err := xml.Unmarshal(respBody, &ca); err != nil {
-		return nil, fmt.Errorf("parse XML: %w (body: %s)", err, string(respBody))
-	}
-
-	// Merge cookies: keep old, add/update new.
-	cookieMap := make(map[string]*http.Cookie)
-	for _, c := range cookies {
-		cookieMap[c.Name] = c
-	}
-	for _, c := range resp.Cookies() {
-		cookieMap[c.Name] = c
-	}
-	var merged []*http.Cookie
-	for _, c := range cookieMap {
-		merged = append(merged, c)
-	}
-
-	return &authPostResult{config: &ca, cookies: merged}, nil
+	return append(cookies, c)
 }
 
 func xmlEscape(s string) string {

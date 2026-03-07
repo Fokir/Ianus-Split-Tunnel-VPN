@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -157,54 +159,79 @@ func (p *Provider) Connect(ctx context.Context) error {
 		controlFn = binder.BindControl(realNICIndex)
 	}
 
-	serverIP, err := p.resolveViaRealNIC(ctx, p.config.Server, realNICIndex, controlFn)
-	if err != nil {
-		p.state = core.TunnelStateError
-		return fmt.Errorf("[AnyConnect] resolve %s: %w", p.config.Server, err)
-	}
-	serverAddr := fmt.Sprintf("%s:%d", serverIP, p.config.Port)
-	if ip, ok := netip.AddrFromSlice(net.ParseIP(serverIP)); ok {
-		p.serverEndpoints = []netip.AddrPort{netip.AddrPortFrom(ip, uint16(p.config.Port))}
-	}
-
-	// 2. TLS dial via real NIC.
-	dialer := &net.Dialer{Timeout: 15 * time.Second, Control: controlFn}
-	tlsConn, err := tls.DialWithDialer(dialer, "tcp", serverAddr, &tls.Config{
-		InsecureSkipVerify: p.config.TLSSkipVerify,
-		ServerName:         p.config.Server,
-	})
-	if err != nil {
-		p.state = core.TunnelStateError
-		return fmt.Errorf("[AnyConnect] TLS dial: %w", err)
-	}
-
-	br := bufio.NewReader(tlsConn)
-
-	// 3. Authenticate.
-	core.Log.Infof("AnyConnect", "Authenticating as %q...", p.config.Username)
+	// Prepare credentials (consume OTP early so it's never reused).
 	creds := credentials{
 		Username: p.config.Username,
 		Password: p.config.Password,
 		Group:    p.config.Group,
 	}
-	// OTP code comes from ephemeral auth params (set by SetAuthParams before Connect).
-	// Consume and clear immediately so stale OTP is never reused on reconnect.
 	if p.authParams != nil {
 		if otp, ok := p.authParams["otp_code"]; ok {
 			creds.OTPCode = otp
 		}
 		p.authParams = nil
 	}
-	sess, err := authenticate(br, tlsConn, p.config.Server, creds, p.cid)
-	if err != nil {
-		tlsConn.Close()
+
+	// Auth loop: may retry on cross-host redirects.
+	server := p.config.Server
+	port := p.config.Port
+	var sess *sessionInfo
+	var tlsConn *tls.Conn
+	var br *bufio.Reader
+
+	for attempt := 0; attempt < maxRedirects; attempt++ {
+		serverIP, err := p.resolveViaRealNIC(ctx, server, realNICIndex, controlFn)
+		if err != nil {
+			p.state = core.TunnelStateError
+			return fmt.Errorf("[AnyConnect] resolve %s: %w", server, err)
+		}
+		serverAddr := fmt.Sprintf("%s:%d", serverIP, port)
+		if ip, ok := netip.AddrFromSlice(net.ParseIP(serverIP)); ok {
+			p.serverEndpoints = []netip.AddrPort{netip.AddrPortFrom(ip, uint16(port))}
+		}
+
+		// TLS dial via real NIC.
+		dialer := &net.Dialer{Timeout: 15 * time.Second, Control: controlFn}
+		tlsConn, err = tls.DialWithDialer(dialer, "tcp", serverAddr, &tls.Config{
+			InsecureSkipVerify: p.config.TLSSkipVerify,
+			ServerName:         server,
+		})
+		if err != nil {
+			p.state = core.TunnelStateError
+			return fmt.Errorf("[AnyConnect] TLS dial: %w", err)
+		}
+
+		br = bufio.NewReader(tlsConn)
+
+		core.Log.Infof("AnyConnect", "Authenticating as %q on %s...", p.config.Username, server)
+		sess, err = authenticate(br, tlsConn, server, creds, p.cid)
+		if err != nil {
+			tlsConn.Close()
+			// Cross-host redirect — reconnect to the new server.
+			var re *RedirectError
+			if errors.As(err, &re) {
+				core.Log.Infof("AnyConnect", "Following cross-host redirect to %s", re.Host)
+				server = re.Host
+				if re.Port != "" {
+					if p, err := strconv.Atoi(re.Port); err == nil {
+						port = p
+					}
+				}
+				continue
+			}
+			p.state = core.TunnelStateError
+			return fmt.Errorf("[AnyConnect] auth: %w", err)
+		}
+		break
+	}
+	if sess == nil {
 		p.state = core.TunnelStateError
-		return fmt.Errorf("[AnyConnect] auth: %w", err)
+		return fmt.Errorf("[AnyConnect] auth: too many redirects")
 	}
 	core.Log.Infof("AnyConnect", "Authentication successful")
 
 	// 4. Establish CSTP tunnel.
-	params, err := establishTunnel(br, tlsConn, p.config.Server, sess.Cookie, p.cid)
+	params, err := establishTunnel(br, tlsConn, server, sess.Cookie, p.cid)
 	if err != nil {
 		tlsConn.Close()
 		p.state = core.TunnelStateError
