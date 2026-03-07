@@ -5,6 +5,11 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -16,15 +21,16 @@ import (
 // ─── Tunnel management ──────────────────────────────────────────────
 
 type TunnelInfo struct {
-	ID          string `json:"id"`
-	Protocol    string `json:"protocol"`
-	Name        string `json:"name"`
-	State       string `json:"state"` // "down", "connecting", "up", "error"
-	Error       string `json:"error"`
-	AdapterIP   string `json:"adapterIp"`
-	ExternalIP  string `json:"externalIp"`
-	CountryCode string `json:"countryCode"`
-	SortIndex   int    `json:"sortIndex"`
+	ID          string            `json:"id"`
+	Protocol    string            `json:"protocol"`
+	Name        string            `json:"name"`
+	State       string            `json:"state"` // "down", "connecting", "up", "error"
+	Error       string            `json:"error"`
+	AdapterIP   string            `json:"adapterIp"`
+	ExternalIP  string            `json:"externalIp"`
+	CountryCode string            `json:"countryCode"`
+	SortIndex   int               `json:"sortIndex"`
+	Settings    map[string]string `json:"settings"`
 }
 
 func tunnelStateStr(s vpnapi.TunnelState) string {
@@ -61,6 +67,7 @@ func (b *BindingService) ListTunnels() ([]TunnelInfo, error) {
 		if t.Config != nil {
 			info.Protocol = t.Config.Protocol
 			info.Name = t.Config.Name
+			info.Settings = t.Config.Settings
 		}
 		tunnels = append(tunnels, info)
 	}
@@ -209,4 +216,69 @@ func (b *BindingService) RenameTunnel(tunnelID, name string) error {
 	}
 	b.emitTunnelsChanged()
 	return nil
+}
+
+// UpdateTunnel updates tunnel settings (tunnel must be disconnected).
+func (b *BindingService) UpdateTunnel(params AddTunnelParams) error {
+	resp, err := b.client.Service.UpdateTunnel(context.Background(), &vpnapi.UpdateTunnelRequest{
+		Config: &vpnapi.TunnelConfig{
+			Id:       params.ID,
+			Protocol: params.Protocol,
+			Name:     params.Name,
+			Settings: params.Settings,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	b.emitTunnelsChanged()
+	return nil
+}
+
+// OpenTunnelConfigFile opens a tunnel config file in the system default editor.
+func (b *BindingService) OpenTunnelConfigFile(tunnelID string) error {
+	// Get tunnel to find the config_file setting.
+	resp, err := b.client.Service.GetTunnel(context.Background(), &vpnapi.GetTunnelRequest{TunnelId: tunnelID})
+	if err != nil {
+		return err
+	}
+	if resp.Config == nil || resp.Config.Settings == nil {
+		return errors.New("tunnel has no config")
+	}
+	confFile, ok := resp.Config.Settings["config_file"]
+	if !ok || confFile == "" {
+		return errors.New("tunnel has no config file")
+	}
+
+	// Resolve path relative to executable.
+	confPath, err := resolveRelativeToExeBinding(confFile)
+	if err != nil {
+		return err
+	}
+
+	// Open with system default application.
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", confPath)
+	case "darwin":
+		cmd = exec.Command("open", confPath)
+	default:
+		cmd = exec.Command("xdg-open", confPath)
+	}
+	return cmd.Start()
+}
+
+func resolveRelativeToExeBinding(name string) (string, error) {
+	if filepath.IsAbs(name) {
+		return name, nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine executable path: %w", err)
+	}
+	return filepath.Join(filepath.Dir(exe), name), nil
 }

@@ -56,6 +56,14 @@ export function renameTunnel(tunnelID, name) {
   return BindingService.RenameTunnel(tunnelID, name);
 }
 
+export function updateTunnel(params) {
+  return BindingService.UpdateTunnel(params);
+}
+
+export function openTunnelConfigFile(tunnelID) {
+  return BindingService.OpenTunnelConfigFile(tunnelID);
+}
+
 // ─── Rules ──────────────────────────────────────────────────────────
 
 export function listRules() {

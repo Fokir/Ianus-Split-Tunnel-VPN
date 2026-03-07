@@ -88,7 +88,12 @@
     "otpTitle": "Two-factor authentication",
     "otpDescription": "Enter the one-time code from your authenticator app to connect.",
     "otpLabel": "OTP code",
-    "otpSkip": "Skip"
+    "otpSkip": "Skip",
+    "edit": "Edit",
+    "editTitle": "Edit",
+    "saveBtn": "Save",
+    "openConfig": "Open config file",
+    "editDisabledHint": "Disconnect tunnel to edit"
   },
   "subscriptions": {
     "title": "Subscriptions",

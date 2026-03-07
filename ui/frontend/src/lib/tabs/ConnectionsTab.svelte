@@ -23,6 +23,7 @@
   // Form modal
   let showFormModal = false;
   let formModalProtocol = '';
+  let editTunnelData = null; // null = add mode, { id, name, settings } = edit mode
 
   // URI modal
   let showUriModal = false;
@@ -205,7 +206,35 @@
   function openFormModal(protocol) {
     showAddMenu = false;
     formModalProtocol = protocol;
+    editTunnelData = null;
     showFormModal = true;
+  }
+
+  // Protocols that use a modal form for configuration
+  const formProtocols = ['socks5', 'httpproxy', 'vless', 'anyconnect'];
+  // Protocols that use a config file
+  const fileProtocols = ['amneziawg', 'wireguard'];
+
+  function canEdit(tunnel) {
+    return formProtocols.includes(tunnel.protocol) || fileProtocols.includes(tunnel.protocol);
+  }
+
+  function hasFormEdit(tunnel) {
+    return formProtocols.includes(tunnel.protocol);
+  }
+
+  async function editTunnel(tunnel) {
+    if (hasFormEdit(tunnel)) {
+      formModalProtocol = tunnel.protocol;
+      editTunnelData = { id: tunnel.id, name: tunnel.name, settings: tunnel.settings || {} };
+      showFormModal = true;
+    } else if (fileProtocols.includes(tunnel.protocol)) {
+      try {
+        await api.openTunnelConfigFile(tunnel.id);
+      } catch (e) {
+        error = e.message;
+      }
+    }
   }
 
   function openUriModal() {
@@ -216,6 +245,7 @@
   async function handleTunnelAdded() {
     showFormModal = false;
     showUriModal = false;
+    editTunnelData = null;
     await refresh();
   }
 
@@ -432,6 +462,19 @@
                   <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                 </button>
               {/if}
+              {#if canEdit(tunnel)}
+                {#if tunnel.state === 'up' || tunnel.state === 'connecting'}
+                  <button class="p-1.5 rounded-md text-zinc-600 cursor-not-allowed" title={$t('connections.editDisabledHint')} disabled>
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                  </button>
+                {:else}
+                  <button class="p-1.5 rounded-md text-zinc-400 hover:text-blue-400 hover:bg-zinc-700/50 transition-colors"
+                    title={hasFormEdit(tunnel) ? $t('connections.edit') : $t('connections.openConfig')}
+                    on:click={() => editTunnel(tunnel)}>
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                  </button>
+                {/if}
+              {/if}
               {#if confirmRemoveId === tunnel.id}
                 <div class="flex items-center gap-1 ml-1">
                   <button class="px-2 py-1 text-xs rounded bg-red-600/30 text-red-400 hover:bg-red-600/50 transition-colors" on:click={() => remove(tunnel.id)}>{$t('connections.yes')}</button>
@@ -467,9 +510,9 @@
   {/if}
 </div>
 
-<!-- Tunnel form modal (SOCKS5/HTTP/VLESS) -->
-<TunnelFormModal open={showFormModal} protocol={formModalProtocol}
-  on:close={() => { showFormModal = false; }}
+<!-- Tunnel form modal (SOCKS5/HTTP/VLESS) — add & edit -->
+<TunnelFormModal open={showFormModal} protocol={formModalProtocol} editTunnel={editTunnelData}
+  on:close={() => { showFormModal = false; editTunnelData = null; }}
   on:added={handleTunnelAdded}
 />
 

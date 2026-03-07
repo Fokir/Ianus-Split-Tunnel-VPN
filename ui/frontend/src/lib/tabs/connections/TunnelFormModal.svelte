@@ -11,6 +11,7 @@
 
   export let open = false;
   export let protocol = '';
+  export let editTunnel = null; // { id, name, settings } — if set, we're in edit mode
 
   const dispatch = createEventDispatcher();
 
@@ -32,7 +33,15 @@
   let vlessWsPath = '', vlessWsHost = '', vlessGrpcServiceName = '';
   let vlessXhttpPath = '', vlessXhttpHost = '', vlessXhttpMode = 'auto';
 
-  $: if (open) resetAll();
+  $: isEdit = !!editTunnel;
+
+  $: if (open) {
+    if (editTunnel) {
+      populateFromTunnel(editTunnel);
+    } else {
+      resetAll();
+    }
+  }
 
   function resetAll() {
     modalName = ''; modalSaving = false; modalError = '';
@@ -45,6 +54,55 @@
     vlessTlsServerName = ''; vlessTlsFingerprint = 'chrome'; vlessTlsAllowInsecure = false;
     vlessWsPath = ''; vlessWsHost = ''; vlessGrpcServiceName = '';
     vlessXhttpPath = ''; vlessXhttpHost = ''; vlessXhttpMode = 'auto';
+  }
+
+  function populateFromTunnel(tunnel) {
+    modalSaving = false;
+    modalError = '';
+    modalName = tunnel.name || '';
+    const s = tunnel.settings || {};
+
+    if (protocol === 'socks5') {
+      socks5Server = s.server || '';
+      socks5Port = s.port || '1080';
+      socks5Username = s.username || '';
+      socks5Password = s.password || '';
+      socks5UdpEnabled = s.udp_enabled !== 'false';
+    } else if (protocol === 'httpproxy') {
+      httpServer = s.server || '';
+      httpPort = s.port || '8080';
+      httpUsername = s.username || '';
+      httpPassword = s.password || '';
+      httpTls = s.tls === 'true';
+      httpTlsSkipVerify = s.tls_skip_verify === 'true';
+    } else if (protocol === 'anyconnect') {
+      acServer = s.server || '';
+      acPort = s.port || '443';
+      acUsername = s.username || '';
+      acPassword = s.password || '';
+      acGroup = s.group || '';
+      acTlsSkipVerify = s.tls_skip_verify === 'true';
+    } else if (protocol === 'vless') {
+      vlessAddress = s.address || '';
+      vlessPort = s.port || '443';
+      vlessUuid = s.uuid || '';
+      vlessFlow = s.flow || 'xtls-rprx-vision';
+      vlessSecurity = s.security || 'reality';
+      vlessNetwork = s.network || 'tcp';
+      vlessRealityPublicKey = s['reality.public_key'] || '';
+      vlessRealityShortId = s['reality.short_id'] || '';
+      vlessRealityServerName = s['reality.server_name'] || '';
+      vlessRealityFingerprint = s['reality.fingerprint'] || 'chrome';
+      vlessTlsServerName = s['tls.server_name'] || '';
+      vlessTlsFingerprint = s['tls.fingerprint'] || 'chrome';
+      vlessTlsAllowInsecure = s['tls.allow_insecure'] === 'true';
+      vlessWsPath = s['ws.path'] || '';
+      vlessWsHost = s['ws.headers.Host'] || '';
+      vlessGrpcServiceName = s['grpc.service_name'] || '';
+      vlessXhttpPath = s['xhttp.path'] || '';
+      vlessXhttpHost = s['xhttp.host'] || '';
+      vlessXhttpMode = s['xhttp.mode'] || 'auto';
+    }
   }
 
   function protocolLabelFull(proto) {
@@ -124,9 +182,15 @@
         }
       }
 
-      await api.addTunnel({
-        id: '', protocol, name: modalName.trim(), settings, configFileData: [],
-      });
+      if (isEdit) {
+        await api.updateTunnel({
+          id: editTunnel.id, protocol, name: modalName.trim(), settings, configFileData: [],
+        });
+      } else {
+        await api.addTunnel({
+          id: '', protocol, name: modalName.trim(), settings, configFileData: [],
+        });
+      }
       dispatch('added');
     } catch (err) {
       modalError = err.message;
@@ -136,7 +200,7 @@
   }
 </script>
 
-<Modal {open} title={protocolLabelFull(protocol)} on:close={close}>
+<Modal {open} title="{isEdit ? $t('connections.editTitle') : ''} {protocolLabelFull(protocol)}" on:close={close}>
   <div class="space-y-3">
     {#if modalError}
       <ErrorAlert message={modalError} />
@@ -180,7 +244,7 @@
       disabled={modalSaving}
       on:click={save}
     >
-      {modalSaving ? $t('connections.saving') : $t('connections.addBtn')}
+      {modalSaving ? $t('connections.saving') : (isEdit ? $t('connections.saveBtn') : $t('connections.addBtn'))}
     </button>
   </svelte:fragment>
 </Modal>
