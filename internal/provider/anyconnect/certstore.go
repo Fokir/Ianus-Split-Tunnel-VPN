@@ -5,6 +5,8 @@ import (
 	"crypto"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"fmt"
 
 	"awg-split-tunnel/internal/core"
@@ -16,6 +18,7 @@ import (
 // Returns nil (no cert) when no match is found — this lets TLS proceed
 // without a client certificate (the server may fall back to password auth).
 func findSystemCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+	core.Log.Infof("AnyConnect", "TLS CertificateRequest received — searching for client certificate...")
 	certs, err := enumerateSystemClientCerts()
 	if err != nil {
 		core.Log.Warnf("AnyConnect", "System cert store enumeration failed: %v", err)
@@ -30,6 +33,16 @@ func findSystemCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, 
 
 	// If the server specified acceptable CAs, filter by issuer.
 	if len(info.AcceptableCAs) > 0 {
+		// Log acceptable CAs for debugging.
+		for i, ca := range info.AcceptableCAs {
+			parsed, err := parseDN(ca)
+			if err == nil {
+				core.Log.Debugf("AnyConnect", "  Server acceptable CA[%d]: %s", i, parsed)
+			} else {
+				core.Log.Debugf("AnyConnect", "  Server acceptable CA[%d]: (%d bytes, parse error: %v)", i, len(ca), err)
+			}
+		}
+
 		acceptableSet := make(map[string]struct{}, len(info.AcceptableCAs))
 		for _, ca := range info.AcceptableCAs {
 			acceptableSet[string(ca)] = struct{}{}
@@ -40,13 +53,30 @@ func findSystemCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, 
 			if err != nil {
 				continue
 			}
-			if _, ok := acceptableSet[string(leaf.RawIssuer)]; ok {
-				core.Log.Infof("AnyConnect", "Auto-selected client certificate: subject=%q issuer=%q",
+			_, match := acceptableSet[string(leaf.RawIssuer)]
+			core.Log.Debugf("AnyConnect", "  Cert %q issuer=%q — CA match: %v",
+				leaf.Subject.CommonName, leaf.Issuer.CommonName, match)
+			if match {
+				core.Log.Infof("AnyConnect", "Auto-selected client certificate: subject=%q issuer=%q (matched server CA)",
 					leaf.Subject.CommonName, leaf.Issuer.CommonName)
 				return &certs[i], nil
 			}
 		}
-		core.Log.Warnf("AnyConnect", "No client certificate matches server's acceptable CAs (%d CAs)", len(info.AcceptableCAs))
+		core.Log.Warnf("AnyConnect", "No client certificate matches server's acceptable CAs (%d CAs, %d certs checked)",
+			len(info.AcceptableCAs), len(certs))
+
+		// Fallback: if no CA match, try the first cert anyway.
+		// Some servers send AcceptableCAs that don't exactly match the issuer
+		// encoding but will still accept the certificate.
+		if len(certs) > 0 {
+			leaf, _ := x509.ParseCertificate(certs[0].Certificate[0])
+			if leaf != nil {
+				core.Log.Infof("AnyConnect", "Fallback: sending first certificate anyway: subject=%q issuer=%q",
+					leaf.Subject.CommonName, leaf.Issuer.CommonName)
+			}
+			return &certs[0], nil
+		}
+
 		return &tls.Certificate{}, nil
 	}
 
@@ -54,7 +84,7 @@ func findSystemCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, 
 	if len(certs) > 0 {
 		leaf, _ := x509.ParseCertificate(certs[0].Certificate[0])
 		if leaf != nil {
-			core.Log.Infof("AnyConnect", "Auto-selected first client certificate: subject=%q issuer=%q",
+			core.Log.Infof("AnyConnect", "Auto-selected first client certificate (no CA filter): subject=%q issuer=%q",
 				leaf.Subject.CommonName, leaf.Issuer.CommonName)
 		}
 		return &certs[0], nil
@@ -81,6 +111,17 @@ func (e *certStoreError) Error() string {
 }
 
 func (e *certStoreError) Unwrap() error { return e.Err }
+
+// parseDN attempts to parse a raw ASN.1 Distinguished Name for logging.
+func parseDN(raw []byte) (string, error) {
+	var rdnSeq pkix.RDNSequence
+	if _, err := asn1.Unmarshal(raw, &rdnSeq); err != nil {
+		return "", err
+	}
+	var name pkix.Name
+	name.FillFromRDNSequence(&rdnSeq)
+	return name.String(), nil
+}
 
 // findSystemKeyForCert finds the private key for the given certificate in the
 // system certificate store. This handles the common Cisco AnyConnect scenario

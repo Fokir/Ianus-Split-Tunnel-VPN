@@ -231,6 +231,8 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 	// Per the Cisco AnyConnect protocol (cf. OpenConnect), the client does NOT
 	// send any special XML reply — the TLS session proves cert ownership.
 	if resp.ClientCertRequest != nil {
+		core.Log.Infof("AnyConnect", "Server sent <client-cert-request>; certSent=%v, certAuthenticated=%v",
+			certSent, resp.CertAuthenticated != nil)
 		if resp.CertAuthenticated != nil {
 			core.Log.Infof("AnyConnect", "Server accepted TLS client certificate (cert-authenticated)")
 		} else if !certSent {
@@ -238,7 +240,8 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 			return nil, fmt.Errorf("server requires client certificate authentication but no certificate was sent; " +
 				"set client_cert to a PEM file path or \"auto\" to use the system certificate store")
 		} else {
-			core.Log.Warnf("AnyConnect", "Server requested client certificate but rejected the one provided during TLS handshake")
+			core.Log.Warnf("AnyConnect", "Server requested client certificate but did not confirm cert-authenticated; " +
+				"the certificate may have been rejected by the server")
 			return nil, fmt.Errorf("server rejected the TLS client certificate; " +
 				"verify the certificate is trusted by the server's CA, is not expired, and has Client Authentication EKU")
 		}

@@ -101,6 +101,7 @@ func consoleUserLoginKeychain() string {
 // and the console user's Login Keychain.
 func enumerateSystemClientCerts() ([]tls.Certificate, error) {
 	keychains := keychainPaths()
+	core.Log.Infof("AnyConnect", "Keychain search: keychains=%v, uid=%d", keychains, os.Getuid())
 
 	type identity struct {
 		sha1Hash string
@@ -113,11 +114,13 @@ func enumerateSystemClientCerts() ([]tls.Certificate, error) {
 	// Search each keychain for SSL client identities.
 	for _, kc := range keychains {
 		args := []string{"find-identity", "-v", "-p", "ssl-client", kc}
+		core.Log.Debugf("AnyConnect", "Running: security %s", strings.Join(args, " "))
 		out, err := exec.Command("security", args...).Output()
 		if err != nil {
-			core.Log.Debugf("AnyConnect", "Keychain %s: find-identity failed: %v", kc, err)
+			core.Log.Warnf("AnyConnect", "Keychain %s: find-identity -p ssl-client failed: %v", kc, err)
 			continue
 		}
+		core.Log.Debugf("AnyConnect", "Keychain %s (ssl-client) output:\n%s", kc, string(out))
 
 		for _, line := range strings.Split(string(out), "\n") {
 			m := reIdentity.FindStringSubmatch(line)
@@ -129,6 +132,7 @@ func enumerateSystemClientCerts() ([]tls.Certificate, error) {
 				continue
 			}
 			seen[hash] = struct{}{}
+			core.Log.Infof("AnyConnect", "Keychain: found identity %q (hash=%s, keychain=%s, policy=ssl-client)", m[2], hash[:8], kc)
 			identities = append(identities, identity{sha1Hash: m[1], name: m[2], keychain: kc})
 		}
 	}
@@ -159,16 +163,19 @@ func enumerateSystemClientCerts() ([]tls.Certificate, error) {
 	// but are still valid for TLS client authentication. The TLS handshake's
 	// AcceptableCAs filter will select the correct certificate.
 	if len(identities) == 0 {
-		core.Log.Debugf("AnyConnect", "No ssl-client identities found; searching without policy filter")
+		core.Log.Infof("AnyConnect", "No ssl-client identities found; searching without policy filter")
 		searches := [][]string{{"find-identity", "-v"}}
 		for _, kc := range keychains {
 			searches = append(searches, []string{"find-identity", "-v", kc})
 		}
 		for _, args := range searches {
+			core.Log.Debugf("AnyConnect", "Running: security %s", strings.Join(args, " "))
 			out, err := exec.Command("security", args...).Output()
 			if err != nil {
+				core.Log.Warnf("AnyConnect", "find-identity (no policy) failed: %v", err)
 				continue
 			}
+			core.Log.Debugf("AnyConnect", "find-identity (no policy) output:\n%s", string(out))
 			for _, line := range strings.Split(string(out), "\n") {
 				m := reIdentity.FindStringSubmatch(line)
 				if m == nil {
@@ -179,27 +186,36 @@ func enumerateSystemClientCerts() ([]tls.Certificate, error) {
 					continue
 				}
 				seen[hash] = struct{}{}
+				core.Log.Infof("AnyConnect", "Keychain: found identity %q (hash=%s, policy=any)", m[2], hash[:8])
 				identities = append(identities, identity{sha1Hash: m[1], name: m[2]})
 			}
 		}
 	}
 
 	if len(identities) == 0 {
+		core.Log.Warnf("AnyConnect", "No identities found in any keychain (searched %d keychains + default list)", len(keychains))
 		return nil, nil
 	}
 
-	core.Log.Infof("AnyConnect", "Keychain: found %d SSL client identity(ies)", len(identities))
+	core.Log.Infof("AnyConnect", "Keychain: found %d identity(ies) total, loading certificates...", len(identities))
 
 	var result []tls.Certificate
 	for _, id := range identities {
+		core.Log.Infof("AnyConnect", "Keychain: loading identity %q (hash=%s, keychain=%q)...", id.name, id.sha1Hash[:8], id.keychain)
 		cert, err := exportIdentity(id.sha1Hash, id.name, id.keychain)
 		if err != nil {
-			core.Log.Debugf("AnyConnect", "Keychain: skip %q (%s): %v", id.name, id.sha1Hash[:8], err)
+			core.Log.Warnf("AnyConnect", "Keychain: failed to load %q (%s): %v", id.name, id.sha1Hash[:8], err)
 			continue
+		}
+		if cert.Leaf != nil {
+			core.Log.Infof("AnyConnect", "Keychain: loaded %q — subject=%q issuer=%q notAfter=%s EKUs=%v",
+				id.name, cert.Leaf.Subject.CommonName, cert.Leaf.Issuer.CommonName,
+				cert.Leaf.NotAfter.Format("2006-01-02"), cert.Leaf.ExtKeyUsage)
 		}
 		result = append(result, *cert)
 	}
 
+	core.Log.Infof("AnyConnect", "Keychain: %d/%d identities loaded successfully", len(result), len(identities))
 	return result, nil
 }
 
