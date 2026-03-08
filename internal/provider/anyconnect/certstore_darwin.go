@@ -223,25 +223,34 @@ func enumerateSystemClientCerts() ([]tls.Certificate, error) {
 // It first tries the native Security Framework signer (private key stays in Keychain,
 // analogous to NCrypt on Windows). If that fails, it falls back to PKCS12 export.
 func exportIdentity(sha1Hash, name, keychain string) (*tls.Certificate, error) {
-	// Export the certificate (public part only) by SHA-1 hash.
-	findCertArgs := []string{"find-certificate", "-Z", sha1Hash, "-p"}
+	// Export the certificate (public part only) by common name.
+	// Note: `-Z` is an output flag (print SHA-1), not a search flag.
+	// Use `-c` to search by CN substring, then verify by SHA-1 hash.
+	findCertArgs := []string{"find-certificate", "-c", name, "-p", "-Z"}
 	if keychain != "" {
 		findCertArgs = append(findCertArgs, keychain)
 	}
-	certPEM, err := exec.Command("security", findCertArgs...).Output()
+	core.Log.Debugf("AnyConnect", "Running: security %s", strings.Join(findCertArgs, " "))
+	certOutput, err := exec.Command("security", findCertArgs...).Output()
 	if err != nil {
-		return nil, fmt.Errorf("find-certificate: %w", err)
+		return nil, fmt.Errorf("find-certificate -c %q: %w", name, err)
 	}
 
+	// Parse the PEM certificate from the output.
+	// The output may contain SHA-1/SHA-256 hash lines before the PEM block.
+	certPEM := certOutput
 	block, _ := pem.Decode(certPEM)
 	if block == nil {
-		return nil, fmt.Errorf("no PEM block in certificate output")
+		return nil, fmt.Errorf("no PEM block in find-certificate output for %q", name)
 	}
 
 	leaf, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("parse cert: %w", err)
 	}
+
+	core.Log.Debugf("AnyConnect", "Found certificate: subject=%q issuer=%q",
+		leaf.Subject.CommonName, leaf.Issuer.CommonName)
 
 	// Try native Keychain signer first (private key never leaves the Keychain).
 	signer, err := loadKeychainSigner(block.Bytes, keychain)
