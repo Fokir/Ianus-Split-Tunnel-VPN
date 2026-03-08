@@ -64,6 +64,12 @@ export function openTunnelConfigFile(tunnelID) {
   return BindingService.OpenTunnelConfigFile(tunnelID);
 }
 
+// ─── File picker ────────────────────────────────────────────────────
+
+export function pickFile(title, filterName, filterPattern) {
+  return BindingService.PickFile(title, filterName, filterPattern);
+}
+
 // ─── Rules ──────────────────────────────────────────────────────────
 
 export function listRules() {

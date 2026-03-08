@@ -1,5 +1,6 @@
 <script>
   import { t } from '../../../i18n';
+  import { pickFile } from '../../../api';
 
   export let server = '';
   export let port = '443';
@@ -11,6 +12,16 @@
   export let clientCertMode = '';
   export let clientCert = '';
   export let clientKey = '';
+
+  async function browseCert() {
+    const path = await pickFile($t('connections.clientCertPath'), 'PEM / CER', '*.pem;*.cer;*.crt');
+    if (path) clientCert = path;
+  }
+
+  async function browseKey() {
+    const path = await pickFile($t('connections.clientKeyPath'), 'PEM / KEY', '*.pem;*.key');
+    if (path) clientKey = path;
+  }
 </script>
 
 <div>
@@ -64,13 +75,23 @@
   <div class="grid grid-cols-2 gap-3">
     <div>
       <label for="ac-cert" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.clientCertPath')}</label>
-      <input id="ac-cert" type="text" bind:value={clientCert} placeholder="/path/to/client.pem"
-        class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none font-mono" />
+      <div class="flex gap-1.5">
+        <input id="ac-cert" type="text" bind:value={clientCert} placeholder="/path/to/client.pem"
+          class="flex-1 min-w-0 px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none font-mono" />
+        <button type="button" on:click={browseCert}
+          class="px-2.5 py-2 text-sm bg-zinc-700 hover:bg-zinc-600 border border-zinc-600 rounded-lg text-zinc-300 transition-colors shrink-0"
+          title="Browse">…</button>
+      </div>
     </div>
     <div>
       <label for="ac-key" class="block text-xs font-medium text-zinc-400 mb-1">{$t('connections.clientKeyPath')}</label>
-      <input id="ac-key" type="text" bind:value={clientKey} placeholder="/path/to/client-key.pem"
-        class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none font-mono" />
+      <div class="flex gap-1.5">
+        <input id="ac-key" type="text" bind:value={clientKey} placeholder="/path/to/client-key.pem"
+          class="flex-1 min-w-0 px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:border-blue-500 focus:outline-none font-mono" />
+        <button type="button" on:click={browseKey}
+          class="px-2.5 py-2 text-sm bg-zinc-700 hover:bg-zinc-600 border border-zinc-600 rounded-lg text-zinc-300 transition-colors shrink-0"
+          title="Browse">…</button>
+      </div>
     </div>
   </div>
 {/if}

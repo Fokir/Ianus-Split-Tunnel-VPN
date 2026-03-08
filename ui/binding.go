@@ -4,11 +4,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"sync"
 
 	"awg-split-tunnel/internal/ipc"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -43,6 +45,21 @@ func (b *BindingService) Shutdown() {
 // so the frontend can adapt UI hints and examples per platform.
 func (b *BindingService) GetPlatform() string {
 	return runtime.GOOS
+}
+
+// PickFile opens a native file dialog and returns the selected file path.
+// Returns empty string if the user cancels.
+func (b *BindingService) PickFile(title string, filterName string, filterPattern string) (string, error) {
+	app := application.Get()
+	if app == nil {
+		return "", fmt.Errorf("application not initialized")
+	}
+	dlg := app.Dialog.OpenFile().
+		SetTitle(title).
+		AddFilter(filterName, filterPattern).
+		CanChooseFiles(true).
+		CanChooseDirectories(false)
+	return dlg.PromptForSingleSelection()
 }
 
 // ─── Service status ─────────────────────────────────────────────────
