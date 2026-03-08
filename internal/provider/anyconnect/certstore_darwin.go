@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -24,24 +25,130 @@ import (
 //	1) ABCDEF1234567890ABCDEF1234567890ABCDEF12 "Common Name"
 var reIdentity = regexp.MustCompile(`^\s*\d+\)\s+([0-9A-Fa-f]{40})\s+"(.+)"`)
 
-// enumerateSystemClientCerts searches the macOS Keychain for SSL client
-// identities (certificate + private key pairs) using the security(1) CLI.
-func enumerateSystemClientCerts() ([]tls.Certificate, error) {
-	// Step 1: List all SSL client identities.
-	out, err := exec.Command("security", "find-identity", "-v", "-p", "ssl-client").Output()
-	if err != nil {
-		return nil, &certStoreError{Op: "find-identity", Err: err}
+// keychainPaths returns the list of keychains to search for client certificates.
+// When running as root (daemon), we need to explicitly include:
+//   - System Keychain (/Library/Keychains/System.keychain) — machine certs
+//   - Console user's Login Keychain — user certs
+//
+// When running as a regular user, the default search list already includes
+// the user's login keychain, but we add System explicitly for completeness.
+func keychainPaths() []string {
+	var paths []string
+
+	// Always include System Keychain (machine certificates, accessible by root).
+	systemKC := "/Library/Keychains/System.keychain"
+	if _, err := os.Stat(systemKC); err == nil {
+		paths = append(paths, systemKC)
 	}
 
-	lines := strings.Split(string(out), "\n")
+	// Try to find the console (GUI) user's login keychain.
+	// When running as root daemon, os.UserHomeDir() returns /var/root,
+	// so we use stat /dev/console to find the actual logged-in user.
+	if loginKC := consoleUserLoginKeychain(); loginKC != "" {
+		paths = append(paths, loginKC)
+	}
+
+	return paths
+}
+
+// consoleUserLoginKeychain returns the login keychain path for the
+// currently logged-in console user, or empty string if not found.
+func consoleUserLoginKeychain() string {
+	// Method 1: stat /dev/console to find the GUI user (works when running as root).
+	if fi, err := os.Stat("/dev/console"); err == nil {
+		if stat, ok := fi.Sys().(interface{ Uid() int }); ok {
+			uid := fmt.Sprintf("%d", stat.Uid())
+			if u, err := user.LookupId(uid); err == nil && u.HomeDir != "" {
+				kc := filepath.Join(u.HomeDir, "Library", "Keychains", "login.keychain-db")
+				if _, err := os.Stat(kc); err == nil {
+					core.Log.Debugf("AnyConnect", "Console user keychain (via /dev/console): %s", kc)
+					return kc
+				}
+			}
+		}
+	}
+
+	// Method 2: scutil --get ConsoleUser.
+	if out, err := exec.Command("scutil", "--get", "ConsoleUser").Output(); err == nil {
+		username := strings.TrimSpace(string(out))
+		if username != "" && username != "loginwindow" {
+			if u, err := user.Lookup(username); err == nil && u.HomeDir != "" {
+				kc := filepath.Join(u.HomeDir, "Library", "Keychains", "login.keychain-db")
+				if _, err := os.Stat(kc); err == nil {
+					core.Log.Debugf("AnyConnect", "Console user keychain (via scutil): %s", kc)
+					return kc
+				}
+			}
+		}
+	}
+
+	// Method 3: if we're not root, use current user's home.
+	if os.Getuid() != 0 {
+		if home, err := os.UserHomeDir(); err == nil {
+			kc := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+			if _, err := os.Stat(kc); err == nil {
+				return kc
+			}
+		}
+	}
+
+	return ""
+}
+
+// enumerateSystemClientCerts searches macOS Keychains for SSL client
+// identities (certificate + private key pairs) using the security(1) CLI.
+// When running as root (daemon), it searches both the System Keychain
+// and the console user's Login Keychain.
+func enumerateSystemClientCerts() ([]tls.Certificate, error) {
+	keychains := keychainPaths()
+
 	type identity struct {
 		sha1Hash string
 		name     string
+		keychain string // which keychain this identity was found in
 	}
+	seen := make(map[string]struct{}) // deduplicate by SHA-1 hash
 	var identities []identity
-	for _, line := range lines {
-		m := reIdentity.FindStringSubmatch(line)
-		if m != nil {
+
+	// Search each keychain for SSL client identities.
+	for _, kc := range keychains {
+		args := []string{"find-identity", "-v", "-p", "ssl-client", kc}
+		out, err := exec.Command("security", args...).Output()
+		if err != nil {
+			core.Log.Debugf("AnyConnect", "Keychain %s: find-identity failed: %v", kc, err)
+			continue
+		}
+
+		for _, line := range strings.Split(string(out), "\n") {
+			m := reIdentity.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			hash := strings.ToUpper(m[1])
+			if _, dup := seen[hash]; dup {
+				continue
+			}
+			seen[hash] = struct{}{}
+			identities = append(identities, identity{sha1Hash: m[1], name: m[2], keychain: kc})
+		}
+	}
+
+	// Fallback: search without specifying keychain (default search list).
+	if len(identities) == 0 {
+		out, err := exec.Command("security", "find-identity", "-v", "-p", "ssl-client").Output()
+		if err != nil {
+			return nil, &certStoreError{Op: "find-identity", Err: err}
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			m := reIdentity.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			hash := strings.ToUpper(m[1])
+			if _, dup := seen[hash]; dup {
+				continue
+			}
+			seen[hash] = struct{}{}
 			identities = append(identities, identity{sha1Hash: m[1], name: m[2]})
 		}
 	}
@@ -50,13 +157,11 @@ func enumerateSystemClientCerts() ([]tls.Certificate, error) {
 		return nil, nil
 	}
 
-	core.Log.Debugf("AnyConnect", "Keychain: found %d SSL client identity(ies)", len(identities))
+	core.Log.Infof("AnyConnect", "Keychain: found %d SSL client identity(ies)", len(identities))
 
-	// Step 2: Export each identity's certificate as PEM to check issuer,
-	// then export matching identity as PKCS12 for the private key.
 	var result []tls.Certificate
 	for _, id := range identities {
-		cert, err := exportIdentity(id.sha1Hash, id.name)
+		cert, err := exportIdentity(id.sha1Hash, id.name, id.keychain)
 		if err != nil {
 			core.Log.Debugf("AnyConnect", "Keychain: skip %q (%s): %v", id.name, id.sha1Hash[:8], err)
 			continue
@@ -68,16 +173,14 @@ func enumerateSystemClientCerts() ([]tls.Certificate, error) {
 }
 
 // exportIdentity exports a single identity (cert+key) from the Keychain.
-func exportIdentity(sha1Hash, name string) (*tls.Certificate, error) {
-	// Get the certificate PEM via find-certificate.
-	hashBytes, err := hex.DecodeString(sha1Hash)
-	if err != nil {
-		return nil, fmt.Errorf("decode hash: %w", err)
-	}
-	_ = hashBytes
-
+// If keychain is non-empty, the certificate lookup and export are scoped to that keychain.
+func exportIdentity(sha1Hash, name, keychain string) (*tls.Certificate, error) {
 	// Export the certificate by SHA-1 hash.
-	certPEM, err := exec.Command("security", "find-certificate", "-Z", sha1Hash, "-p").Output()
+	findCertArgs := []string{"find-certificate", "-Z", sha1Hash, "-p"}
+	if keychain != "" {
+		findCertArgs = append(findCertArgs, keychain)
+	}
+	certPEM, err := exec.Command("security", findCertArgs...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("find-certificate: %w", err)
 	}
@@ -93,7 +196,6 @@ func exportIdentity(sha1Hash, name string) (*tls.Certificate, error) {
 	}
 
 	// Export the identity (cert+key) as PKCS12.
-	// Generate a random password for the temporary export.
 	pwBytes := make([]byte, 16)
 	if _, err := rand.Read(pwBytes); err != nil {
 		return nil, fmt.Errorf("generate password: %w", err)
@@ -108,15 +210,17 @@ func exportIdentity(sha1Hash, name string) (*tls.Certificate, error) {
 
 	p12File := filepath.Join(tmpDir, "identity.p12")
 
-	// Use security export with the identity name to export as PKCS12.
-	// -t identities exports cert+key pairs.
-	cmd := exec.Command("security", "export",
+	exportArgs := []string{"export",
 		"-c", name,
 		"-t", "identities",
 		"-f", "pkcs12",
 		"-P", tempPW,
 		"-o", p12File,
-	)
+	}
+	if keychain != "" {
+		exportArgs = append(exportArgs, "-k", keychain)
+	}
+	cmd := exec.Command("security", exportArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

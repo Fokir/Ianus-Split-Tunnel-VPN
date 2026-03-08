@@ -20,7 +20,7 @@ func findSystemCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, 
 		return &tls.Certificate{}, nil
 	}
 	if len(certs) == 0 {
-		core.Log.Debugf("AnyConnect", "No client certificates found in system store")
+		core.Log.Warnf("AnyConnect", "No client certificates found in system store")
 		return &tls.Certificate{}, nil
 	}
 

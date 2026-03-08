@@ -36,12 +36,20 @@ type configAuth struct {
 	// Present when the server requests client certificate authentication.
 	ClientCertRequest *clientCertRequest `xml:"client-cert-request"`
 
+	// Present when the server confirms the TLS client certificate is valid.
+	// This is set by the server, not the client.
+	CertAuthenticated *certAuthenticated `xml:"cert-authenticated"`
+
 	// Fields present in "complete" response.
 	SessionToken string `xml:"session-token"`
 }
 
 type clientCertRequest struct {
 	XMLName xml.Name `xml:"client-cert-request"`
+}
+
+type certAuthenticated struct {
+	XMLName xml.Name `xml:"cert-authenticated"`
 }
 
 type authElement struct {
@@ -183,32 +191,29 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 		opaque = resp.Opaque.Inner
 	}
 
-	// Handle client-cert-request: if the server asks for a certificate and
-	// there is no login form, the TLS client cert was already presented
-	// during the handshake. Send a cert-ack auth-reply.
-	if resp.ClientCertRequest != nil && (resp.Auth == nil || resp.Auth.Form == nil) {
-		core.Log.Infof("AnyConnect", "Server requested client certificate authentication (no form)")
-		certReplyXML := buildCertAuthReply(opaque, host, cid)
-		core.Log.Infof("AnyConnect", "Cert auth reply XML: %s", certReplyXML)
-		result, err = doAuthPost(br, conn, host, action, certReplyXML, cookies, cid)
-		if err != nil {
-			return nil, fmt.Errorf("cert auth request: %w", err)
+	// Handle client-cert-request: certificate authentication happens at the
+	// TLS layer. The server validates the client cert during TLS handshake and
+	// signals acceptance via <cert-authenticated> in its XML response.
+	// Per the Cisco AnyConnect protocol (cf. OpenConnect), the client does NOT
+	// send any special XML reply — the TLS session proves cert ownership.
+	if resp.ClientCertRequest != nil {
+		if resp.CertAuthenticated != nil {
+			core.Log.Infof("AnyConnect", "Server accepted TLS client certificate (cert-authenticated)")
+		} else {
+			core.Log.Warnf("AnyConnect", "Server requested client certificate but did not confirm acceptance (no <cert-authenticated>)")
+			return nil, fmt.Errorf("server requested client certificate but it was not accepted; check that a valid client certificate is configured")
 		}
-		resp = result.config
-		cookies = result.cookies
-		core.Log.Infof("AnyConnect", "Cert auth response: type=%q", resp.Type)
-		if resp.Error != "" {
-			core.Log.Warnf("AnyConnect", "Cert auth error: %s", resp.Error)
-		}
-		// If cert auth succeeded with "complete", skip to session extraction.
-		// If server returns another auth-request (e.g. cert + password), fall through.
+
+		// Cert auth alone may complete the session, or server may require
+		// additional auth (cert + password combo) via a form.
 		if resp.Type == "complete" {
 			if resp.SessionToken == "" {
 				return nil, fmt.Errorf("no session token in cert auth response")
 			}
 			return &sessionInfo{Cookie: resp.SessionToken}, nil
 		}
-		// Server wants more auth (cert + password combo); update opaque/action and continue.
+
+		// Server wants more auth; update opaque/action and fall through to form auth.
 		if resp.Opaque != nil {
 			opaque = resp.Opaque.Inner
 		}
@@ -307,30 +312,6 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 	return &sessionInfo{
 		Cookie: resp.SessionToken,
 	}, nil
-}
-
-// buildCertAuthReply builds an auth-reply for certificate-based authentication.
-// The client certificate was already presented during the TLS handshake;
-// this XML tells the server to proceed with cert-based identity.
-func buildCertAuthReply(opaque, host string, cid clientID) string {
-	var sb strings.Builder
-	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	sb.WriteString(`<config-auth client="vpn" type="auth-reply" aggregate-auth-version="2">`)
-	sb.WriteString(fmt.Sprintf(`<version who="vpn">%s</version>`, cid.Version))
-	sb.WriteString(fmt.Sprintf(`<device-id device-type="%s" platform-version="%s">%s</device-id>`, cid.DeviceType, cid.PlatformVer, cid.DeviceType))
-	if opaque != "" {
-		sb.WriteString(`<opaque is-for="sg">`)
-		sb.WriteString(opaque)
-		sb.WriteString(`</opaque>`)
-	}
-	sb.WriteString(`<auth>`)
-	sb.WriteString(`<client-cert-authenticated/>`)
-	sb.WriteString(`</auth>`)
-	if host != "" {
-		sb.WriteString(fmt.Sprintf(`<group-access>https://%s</group-access>`, xmlEscape(host)))
-	}
-	sb.WriteString(`</config-auth>`)
-	return sb.String()
 }
 
 // buildFormReply inspects the server's form fields and fills them from creds.
