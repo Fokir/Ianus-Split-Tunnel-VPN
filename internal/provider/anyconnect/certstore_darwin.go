@@ -133,23 +133,54 @@ func enumerateSystemClientCerts() ([]tls.Certificate, error) {
 		}
 	}
 
-	// Fallback: search without specifying keychain (default search list).
+	// Fallback 1: search without specifying keychain (default search list).
 	if len(identities) == 0 {
 		out, err := exec.Command("security", "find-identity", "-v", "-p", "ssl-client").Output()
 		if err != nil {
-			return nil, &certStoreError{Op: "find-identity", Err: err}
+			core.Log.Debugf("AnyConnect", "find-identity (default keychains, ssl-client): %v", err)
+		} else {
+			for _, line := range strings.Split(string(out), "\n") {
+				m := reIdentity.FindStringSubmatch(line)
+				if m == nil {
+					continue
+				}
+				hash := strings.ToUpper(m[1])
+				if _, dup := seen[hash]; dup {
+					continue
+				}
+				seen[hash] = struct{}{}
+				identities = append(identities, identity{sha1Hash: m[1], name: m[2]})
+			}
 		}
-		for _, line := range strings.Split(string(out), "\n") {
-			m := reIdentity.FindStringSubmatch(line)
-			if m == nil {
+	}
+
+	// Fallback 2: search WITHOUT policy filter. Some corporate certificates
+	// (e.g. machine/host certs enrolled via SCEP) lack the ssl-client policy
+	// but are still valid for TLS client authentication. The TLS handshake's
+	// AcceptableCAs filter will select the correct certificate.
+	if len(identities) == 0 {
+		core.Log.Debugf("AnyConnect", "No ssl-client identities found; searching without policy filter")
+		searches := [][]string{{"find-identity", "-v"}}
+		for _, kc := range keychains {
+			searches = append(searches, []string{"find-identity", "-v", kc})
+		}
+		for _, args := range searches {
+			out, err := exec.Command("security", args...).Output()
+			if err != nil {
 				continue
 			}
-			hash := strings.ToUpper(m[1])
-			if _, dup := seen[hash]; dup {
-				continue
+			for _, line := range strings.Split(string(out), "\n") {
+				m := reIdentity.FindStringSubmatch(line)
+				if m == nil {
+					continue
+				}
+				hash := strings.ToUpper(m[1])
+				if _, dup := seen[hash]; dup {
+					continue
+				}
+				seen[hash] = struct{}{}
+				identities = append(identities, identity{sha1Hash: m[1], name: m[2]})
 			}
-			seen[hash] = struct{}{}
-			identities = append(identities, identity{sha1Hash: m[1], name: m[2]})
 		}
 	}
 
