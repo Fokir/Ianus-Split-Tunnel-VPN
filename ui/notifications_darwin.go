@@ -113,6 +113,60 @@ func (nm *NotificationManager) NotifyAuthRequired(tunnelID string) {
 	go nm.send("Требуется авторизация", "Сессия "+tunnelID+" истекла. Введите OTP код для повторного подключения.")
 }
 
+// NotifySessionResuming sends a notification when a tunnel session is being resumed.
+func (nm *NotificationManager) NotifySessionResuming(tunnelID string) {
+	nm.mu.Lock()
+	if !nm.enabled || !nm.tunnelErr {
+		nm.mu.Unlock()
+		return
+	}
+	key := "session_resuming:" + tunnelID
+	if time.Since(nm.lastNotif[key]) < nm.throttle {
+		nm.mu.Unlock()
+		return
+	}
+	nm.lastNotif[key] = time.Now()
+	nm.mu.Unlock()
+
+	go nm.send("Восстановление сессии", "Туннель "+tunnelID+" восстанавливает сессию…")
+}
+
+// NotifyBanner sends a server banner/MOTD notification.
+func (nm *NotificationManager) NotifyBanner(tunnelID, banner string) {
+	nm.mu.Lock()
+	if !nm.enabled {
+		nm.mu.Unlock()
+		return
+	}
+	key := "banner:" + tunnelID
+	if time.Since(nm.lastNotif[key]) < nm.throttle {
+		nm.mu.Unlock()
+		return
+	}
+	nm.lastNotif[key] = time.Now()
+	nm.mu.Unlock()
+
+	go nm.send("Сообщение сервера", tunnelID+": "+banner)
+}
+
+// NotifyTimeout sends a notification about session or idle timeout.
+func (nm *NotificationManager) NotifyTimeout(tunnelID, kind string) {
+	nm.mu.Lock()
+	if !nm.enabled || !nm.tunnelErr {
+		nm.mu.Unlock()
+		return
+	}
+	key := "timeout:" + tunnelID + ":" + kind
+	if time.Since(nm.lastNotif[key]) < nm.throttle {
+		nm.mu.Unlock()
+		return
+	}
+	nm.lastNotif[key] = time.Now()
+	nm.mu.Unlock()
+
+	go nm.send("Тайм-аут сессии", "Туннель "+tunnelID+": "+kind)
+}
+
 // NotifyUpdateAvailable sends a notification about a new version.
 func (nm *NotificationManager) NotifyUpdateAvailable(version string) {
 	nm.mu.Lock()
