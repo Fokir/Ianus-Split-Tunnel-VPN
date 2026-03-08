@@ -120,8 +120,33 @@ func (b *BindingService) runStatsStream() {
 				if prev == vpnapi.TunnelState_TUNNEL_STATE_ERROR && t.State == vpnapi.TunnelState_TUNNEL_STATE_UP {
 					b.notifMgr.NotifyReconnected(t.TunnelId)
 				}
+				// Session resume detection: UP → CONNECTING means auto-reconnect in progress.
+				if prev == vpnapi.TunnelState_TUNNEL_STATE_UP && t.State == vpnapi.TunnelState_TUNNEL_STATE_CONNECTING {
+					if tunnelProtocols[t.TunnelId] == "anyconnect" {
+						b.notifMgr.NotifySessionResuming(t.TunnelId)
+						app.Event.Emit("tunnel-resuming", map[string]interface{}{
+							"tunnelId": t.TunnelId,
+						})
+					}
+				}
 			}
 			prevStates[t.TunnelId] = t.State
+
+			// Emit banner event (deduplicated).
+			if t.Banner != "" {
+				bannerKey := t.TunnelId + ":" + t.Banner
+				if b.seenBanners == nil {
+					b.seenBanners = make(map[string]struct{})
+				}
+				if _, seen := b.seenBanners[bannerKey]; !seen {
+					b.seenBanners[bannerKey] = struct{}{}
+					b.notifMgr.NotifyBanner(t.TunnelId, t.Banner)
+					app.Event.Emit("tunnel-banner", map[string]interface{}{
+						"tunnelId": t.TunnelId,
+						"banner":   t.Banner,
+					})
+				}
+			}
 
 			// Update protocol cache for new tunnels.
 			if _, known := tunnelProtocols[t.TunnelId]; !known {

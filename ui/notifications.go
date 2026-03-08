@@ -133,6 +133,64 @@ func (nm *NotificationManager) NotifyUpdateAvailable(version string) {
 	go nm.send("Доступно обновление", "Версия "+version+" готова к установке")
 }
 
+// NotifyBanner sends a notification with a server banner/MOTD message.
+func (nm *NotificationManager) NotifyBanner(tunnelID, banner string) {
+	nm.mu.Lock()
+	if !nm.enabled {
+		nm.mu.Unlock()
+		return
+	}
+	key := "banner:" + tunnelID
+	if time.Since(nm.lastNotif[key]) < nm.throttle {
+		nm.mu.Unlock()
+		return
+	}
+	nm.lastNotif[key] = time.Now()
+	nm.mu.Unlock()
+
+	go nm.send("Сообщение сервера", tunnelID+": "+banner)
+}
+
+// NotifySessionResuming sends a notification that session resume is in progress.
+func (nm *NotificationManager) NotifySessionResuming(tunnelID string) {
+	nm.mu.Lock()
+	if !nm.enabled || !nm.tunnelErr {
+		nm.mu.Unlock()
+		return
+	}
+	key := "session_resume:" + tunnelID
+	if time.Since(nm.lastNotif[key]) < nm.throttle {
+		nm.mu.Unlock()
+		return
+	}
+	nm.lastNotif[key] = time.Now()
+	nm.mu.Unlock()
+
+	go nm.send("Восстановление сессии", "Туннель "+tunnelID+" переподключается...")
+}
+
+// NotifyTimeout sends a notification about idle or session timeout.
+func (nm *NotificationManager) NotifyTimeout(tunnelID, kind string) {
+	nm.mu.Lock()
+	if !nm.enabled || !nm.tunnelErr {
+		nm.mu.Unlock()
+		return
+	}
+	key := "timeout:" + tunnelID
+	if time.Since(nm.lastNotif[key]) < nm.throttle {
+		nm.mu.Unlock()
+		return
+	}
+	nm.lastNotif[key] = time.Now()
+	nm.mu.Unlock()
+
+	msg := "Сессия туннеля " + tunnelID + " истекла"
+	if kind == "idle" {
+		msg = "Туннель " + tunnelID + " отключён из-за неактивности"
+	}
+	go nm.send("Таймаут", msg)
+}
+
 func (nm *NotificationManager) send(title, message string) {
 	n := toast.Notification{
 		AppID:   nm.appName,

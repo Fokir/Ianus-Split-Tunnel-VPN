@@ -19,6 +19,12 @@
   let statsMap = {};
   let statsUnsub;
   let authRequiredUnsub;
+  let bannerUnsub;
+  let resumingUnsub;
+
+  // Banner display
+  let bannerMessage = '';
+  let bannerTunnelId = '';
 
   // Form modal
   let showFormModal = false;
@@ -115,11 +121,27 @@
       otpTunnelName = tunnel ? (tunnel.name || tunnel.id) : tunnelId;
       showOtpDialog = true;
     });
+
+    bannerUnsub = Events.On('tunnel-banner', (event) => {
+      const { tunnelId, banner } = event.data || {};
+      if (tunnelId && banner) {
+        bannerTunnelId = tunnelId;
+        bannerMessage = banner;
+        setTimeout(() => { bannerMessage = ''; }, 15000);
+      }
+    });
+
+    resumingUnsub = Events.On('tunnel-resuming', (event) => {
+      // Session resume is handled transparently — just refresh state.
+      refresh();
+    });
   });
 
   onDestroy(() => {
     if (statsUnsub) statsUnsub();
     if (authRequiredUnsub) authRequiredUnsub();
+    if (bannerUnsub) bannerUnsub();
+    if (resumingUnsub) resumingUnsub();
   });
 
   async function refresh() {
@@ -376,6 +398,19 @@
     class="hidden"
     on:change={handleFileSelected}
   />
+
+  {#if bannerMessage}
+    <div class="p-3 bg-blue-900/30 border border-blue-700/40 rounded-lg text-sm text-blue-300 flex items-start gap-2">
+      <svg class="w-4 h-4 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+      <div>
+        <span class="font-medium text-blue-200">{$t('connections.bannerTitle')}</span>
+        <p class="mt-0.5 text-blue-300/80">{bannerMessage}</p>
+      </div>
+      <button class="ml-auto text-blue-400 hover:text-blue-300" on:click={() => { bannerMessage = ''; }}>
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+  {/if}
 
   {#if error}
     <ErrorAlert message={error} />

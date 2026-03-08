@@ -23,6 +23,7 @@ type BindingService struct {
 	logStreamOnce   sync.Once
 	statsStreamOnce sync.Once
 	notifMgr        *NotificationManager
+	seenBanners     map[string]struct{} // deduplicate banner events
 }
 
 // NewBindingService creates a BindingService wrapping the IPC client.
