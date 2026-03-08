@@ -263,15 +263,27 @@ func exportIdentity(sha1Hash, name, keychain string) (*tls.Certificate, error) {
 			Leaf:        leaf,
 		}, nil
 	}
-	core.Log.Debugf("AnyConnect", "Keychain: native signer unavailable for %q: %v; falling back to PKCS12 export", name, err)
+	core.Log.Infof("AnyConnect", "Keychain: native signer unavailable for %q: %v; falling back to PKCS12 export", name, err)
 
 	// Fallback: export identity as PKCS12 (private key temporarily in process memory).
-	return exportIdentityPKCS12(name, keychain, leaf)
+	// If keychain is unknown, try each known keychain.
+	if keychain != "" {
+		return exportIdentityPKCS12(keychain, leaf)
+	}
+	for _, kc := range keychainPaths() {
+		cert, err := exportIdentityPKCS12(kc, leaf)
+		if err == nil {
+			return cert, nil
+		}
+		core.Log.Debugf("AnyConnect", "PKCS12 export from %s failed: %v", kc, err)
+	}
+	// Last resort: try without specifying keychain (default search list).
+	return exportIdentityPKCS12("", leaf)
 }
 
 // exportIdentityPKCS12 exports an identity via `security export` as PKCS12.
 // The private key is temporarily extracted into process memory.
-func exportIdentityPKCS12(name, keychain string, leaf *x509.Certificate) (*tls.Certificate, error) {
+func exportIdentityPKCS12(keychain string, leaf *x509.Certificate) (*tls.Certificate, error) {
 	pwBytes := make([]byte, 16)
 	if _, err := rand.Read(pwBytes); err != nil {
 		return nil, fmt.Errorf("generate password: %w", err)
@@ -286,8 +298,9 @@ func exportIdentityPKCS12(name, keychain string, leaf *x509.Certificate) (*tls.C
 
 	p12File := filepath.Join(tmpDir, "identity.p12")
 
+	// `security export` does not support filtering by certificate name (-c is invalid).
+	// Export all identities from the keychain; parsePKCS12 will match by leaf certificate.
 	exportArgs := []string{"export",
-		"-c", name,
 		"-t", "identities",
 		"-f", "pkcs12",
 		"-P", tempPW,
@@ -296,6 +309,7 @@ func exportIdentityPKCS12(name, keychain string, leaf *x509.Certificate) (*tls.C
 	if keychain != "" {
 		exportArgs = append(exportArgs, "-k", keychain)
 	}
+	core.Log.Debugf("AnyConnect", "Running: security %s", strings.Join(exportArgs, " "))
 	cmd := exec.Command("security", exportArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
