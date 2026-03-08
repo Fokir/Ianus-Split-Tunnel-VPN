@@ -59,7 +59,8 @@ func (p *Provider) DialUDP(_ context.Context, addr string) (net.Conn, error) {
 	}
 	ip4 := ip.To4()
 	if ip4 == nil {
-		return nil, fmt.Errorf("anyconnect: IPv6 not supported")
+		// IPv6 DialUDP is not yet supported (raw IPv6 packet construction needed).
+		return nil, fmt.Errorf("anyconnect: IPv6 DialUDP not yet supported")
 	}
 
 	p.mu.RLock()

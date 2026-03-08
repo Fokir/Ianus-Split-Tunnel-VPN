@@ -32,17 +32,25 @@ var cstpHeader = [8]byte{0x53, 0x54, 0x46, 0x01, 0x00, 0x00, 0x00, 0x00}
 type tunnelParams struct {
 	Address        netip.Addr
 	Netmask        string
+	AddressIPv6    string // X-CSTP-Address-IP6 (e.g. "fd00::1/64")
 	DNS            []string
 	MTU            int
 	DPDInterval    int // seconds
 	KeepaliveInt   int // seconds
 	SplitInclude   []netip.Prefix
 	SplitExclude   []netip.Prefix
+	SplitIncludeV6 []netip.Prefix // X-CSTP-Split-Include-IP6
+	SplitExcludeV6 []netip.Prefix // X-CSTP-Split-Exclude-IP6
 	DTLSPort       int
 	DTLSSessionID  string
-	IdleTimeout    int
-	SessionTimeout int
+	IdleTimeout    int // seconds, 0 = no idle timeout
+	SessionTimeout int // seconds, 0 = no session timeout
+	Banner         string
+	Encoding       string // negotiated encoding: "identity" or "deflate"
 }
+
+// CSTP compressed data type — distinct from pktData.
+const pktCompressedData byte = 0x08
 
 // cstpConn wraps a TLS connection with CSTP framing.
 type cstpConn struct {
@@ -50,7 +58,8 @@ type cstpConn struct {
 	br     *bufio.Reader
 	writeMu sync.Mutex
 
-	params tunnelParams
+	params     tunnelParams
+	compressor *deflateCompressor // nil if no compression negotiated
 
 	inboundHandler atomic.Pointer[func(pkt []byte) bool]
 
@@ -73,8 +82,8 @@ func establishTunnel(br *bufio.Reader, conn io.Writer, host, cookie string, cid 
 		"Cookie: webvpn=%s\r\n"+
 		"X-CSTP-Version: 1\r\n"+
 		"X-CSTP-Hostname: %s\r\n"+
-		"X-CSTP-Accept-Encoding: identity\r\n"+
-		"X-CSTP-Address-Type: IPv4\r\n"+
+		"X-CSTP-Accept-Encoding: deflate;q=1.0, identity;q=0.5\r\n"+
+		"X-CSTP-Address-Type: IPv6,IPv4\r\n"+
 		"X-CSTP-MTU: 1399\r\n"+
 		"X-CSTP-Base-MTU: 1399\r\n"+
 		"X-Transcend-Version: 1\r\n"+
@@ -137,6 +146,27 @@ func parseTunnelHeaders(h http.Header) (*tunnelParams, error) {
 	p.DTLSPort, _ = strconv.Atoi(h.Get("X-DTLS-Port"))
 	p.DTLSSessionID = h.Get("X-DTLS-Session-ID")
 
+	// Idle and session timeouts.
+	if v := h.Get("X-CSTP-Idle-Timeout"); v != "" {
+		p.IdleTimeout, _ = strconv.Atoi(v)
+	}
+	if v := h.Get("X-CSTP-Session-Timeout"); v != "" {
+		p.SessionTimeout, _ = strconv.Atoi(v)
+	}
+
+	// IPv6 address (e.g. "fd00::1/64").
+	p.AddressIPv6 = h.Get("X-CSTP-Address-IP6")
+
+	// Banner message from server.
+	p.Banner = h.Get("X-CSTP-Banner")
+
+	// Negotiated encoding (compression).
+	p.Encoding = h.Get("X-CSTP-Encoding")
+	if p.Encoding == "" {
+		p.Encoding = "identity"
+	}
+
+	// IPv4 split routes.
 	for _, v := range h.Values("X-CSTP-Split-Include") {
 		if pfx, ok := parseRouteEntry(v); ok {
 			p.SplitInclude = append(p.SplitInclude, pfx)
@@ -145,6 +175,18 @@ func parseTunnelHeaders(h http.Header) (*tunnelParams, error) {
 	for _, v := range h.Values("X-CSTP-Split-Exclude") {
 		if pfx, ok := parseRouteEntry(v); ok {
 			p.SplitExclude = append(p.SplitExclude, pfx)
+		}
+	}
+
+	// IPv6 split routes.
+	for _, v := range h.Values("X-CSTP-Split-Include-IP6") {
+		if pfx, ok := parseRouteEntry(v); ok {
+			p.SplitIncludeV6 = append(p.SplitIncludeV6, pfx)
+		}
+	}
+	for _, v := range h.Values("X-CSTP-Split-Exclude-IP6") {
+		if pfx, ok := parseRouteEntry(v); ok {
+			p.SplitExcludeV6 = append(p.SplitExcludeV6, pfx)
 		}
 	}
 
@@ -187,13 +229,17 @@ func parseRouteEntry(s string) (netip.Prefix, bool) {
 
 // newCSTPConn wraps an existing TLS conn (after tunnel establishment) for CSTP I/O.
 func newCSTPConn(conn net.Conn, br *bufio.Reader, params tunnelParams, cancelFn func()) *cstpConn {
-	return &cstpConn{
+	c := &cstpConn{
 		conn:    conn,
 		br:      br,
 		params:  params,
 		cancel:  cancelFn,
 		stopped: make(chan struct{}),
 	}
+	if params.Encoding == "deflate" {
+		c.compressor = newDeflateCompressor()
+	}
+	return c
 }
 
 // run starts the read loop, DPD and keepalive goroutines.
@@ -242,7 +288,7 @@ func (c *cstpConn) readLoop() {
 		pktLen := binary.BigEndian.Uint16(hdr[4:6])
 
 		switch pktType {
-		case pktData:
+		case pktData, pktCompressedData:
 			if pktLen == 0 {
 				continue
 			}
@@ -250,6 +296,15 @@ func (c *cstpConn) readLoop() {
 			if _, err := io.ReadFull(c.br, buf); err != nil {
 				exitErr = fmt.Errorf("read data: %w", err)
 				return
+			}
+			// Decompress if this is a compressed data packet.
+			if pktType == pktCompressedData && c.compressor != nil {
+				decompressed, err := c.compressor.decompress(buf)
+				if err != nil {
+					exitErr = fmt.Errorf("decompress: %w", err)
+					return
+				}
+				buf = decompressed
 			}
 			if hp := c.inboundHandler.Load(); hp != nil {
 				(*hp)(buf)
@@ -325,18 +380,32 @@ func (c *cstpConn) sendControlPacket(pktType byte) {
 }
 
 // sendData sends an IP packet wrapped in a CSTP DATA frame.
+// If compression is negotiated, the packet is compressed before sending.
 func (c *cstpConn) sendData(pkt []byte) bool {
 	l := len(pkt)
 	if l == 0 || l > 65535 {
 		return false
 	}
 
-	frame := make([]byte, 8+l)
+	dataType := pktData
+	data := pkt
+
+	// Compress if negotiated and packet is large enough to benefit.
+	if c.compressor != nil && l > 64 {
+		compressed, err := c.compressor.compress(pkt)
+		if err == nil && len(compressed) < l {
+			data = compressed
+			dataType = pktCompressedData
+		}
+	}
+
+	dl := len(data)
+	frame := make([]byte, 8+dl)
 	copy(frame[:4], cstpHeader[:4])
-	binary.BigEndian.PutUint16(frame[4:6], uint16(l))
-	frame[6] = pktData
+	binary.BigEndian.PutUint16(frame[4:6], uint16(dl))
+	frame[6] = dataType
 	frame[7] = 0
-	copy(frame[8:], pkt)
+	copy(frame[8:], data)
 
 	c.writeMu.Lock()
 	c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
