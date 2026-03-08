@@ -22,6 +22,7 @@ import (
 	"awg-split-tunnel/internal/platform"
 	"awg-split-tunnel/internal/process"
 	"awg-split-tunnel/internal/provider"
+	"awg-split-tunnel/internal/provider/anyconnect"
 	"awg-split-tunnel/internal/provider/vless"
 	"awg-split-tunnel/internal/service"
 	"awg-split-tunnel/internal/update"
@@ -537,7 +538,18 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 				}
 			}
 
-			core.Log.Infof("Core", "Network change handled (new gateway: %s)", newNIC.Gateway)
+			// Trigger network roaming for AnyConnect tunnels.
+		for _, entry := range registry.All() {
+			if entry.State == core.TunnelStateUp && entry.Config.Protocol == "anyconnect" {
+				if prov := tunnelCtrl.GetProvider(entry.ID); prov != nil {
+					if ap, ok := prov.(*anyconnect.Provider); ok {
+						ap.HandleNetworkChange()
+					}
+				}
+			}
+		}
+
+		core.Log.Infof("Core", "Network change handled (new gateway: %s)", newNIC.Gateway)
 		}
 
 		nm, err := plat.NewNetworkMonitor(onChange)
