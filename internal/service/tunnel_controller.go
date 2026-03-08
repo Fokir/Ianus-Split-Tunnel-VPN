@@ -210,9 +210,37 @@ func (tc *TunnelControllerImpl) ConnectTunnelWithAuth(ctx context.Context, tunne
 		if tc.deps.InterfaceBinder != nil {
 			ap.SetInterfaceBinder(tc.deps.InterfaceBinder)
 		}
-		// Detect CSTP session drops and update registry state.
+		// Pass EventBus for tunnel events (banner, timeout, reconnect).
+		ap.SetEventBus(tc.deps.Bus)
+		// Detect CSTP session drops and attempt session resumption.
 		ap.SetOnSessionDrop(func(tunnelID string, err error) {
 			core.Log.Warnf("Core", "AnyConnect tunnel %q session dropped: %v", tunnelID, err)
+			// If provider has a saved session, attempt auto-reconnect.
+			if ap.HasSavedSession() {
+				core.Log.Infof("Core", "AnyConnect tunnel %q has saved session, attempting resume...", tunnelID)
+				tc.deps.Registry.SetState(tunnelID, core.TunnelStateConnecting, nil)
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					if reconnErr := ap.Connect(ctx); reconnErr != nil {
+						core.Log.Warnf("Core", "AnyConnect session resume failed for %q: %v", tunnelID, reconnErr)
+						ap.ClearSession()
+						tc.deps.Registry.SetState(tunnelID, core.TunnelStateError, fmt.Errorf("session expired: %v", err))
+						tc.deps.Bus.PublishAsync(core.Event{
+							Type: core.EventAuthRequired,
+							Payload: core.AuthRequiredPayload{
+								TunnelID: tunnelID,
+								Reason:   err.Error(),
+							},
+						})
+					} else {
+						core.Log.Infof("Core", "AnyConnect tunnel %q resumed successfully", tunnelID)
+						tc.deps.Registry.SetState(tunnelID, core.TunnelStateUp, nil)
+						tc.registerRawForwarder(tunnelID, ap)
+					}
+				}()
+				return
+			}
 			tc.deps.Registry.SetState(tunnelID, core.TunnelStateError, fmt.Errorf("session expired: %v", err))
 			// Notify frontend that re-authentication (OTP) is required.
 			tc.deps.Bus.PublishAsync(core.Event{
@@ -511,6 +539,18 @@ func (tc *TunnelControllerImpl) GetServerEndpoints(tunnelID string) []netip.Addr
 	return nil
 }
 
+// GetProvider returns the raw TunnelProvider for a tunnel. Used by network
+// roaming to call provider-specific methods (e.g. AnyConnect HandleNetworkChange).
+func (tc *TunnelControllerImpl) GetProvider(tunnelID string) provider.TunnelProvider {
+	tc.mu.Lock()
+	inst, ok := tc.instances[tunnelID]
+	tc.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	return inst.provider
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────
 
 func (tc *TunnelControllerImpl) createProvider(cfg core.TunnelConfig) (provider.TunnelProvider, error) {
@@ -629,8 +669,13 @@ func CreateProvider(cfg core.TunnelConfig) (provider.TunnelProvider, error) {
 			Group:         getStringSetting(cfg.Settings, "group", ""),
 			TLSSkipVerify: getBoolSetting(cfg.Settings, "tls_skip_verify", false),
 			UserAgent:     getStringSetting(cfg.Settings, "user_agent", ""),
-			ClientCert:    getStringSetting(cfg.Settings, "client_cert", ""),
-			ClientKey:     getStringSetting(cfg.Settings, "client_key", ""),
+			ClientCert:         getStringSetting(cfg.Settings, "client_cert", ""),
+			ClientKey:          getStringSetting(cfg.Settings, "client_key", ""),
+			ClientCertPassword: getStringSetting(cfg.Settings, "client_cert_password", ""),
+			ProxyURL:      getStringSetting(cfg.Settings, "proxy_url", ""),
+			ProxyUsername: getStringSetting(cfg.Settings, "proxy_username", ""),
+			ProxyPassword: getStringSetting(cfg.Settings, "proxy_password", ""),
+			DTLS:          getBoolSetting(cfg.Settings, "dtls", false),
 		}
 		return anyconnect.New(cfg.Name, acCfg)
 	default:

@@ -25,7 +25,8 @@
   let httpServer = '', httpPort = '8080', httpUsername = '', httpPassword = '', httpTls = false, httpTlsSkipVerify = false;
   // AnyConnect
   let acServer = '', acPort = '443', acUsername = '', acPassword = '', acGroup = '', acTlsSkipVerify = false, acUserAgent = '';
-  let acClientCertMode = '', acClientCert = '', acClientKey = '';
+  let acClientCertMode = '', acClientCert = '', acClientKey = '', acClientCertPassword = '';
+  let acProxyUrl = '', acProxyUsername = '', acProxyPassword = '', acDtls = false;
   // VLESS
   let vlessAddress = '', vlessPort = '443', vlessUuid = '', vlessFlow = 'xtls-rprx-vision';
   let vlessSecurity = 'reality', vlessNetwork = 'tcp';
@@ -50,6 +51,7 @@
     httpServer = ''; httpPort = '8080'; httpUsername = ''; httpPassword = ''; httpTls = false; httpTlsSkipVerify = false;
     acServer = ''; acPort = '443'; acUsername = ''; acPassword = ''; acGroup = ''; acTlsSkipVerify = false; acUserAgent = '';
     acClientCertMode = ''; acClientCert = ''; acClientKey = '';
+    acProxyUrl = ''; acProxyUsername = ''; acProxyPassword = ''; acDtls = false;
     vlessAddress = ''; vlessPort = '443'; vlessUuid = ''; vlessFlow = 'xtls-rprx-vision';
     vlessSecurity = 'reality'; vlessNetwork = 'tcp';
     vlessRealityPublicKey = ''; vlessRealityShortId = ''; vlessRealityServerName = ''; vlessRealityFingerprint = 'chrome';
@@ -87,12 +89,17 @@
       acUserAgent = s.user_agent || '';
       const cc = s.client_cert || '';
       if (cc === 'auto') {
-        acClientCertMode = 'auto'; acClientCert = ''; acClientKey = '';
+        acClientCertMode = 'auto'; acClientCert = ''; acClientKey = ''; acClientCertPassword = '';
       } else if (cc) {
         acClientCertMode = 'file'; acClientCert = cc; acClientKey = s.client_key || '';
+        acClientCertPassword = s.client_cert_password || '';
       } else {
-        acClientCertMode = ''; acClientCert = ''; acClientKey = '';
+        acClientCertMode = ''; acClientCert = ''; acClientKey = ''; acClientCertPassword = '';
       }
+      acProxyUrl = s.proxy_url || '';
+      acProxyUsername = s.proxy_username || '';
+      acProxyPassword = s.proxy_password || '';
+      acDtls = s.dtls === 'true';
     } else if (protocol === 'vless') {
       vlessAddress = s.address || '';
       vlessPort = s.port || '443';
@@ -156,8 +163,9 @@
         };
       } else if (protocol === 'anyconnect') {
         if (!acServer) { modalError = $t('connections.serverRequired'); modalSaving = false; return; }
-        if (!acUsername) { modalError = $t('connections.usernameRequired'); modalSaving = false; return; }
-        if (!acPassword) { modalError = $t('connections.passwordRequired'); modalSaving = false; return; }
+        // Username/password not required when using certificate-only auth.
+        if (!acUsername && acClientCertMode === '') { modalError = $t('connections.usernameRequired'); modalSaving = false; return; }
+        if (!acPassword && acClientCertMode === '') { modalError = $t('connections.passwordRequired'); modalSaving = false; return; }
         settings = {
           server: acServer, port: acPort,
           username: acUsername, password: acPassword,
@@ -169,8 +177,15 @@
           settings.client_cert = 'auto';
         } else if (acClientCertMode === 'file') {
           settings.client_cert = acClientCert;
-          settings.client_key = acClientKey;
+          if (acClientKey) settings.client_key = acClientKey;
+          if (acClientCertPassword) settings.client_cert_password = acClientCertPassword;
         }
+        if (acProxyUrl) {
+          settings.proxy_url = acProxyUrl;
+          settings.proxy_username = acProxyUsername;
+          settings.proxy_password = acProxyPassword;
+        }
+        settings.dtls = acDtls ? 'true' : 'false';
       } else if (protocol === 'vless') {
         if (!vlessAddress) { modalError = $t('connections.serverRequired'); modalSaving = false; return; }
         if (!vlessUuid) { modalError = $t('connections.uuidRequired'); modalSaving = false; return; }
@@ -239,7 +254,8 @@
     {:else if protocol === 'anyconnect'}
       <AnyConnectForm bind:server={acServer} bind:port={acPort}
         bind:username={acUsername} bind:password={acPassword} bind:group={acGroup} bind:tlsSkipVerify={acTlsSkipVerify} bind:userAgent={acUserAgent}
-        bind:clientCertMode={acClientCertMode} bind:clientCert={acClientCert} bind:clientKey={acClientKey} />
+        bind:clientCertMode={acClientCertMode} bind:clientCert={acClientCert} bind:clientKey={acClientKey} bind:clientCertPassword={acClientCertPassword}
+        bind:proxyUrl={acProxyUrl} bind:proxyUsername={acProxyUsername} bind:proxyPassword={acProxyPassword} bind:dtls={acDtls} />
     {:else if protocol === 'vless'}
       <VlessForm bind:address={vlessAddress} bind:port={vlessPort} bind:uuid={vlessUuid}
         bind:flow={vlessFlow} bind:security={vlessSecurity} bind:network={vlessNetwork}

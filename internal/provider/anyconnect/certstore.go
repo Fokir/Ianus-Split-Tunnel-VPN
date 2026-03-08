@@ -1,6 +1,8 @@
 package anyconnect
 
 import (
+	"bytes"
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -79,3 +81,34 @@ func (e *certStoreError) Error() string {
 }
 
 func (e *certStoreError) Unwrap() error { return e.Err }
+
+// findSystemKeyForCert finds the private key for the given certificate in the
+// system certificate store. This handles the common Cisco AnyConnect scenario
+// where the user has a .cer file and the private key was generated on-device.
+func findSystemKeyForCert(certDER []byte) (crypto.Signer, error) {
+	signer, _, err := findSystemKeyAndChain(certDER)
+	return signer, err
+}
+
+// findSystemKeyAndChain finds the private key and full certificate chain
+// (leaf + intermediate CAs) for the given certificate in the system store.
+func findSystemKeyAndChain(certDER []byte) (crypto.Signer, [][]byte, error) {
+	certs, err := enumerateSystemClientCerts()
+	if err != nil {
+		return nil, nil, fmt.Errorf("enumerate system certs: %w", err)
+	}
+
+	for _, c := range certs {
+		if len(c.Certificate) > 0 && bytes.Equal(c.Certificate[0], certDER) {
+			signer, ok := c.PrivateKey.(crypto.Signer)
+			if !ok {
+				return nil, nil, fmt.Errorf("private key does not implement crypto.Signer")
+			}
+			// enumerateSystemClientCerts already builds the chain on Windows/macOS.
+			return signer, c.Certificate, nil
+		}
+	}
+
+	return nil, nil, fmt.Errorf("no matching private key found in system certificate store; " +
+		"ensure the certificate is imported and the private key exists (e.g. via enrollment or PKCS12 import)")
+}

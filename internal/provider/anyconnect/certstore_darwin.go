@@ -172,10 +172,11 @@ func enumerateSystemClientCerts() ([]tls.Certificate, error) {
 	return result, nil
 }
 
-// exportIdentity exports a single identity (cert+key) from the Keychain.
-// If keychain is non-empty, the certificate lookup and export are scoped to that keychain.
+// exportIdentity loads a single identity (cert+key) from the Keychain.
+// It first tries the native Security Framework signer (private key stays in Keychain,
+// analogous to NCrypt on Windows). If that fails, it falls back to PKCS12 export.
 func exportIdentity(sha1Hash, name, keychain string) (*tls.Certificate, error) {
-	// Export the certificate by SHA-1 hash.
+	// Export the certificate (public part only) by SHA-1 hash.
 	findCertArgs := []string{"find-certificate", "-Z", sha1Hash, "-p"}
 	if keychain != "" {
 		findCertArgs = append(findCertArgs, keychain)
@@ -195,7 +196,26 @@ func exportIdentity(sha1Hash, name, keychain string) (*tls.Certificate, error) {
 		return nil, fmt.Errorf("parse cert: %w", err)
 	}
 
-	// Export the identity (cert+key) as PKCS12.
+	// Try native Keychain signer first (private key never leaves the Keychain).
+	signer, err := loadKeychainSigner(block.Bytes, keychain)
+	if err == nil {
+		core.Log.Infof("AnyConnect", "Keychain: using native signer for %q (private key stays in Keychain)", name)
+		chain := buildCertChainDarwin(leaf)
+		return &tls.Certificate{
+			Certificate: chain,
+			PrivateKey:  signer,
+			Leaf:        leaf,
+		}, nil
+	}
+	core.Log.Debugf("AnyConnect", "Keychain: native signer unavailable for %q: %v; falling back to PKCS12 export", name, err)
+
+	// Fallback: export identity as PKCS12 (private key temporarily in process memory).
+	return exportIdentityPKCS12(name, keychain, leaf)
+}
+
+// exportIdentityPKCS12 exports an identity via `security export` as PKCS12.
+// The private key is temporarily extracted into process memory.
+func exportIdentityPKCS12(name, keychain string, leaf *x509.Certificate) (*tls.Certificate, error) {
 	pwBytes := make([]byte, 16)
 	if _, err := rand.Read(pwBytes); err != nil {
 		return nil, fmt.Errorf("generate password: %w", err)
@@ -232,7 +252,6 @@ func exportIdentity(sha1Hash, name, keychain string) (*tls.Certificate, error) {
 		return nil, fmt.Errorf("read p12: %w", err)
 	}
 
-	// Parse PKCS12.
 	cert, err := parsePKCS12(p12Data, tempPW, leaf)
 	if err != nil {
 		return nil, fmt.Errorf("parse p12: %w", err)
@@ -241,29 +260,76 @@ func exportIdentity(sha1Hash, name, keychain string) (*tls.Certificate, error) {
 	return cert, nil
 }
 
-// parsePKCS12 decodes a PKCS12 file and finds the entry matching the target leaf.
+// parsePKCS12 decodes a PKCS12 file and returns a tls.Certificate with the
+// full chain (leaf + intermediate CAs). Verifies the leaf matches targetLeaf.
 func parsePKCS12(data []byte, password string, targetLeaf *x509.Certificate) (*tls.Certificate, error) {
-	// Go 1.23+ has crypto/tls helpers; use x509 PKCS12 parsing.
-	// For older Go, use golang.org/x/crypto/pkcs12.
-	// We use a simple approach: try tls.X509KeyPair-style parsing via pkcs12.
-
-	// Use the legacy approach with golang.org/x/crypto/pkcs12 if available.
-	// Since this project may or may not have it, use the standard library approach.
-	// Go's crypto/x509 can parse PKCS12 natively since Go 1.23 via ParsePKCS12.
-	// For broader compatibility, we attempt both.
-	privKey, leafCert, err := decodePKCS12(data, password)
+	cert, err := decodePKCS12Chain(data, password)
 	if err != nil {
 		return nil, err
 	}
 
 	// Verify this is the cert we expected.
-	if targetLeaf != nil && !bytes.Equal(leafCert.Raw, targetLeaf.Raw) {
+	if targetLeaf != nil && cert.Leaf != nil && !bytes.Equal(cert.Leaf.Raw, targetLeaf.Raw) {
 		return nil, fmt.Errorf("exported cert does not match target")
 	}
 
-	return &tls.Certificate{
-		Certificate: [][]byte{leafCert.Raw},
-		PrivateKey:  privKey,
-		Leaf:        leafCert,
-	}, nil
+	return cert, nil
+}
+
+// buildCertChainDarwin attempts to build a certificate chain from the leaf
+// by searching the System Keychain for intermediate CA certificates.
+// Uses `security find-certificate` to look up issuers by common name.
+func buildCertChainDarwin(leaf *x509.Certificate) [][]byte {
+	chain := [][]byte{leaf.Raw}
+
+	if isSelfSignedDarwin(leaf) {
+		return chain
+	}
+
+	// Walk up the issuer chain (max 5 intermediates to prevent loops).
+	current := leaf
+	for i := 0; i < 5; i++ {
+		issuerCN := current.Issuer.CommonName
+		if issuerCN == "" {
+			break
+		}
+
+		// Search all keychains for a certificate with this CN.
+		out, err := exec.Command("security", "find-certificate", "-c", issuerCN, "-p").Output()
+		if err != nil {
+			break
+		}
+
+		block, _ := pem.Decode(out)
+		if block == nil {
+			break
+		}
+
+		issuer, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			break
+		}
+
+		// Verify this is actually the issuer (subject matches current cert's issuer).
+		if string(issuer.RawSubject) != string(current.RawIssuer) {
+			break
+		}
+
+		// Don't include root CAs — servers should have them.
+		if isSelfSignedDarwin(issuer) {
+			break
+		}
+
+		chain = append(chain, issuer.Raw)
+		current = issuer
+	}
+
+	if len(chain) > 1 {
+		core.Log.Infof("AnyConnect", "Keychain: built certificate chain with %d certs", len(chain))
+	}
+	return chain
+}
+
+func isSelfSignedDarwin(cert *x509.Certificate) bool {
+	return string(cert.RawIssuer) == string(cert.RawSubject)
 }

@@ -2,6 +2,7 @@ package anyconnect
 
 import (
 	"bufio"
+	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -40,6 +41,14 @@ type configAuth struct {
 	// This is set by the server, not the client.
 	CertAuthenticated *certAuthenticated `xml:"cert-authenticated"`
 
+	// Present when the server requires Multiple Certificate Authentication (MCA).
+	// MCA uses a separate "user" certificate to sign a challenge, in addition
+	// to the "machine" certificate used during TLS. Not yet supported.
+	MultiCertRequest *multiCertRequest `xml:"multiple-client-cert-request"`
+
+	// SAML/SSO authentication redirect URL.
+	AuthRedirect string `xml:"auth-redirect"`
+
 	// Fields present in "complete" response.
 	SessionToken string `xml:"session-token"`
 }
@@ -50,6 +59,10 @@ type clientCertRequest struct {
 
 type certAuthenticated struct {
 	XMLName xml.Name `xml:"cert-authenticated"`
+}
+
+type multiCertRequest struct {
+	XMLName xml.Name `xml:"multiple-client-cert-request"`
 }
 
 type authElement struct {
@@ -99,6 +112,7 @@ type opaqueElement struct {
 // sessionInfo is returned after successful authentication.
 type sessionInfo struct {
 	Cookie string // webvpn session cookie
+	Banner string // server banner/MOTD (optional)
 }
 
 // Platform-specific constants (userAgent, agentVer, deviceType, platformVer)
@@ -116,7 +130,9 @@ type credentials struct {
 // HTTP connection. It dynamically parses server forms and fills fields.
 // Supports single-round (all fields in one form) and multi-round (2FA in
 // a separate form) authentication.
-func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentials, cid clientID) (*sessionInfo, error) {
+// certSent indicates whether a client certificate was actually provided during
+// the TLS handshake, enabling more informative error messages.
+func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentials, cid clientID, certSent bool) (*sessionInfo, error) {
 	core.Log.Infof("AnyConnect", "Client identity: UA=%q version=%q device=%q platform=%q",
 		cid.UserAgent, cid.Version, cid.DeviceType, cid.PlatformVer)
 
@@ -191,6 +207,24 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 		opaque = resp.Opaque.Inner
 	}
 
+	// Handle SAML/SSO redirect: server returns <auth-redirect> URL for browser-based auth.
+	if resp.AuthRedirect != "" {
+		core.Log.Infof("AnyConnect", "Server requires SAML/SSO authentication: %s", resp.AuthRedirect)
+		samlSess, err := handleSAMLAuth(context.Background(), resp.AuthRedirect, 120*1000000000) // 120s
+		if err != nil {
+			return nil, fmt.Errorf("SAML auth: %w", err)
+		}
+		return samlSess, nil
+	}
+
+	// Handle Multiple Certificate Authentication (MCA). This is a newer Cisco ASA feature
+	// where a "machine" cert is used in TLS and a separate "user" cert signs a server challenge.
+	// Not yet supported — give a clear error.
+	if resp.MultiCertRequest != nil {
+		return nil, fmt.Errorf("server requires Multiple Certificate Authentication (MCA) which is not supported; " +
+			"configure the server connection profile to use single certificate or password authentication")
+	}
+
 	// Handle client-cert-request: certificate authentication happens at the
 	// TLS layer. The server validates the client cert during TLS handshake and
 	// signals acceptance via <cert-authenticated> in its XML response.
@@ -199,9 +233,14 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 	if resp.ClientCertRequest != nil {
 		if resp.CertAuthenticated != nil {
 			core.Log.Infof("AnyConnect", "Server accepted TLS client certificate (cert-authenticated)")
+		} else if !certSent {
+			core.Log.Warnf("AnyConnect", "Server requires client certificate but none was provided during TLS handshake")
+			return nil, fmt.Errorf("server requires client certificate authentication but no certificate was sent; " +
+				"set client_cert to a PEM file path or \"auto\" to use the system certificate store")
 		} else {
-			core.Log.Warnf("AnyConnect", "Server requested client certificate but did not confirm acceptance (no <cert-authenticated>)")
-			return nil, fmt.Errorf("server requested client certificate but it was not accepted; check that a valid client certificate is configured")
+			core.Log.Warnf("AnyConnect", "Server requested client certificate but rejected the one provided during TLS handshake")
+			return nil, fmt.Errorf("server rejected the TLS client certificate; " +
+				"verify the certificate is trusted by the server's CA, is not expired, and has Client Authentication EKU")
 		}
 
 		// Cert auth alone may complete the session, or server may require
@@ -309,8 +348,15 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 		return nil, fmt.Errorf("no session token in auth response")
 	}
 
+	// Extract banner from any auth round.
+	var banner string
+	if resp.Auth != nil && resp.Auth.Banner != "" {
+		banner = resp.Auth.Banner
+	}
+
 	return &sessionInfo{
 		Cookie: resp.SessionToken,
+		Banner: banner,
 	}, nil
 }
 

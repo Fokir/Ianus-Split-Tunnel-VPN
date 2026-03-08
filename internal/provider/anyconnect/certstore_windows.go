@@ -15,6 +15,8 @@ import (
 	"math/big"
 	"unsafe"
 
+	"awg-split-tunnel/internal/core"
+
 	"golang.org/x/sys/windows"
 )
 
@@ -108,14 +110,96 @@ func enumerateSystemClientCerts() ([]tls.Certificate, error) {
 			continue
 		}
 
+		// Build the certificate chain: leaf + intermediate CAs from the "CA" store.
+		chain := buildCertChain(leaf)
+
 		result = append(result, tls.Certificate{
-			Certificate: [][]byte{derCopy},
+			Certificate: chain,
 			PrivateKey:  signer,
 			Leaf:        leaf,
 		})
 	}
 
 	return result, nil
+}
+
+// buildCertChain builds a DER-encoded certificate chain starting from the leaf.
+// It searches the Windows "CA" (Intermediate Certification Authorities) store
+// for issuer certificates, walking up until a self-signed cert or no match.
+// The root CA is NOT included (servers typically have it in their trust store).
+func buildCertChain(leaf *x509.Certificate) [][]byte {
+	chain := [][]byte{leaf.Raw}
+
+	if isSelfSigned(leaf) {
+		return chain
+	}
+
+	// Open the "CA" (Intermediate Certification Authorities) store.
+	caStoreName, _ := windows.UTF16PtrFromString("CA")
+	caStore, _, err := procCertOpenSystemStoreW.Call(0, uintptr(unsafe.Pointer(caStoreName)))
+	if caStore == 0 {
+		core.Log.Debugf("AnyConnect", "Cannot open CA store for chain building: %v", err)
+		return chain
+	}
+	defer procCertCloseStore.Call(caStore, 0)
+
+	// Walk up the issuer chain (max 5 intermediates to prevent loops).
+	current := leaf
+	for i := 0; i < 5; i++ {
+		issuerDER := findIssuerInStore(caStore, current)
+		if issuerDER == nil {
+			break
+		}
+
+		issuer, err := x509.ParseCertificate(issuerDER)
+		if err != nil {
+			break
+		}
+
+		chain = append(chain, issuerDER)
+
+		if isSelfSigned(issuer) {
+			// Reached root CA — don't include it in the chain sent to server.
+			chain = chain[:len(chain)-1]
+			break
+		}
+		current = issuer
+	}
+
+	return chain
+}
+
+// findIssuerInStore searches a certificate store for a cert whose Subject
+// matches the given certificate's Issuer (by raw DER bytes).
+func findIssuerInStore(storeHandle uintptr, cert *x509.Certificate) []byte {
+	var prev uintptr
+	for {
+		ctx, _, _ := procCertEnumCertificatesInStore.Call(storeHandle, prev)
+		if ctx == 0 {
+			break
+		}
+		prev = ctx
+
+		cc := (*certContext)(*(*unsafe.Pointer)(unsafe.Pointer(&ctx)))
+		certDER := unsafe.Slice(cc.CertEncoded, cc.CertEncodedLen)
+
+		candidate, err := x509.ParseCertificate(certDER)
+		if err != nil {
+			continue
+		}
+
+		// Match by raw Subject == raw Issuer (byte-for-byte DER comparison).
+		if string(candidate.RawSubject) == string(cert.RawIssuer) {
+			derCopy := make([]byte, len(certDER))
+			copy(derCopy, certDER)
+			return derCopy
+		}
+	}
+	return nil
+}
+
+func isSelfSigned(cert *x509.Certificate) bool {
+	return string(cert.RawIssuer) == string(cert.RawSubject)
 }
 
 func hasClientAuthEKU(cert *x509.Certificate) bool {
