@@ -25,6 +25,15 @@ func (e *RedirectError) Error() string {
 	return fmt.Sprintf("redirect to %s:%s%s", e.Host, e.Port, e.Path)
 }
 
+// CertRequiredError is returned when the server sends <client-cert-request>
+// but no certificate was provided during TLS handshake. The caller should
+// load a client certificate and reconnect.
+type CertRequiredError struct{}
+
+func (e *CertRequiredError) Error() string {
+	return "server requires client certificate; reconnect with certificate"
+}
+
 // ---- XML structures for AnyConnect authentication ----
 
 type configAuth struct {
@@ -138,8 +147,13 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 
 	// Phase 1: init request.
 	// group-access tells Cisco ASA which tunnel group (connection profile) to use.
-	// Without it, the server may default to DefaultWEBVPNGroup which might not accept the user.
-	groupAccessXML := fmt.Sprintf(`<group-access>https://%s</group-access>`, xmlEscape(host))
+	// The URL path (e.g. /outside-fr) maps to a specific connection profile on the ASA.
+	// Without it, the server uses the default tunnel group which may not accept the user.
+	groupAccessURL := "https://" + host
+	if creds.Group != "" {
+		groupAccessURL += "/" + creds.Group
+	}
+	groupAccessXML := fmt.Sprintf(`<group-access>%s</group-access>`, xmlEscape(groupAccessURL))
 
 	var groupSelectXML string
 	if creds.Group != "" {
@@ -237,8 +251,7 @@ func authenticate(br *bufio.Reader, conn io.Writer, host string, creds credentia
 			core.Log.Infof("AnyConnect", "Server accepted TLS client certificate (cert-authenticated)")
 		} else if !certSent {
 			core.Log.Warnf("AnyConnect", "Server requires client certificate but none was provided during TLS handshake")
-			return nil, fmt.Errorf("server requires client certificate authentication but no certificate was sent; " +
-				"set client_cert to a PEM file path or \"auto\" to use the system certificate store")
+			return nil, &CertRequiredError{}
 		} else {
 			core.Log.Warnf("AnyConnect", "Server requested client certificate but did not confirm cert-authenticated; " +
 				"the certificate may have been rejected by the server")
@@ -416,8 +429,13 @@ func buildFormReply(resp *configAuth, creds credentials, opaque, host string, ci
 	sb.WriteString(`</auth>`)
 
 	// Include group-access (required by Cisco ASA for tunnel group selection).
+	// The URL path maps to the connection profile on the ASA.
 	if host != "" {
-		sb.WriteString(fmt.Sprintf(`<group-access>https://%s</group-access>`, xmlEscape(host)))
+		groupAccessURL := "https://" + host
+		if creds.Group != "" {
+			groupAccessURL += "/" + creds.Group
+		}
+		sb.WriteString(fmt.Sprintf(`<group-access>%s</group-access>`, xmlEscape(groupAccessURL)))
 	}
 	if creds.Group != "" {
 		sb.WriteString(fmt.Sprintf(`<group-select>%s</group-select>`, xmlEscape(creds.Group)))

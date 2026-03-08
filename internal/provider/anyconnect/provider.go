@@ -387,6 +387,25 @@ func (p *Provider) Connect(ctx context.Context) error {
 				}
 				continue
 			}
+			// Server requires client certificate but TLS handshake didn't include one.
+			// Load certificate from system store and reconnect with it.
+			var certErr *CertRequiredError
+			if errors.As(err, &certErr) && p.config.ClientCert == "auto" && len(p.tlsCerts) == 0 {
+				core.Log.Infof("AnyConnect", "Server requires client certificate; loading from system store and reconnecting...")
+				certs, loadErr := enumerateSystemClientCerts()
+				if loadErr != nil {
+					p.state = core.TunnelStateError
+					return fmt.Errorf("[AnyConnect] auth: server requires client certificate but system store enumeration failed: %w", loadErr)
+				}
+				if len(certs) == 0 {
+					p.state = core.TunnelStateError
+					return fmt.Errorf("[AnyConnect] auth: server requires client certificate but no certificates found in system store; " +
+						"set client_cert to a PEM file path or import a certificate")
+				}
+				core.Log.Infof("AnyConnect", "Loaded %d certificate(s) from system store; reconnecting with certificate...", len(certs))
+				p.tlsCerts = certs
+				continue // retry with p.tlsCerts populated → dialTLS will set tlsCfg.Certificates
+			}
 			p.state = core.TunnelStateError
 			return fmt.Errorf("[AnyConnect] auth: %w", err)
 		}
