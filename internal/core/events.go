@@ -16,7 +16,10 @@ const (
 	EventConfigReloaded
 	EventSubscriptionUpdated
 	EventUpdateAvailable
-	EventAuthRequired // Tunnel needs interactive re-authentication (OTP/MFA)
+	EventAuthRequired    // Tunnel needs interactive re-authentication (OTP/MFA)
+	EventTunnelBanner    // Server sent a banner/MOTD message
+	EventTunnelResuming  // Tunnel is attempting session resumption
+	EventTunnelTimeout   // Tunnel idle or session timeout
 )
 
 // AuthRequiredPayload is the payload for EventAuthRequired.
@@ -56,6 +59,18 @@ type UpdatePayload struct {
 	ReleaseNotes string
 	AssetURL     string
 	AssetSize    int64
+}
+
+// BannerPayload is the payload for EventTunnelBanner.
+type BannerPayload struct {
+	TunnelID string
+	Banner   string
+}
+
+// TimeoutPayload is the payload for EventTunnelTimeout.
+type TimeoutPayload struct {
+	TunnelID string
+	Kind     string // "idle" or "session"
 }
 
 // Handler is a callback for bus subscribers.

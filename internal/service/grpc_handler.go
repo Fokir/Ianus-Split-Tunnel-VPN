@@ -444,6 +444,7 @@ func (s *Service) StreamStats(req *vpnapi.StatsStreamRequest, stream vpnapi.VPNS
 					PacketLoss: ts.PacketLoss,
 					LatencyMs:  ts.LatencyMs,
 					JitterMs:   ts.JitterMs,
+				Banner:     ts.Banner,
 				})
 			}
 			if err := stream.Send(protoSnap); err != nil {

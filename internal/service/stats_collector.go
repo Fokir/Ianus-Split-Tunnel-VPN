@@ -25,6 +25,7 @@ type TunnelStats struct {
 	PacketLoss float64 // 0.0-1.0
 	LatencyMs  int64   // avg RTT ms
 	JitterMs   int64   // max-min RTT ms
+	Banner     string  // server banner/MOTD (AnyConnect)
 }
 
 // StatsSnapshot is a point-in-time snapshot of all tunnel stats.
@@ -51,6 +52,9 @@ type StatsCollector struct {
 	// Diagnostics providers (jitter probes).
 	diagMu    sync.RWMutex
 	diagProvs map[string]gateway.DiagnosticsProvider
+
+	// Banners received from tunnel providers (tunnelID -> banner string).
+	banners sync.Map
 }
 
 type tunnelCounters struct {
@@ -71,6 +75,16 @@ func NewStatsCollector(registry *core.TunnelRegistry, bus *core.EventBus) *Stats
 // Start begins periodic stats collection.
 func (sc *StatsCollector) Start(ctx context.Context) {
 	ctx, sc.cancel = context.WithCancel(ctx)
+
+	// Listen for banner events from providers.
+	if sc.bus != nil {
+		sc.bus.Subscribe(core.EventTunnelBanner, func(e core.Event) {
+			if bp, ok := e.Payload.(core.BannerPayload); ok {
+				sc.banners.Store(bp.TunnelID, bp.Banner)
+			}
+		})
+	}
+
 	go sc.loop(ctx)
 }
 
@@ -221,6 +235,10 @@ func (sc *StatsCollector) collect(prevTx, prevRx map[string]int64) StatsSnapshot
 			ts.PacketLoss = ds.PacketLoss
 			ts.LatencyMs = ds.AvgRTT.Milliseconds()
 			ts.JitterMs = ds.Jitter.Milliseconds()
+		}
+
+		if banner, ok := sc.banners.Load(t.ID); ok {
+			ts.Banner = banner.(string)
 		}
 
 		stats = append(stats, ts)

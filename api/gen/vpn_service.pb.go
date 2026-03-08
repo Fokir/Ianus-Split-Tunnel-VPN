@@ -1267,6 +1267,7 @@ type TunnelStats struct {
 	LatencyMs     int64                  `protobuf:"varint,8,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`     // RTT in milliseconds
 	LastHandshake *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=last_handshake,json=lastHandshake,proto3" json:"last_handshake,omitempty"`
 	JitterMs      int64                  `protobuf:"varint,10,opt,name=jitter_ms,json=jitterMs,proto3" json:"jitter_ms,omitempty"` // max-min RTT in milliseconds (1-min window)
+	Banner        string                 `protobuf:"bytes,11,opt,name=banner,proto3" json:"banner,omitempty"`                      // server banner/MOTD (AnyConnect)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1369,6 +1370,13 @@ func (x *TunnelStats) GetJitterMs() int64 {
 		return x.JitterMs
 	}
 	return 0
+}
+
+func (x *TunnelStats) GetBanner() string {
+	if x != nil {
+		return x.Banner
+	}
+	return ""
 }
 
 type StatsSnapshot struct {
@@ -4379,7 +4387,7 @@ const file_vpn_service_proto_rawDesc = "" +
 	"\alogging\x18\x05 \x01(\v2\x15.awg.vpn.v1.LogConfigR\alogging\x129\n" +
 	"\fdomain_rules\x18\x06 \x03(\v2\x16.awg.vpn.v1.DomainRuleR\vdomainRules\x12D\n" +
 	"\rsubscriptions\x18\a \x03(\v2\x1e.awg.vpn.v1.SubscriptionConfigR\rsubscriptions\x129\n" +
-	"\treconnect\x18\b \x01(\v2\x1b.awg.vpn.v1.ReconnectConfigR\treconnect\"\xe5\x02\n" +
+	"\treconnect\x18\b \x01(\v2\x1b.awg.vpn.v1.ReconnectConfigR\treconnect\"\xfd\x02\n" +
 	"\vTunnelStats\x12\x1b\n" +
 	"\ttunnel_id\x18\x01 \x01(\tR\btunnelId\x12-\n" +
 	"\x05state\x18\x02 \x01(\x0e2\x17.awg.vpn.v1.TunnelStateR\x05state\x12\x19\n" +
@@ -4393,7 +4401,8 @@ const file_vpn_service_proto_rawDesc = "" +
 	"latency_ms\x18\b \x01(\x03R\tlatencyMs\x12A\n" +
 	"\x0elast_handshake\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\rlastHandshake\x12\x1b\n" +
 	"\tjitter_ms\x18\n" +
-	" \x01(\x03R\bjitterMs\"|\n" +
+	" \x01(\x03R\bjitterMs\x12\x16\n" +
+	"\x06banner\x18\v \x01(\tR\x06banner\"|\n" +
 	"\rStatsSnapshot\x121\n" +
 	"\atunnels\x18\x01 \x03(\v2\x17.awg.vpn.v1.TunnelStatsR\atunnels\x128\n" +
 	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\x9c\x01\n" +

@@ -238,12 +238,17 @@ func (rm *ReconnectManager) getInterval() time.Duration {
 }
 
 // requiresInteractiveAuth checks if a tunnel needs user input (OTP/MFA) to connect.
+// AnyConnect tunnels can auto-reconnect using saved session cookies (session resumption).
+// Only requires interactive auth on first connection or when session is expired.
 func (rm *ReconnectManager) requiresInteractiveAuth(tunnelID string) bool {
 	entry, ok := rm.registry.Get(tunnelID)
 	if !ok {
 		return false
 	}
-	// AnyConnect requires OTP code at each connection.
+	// AnyConnect supports session resumption — the provider stores the
+	// session cookie internally and will attempt resume on next Connect().
+	// Only the initial connection (from LoadIntents at startup) requires
+	// interactive auth since there's no saved session in memory.
 	return entry.Config.Protocol == "anyconnect"
 }
 

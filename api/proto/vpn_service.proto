@@ -175,6 +175,7 @@ message TunnelStats {
   int64 latency_ms = 8;       // RTT in milliseconds
   google.protobuf.Timestamp last_handshake = 9;
   int64 jitter_ms = 10;       // max-min RTT in milliseconds (1-min window)
+  string banner = 11;         // server banner/MOTD (AnyConnect)
 }
 
 message StatsSnapshot {
