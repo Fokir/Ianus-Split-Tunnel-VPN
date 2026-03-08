@@ -4,7 +4,7 @@
 
 Многотуннельный VPN-клиент для Windows с per-process split tunneling.
 Маршрутизирует трафик процессов в VPN-туннели по правилам (exe name, path pattern).
-Поддерживает несколько протоколов одновременно (AmneziaWG, WireGuard планируется).
+Поддерживает несколько протоколов одновременно (AmneziaWG, WireGuard, AnyConnect/CSTP, VLESS, SOCKS5, HTTP Proxy).
 
 > Детальная архитектура, data flow, reference repos, performance requirements — в памяти Serena.
 
@@ -37,6 +37,7 @@ internal/
   provider/
     interface.go                       # TunnelProvider + RawForwarder контракты
     amneziawg/provider.go              # AWG provider (netstack + raw forwarding)
+    anyconnect/provider.go             # AnyConnect/CSTP provider (Cisco SSL VPN)
     direct/provider.go                 # DirectProvider (IP_UNICAST_IF → real NIC)
   proxy/
     tunnel_proxy.go                    # TCP transparent proxy
@@ -49,7 +50,7 @@ ui/                                    # GUI (будущее)
 ## Соглашения
 
 - Build tag: `//go:build windows`
-- Логи: `[Core]`, `[Gateway]`, `[Route]`, `[AWG]`, `[Direct]`, `[Proxy]`, `[Rule]`, `[WFP]`, `[DNS]`
+- Логи: `[Core]`, `[Gateway]`, `[Route]`, `[AWG]`, `[AnyConnect]`, `[Direct]`, `[Proxy]`, `[Rule]`, `[WFP]`, `[DNS]`
 - Конфиг: YAML (см. `config.example.yaml`)
 - TUN IP: `10.255.0.1/24`, MTU: 1400
 - Special tunnel ID: `__direct__` для unmatched трафика
