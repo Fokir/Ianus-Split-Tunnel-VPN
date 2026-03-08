@@ -32,8 +32,24 @@ import (
 //   - .pem        — if ClientKey is set, loads cert+key as separate PEM files;
 //                    if ClientKey is empty, expects both cert and key blocks in one file
 func loadClientCert(cfg Config) ([]tls.Certificate, error) {
-	if cfg.ClientCert == "" || cfg.ClientCert == "auto" {
+	if cfg.ClientCert == "" {
 		return nil, nil
+	}
+	if cfg.ClientCert == "auto" {
+		// Pre-load certificates from the system store at initialization time.
+		// This ensures they are available in tlsCfg.Certificates for servers that
+		// expect client certs without sending TLS CertificateRequest (Cisco ASA).
+		certs, err := enumerateSystemClientCerts()
+		if err != nil {
+			core.Log.Warnf("AnyConnect", "System cert store pre-load failed: %v (will retry on demand)", err)
+			return nil, nil // non-fatal: will retry via GetClientCertificate callback or CertRequiredError
+		}
+		if len(certs) > 0 {
+			core.Log.Infof("AnyConnect", "Pre-loaded %d certificate(s) from system store", len(certs))
+		} else {
+			core.Log.Warnf("AnyConnect", "No certificates found in system store during pre-load")
+		}
+		return certs, nil
 	}
 
 	ext := strings.ToLower(filepath.Ext(cfg.ClientCert))
