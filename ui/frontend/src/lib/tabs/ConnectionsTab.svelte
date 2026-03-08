@@ -296,6 +296,12 @@
       default: return 'bg-zinc-500';
     }
   }
+
+  function pingColor(ms) {
+    if (ms < 70) return 'text-green-400';
+    if (ms <= 120) return 'text-yellow-400';
+    return 'text-red-400';
+  }
 </script>
 
 <div class="p-4 space-y-4">
@@ -503,6 +509,10 @@
               <span class="text-zinc-600">|</span>
               <span class="inline-flex items-center gap-1"><span class="text-green-400/70">&uarr;</span><span>{formatBytes(stats.bytesTx)}</span></span>
               <span class="inline-flex items-center gap-1"><span class="text-blue-400/70">&darr;</span><span>{formatBytes(stats.bytesRx)}</span></span>
+              {#if stats.latencyMs > 0}
+                <span class="text-zinc-600">|</span>
+                <span class="inline-flex items-center gap-1 {pingColor(stats.latencyMs)}">{stats.latencyMs} ms</span>
+              {/if}
             </div>
           {/if}
           {#if confirmRemoveId === tunnel.id}
