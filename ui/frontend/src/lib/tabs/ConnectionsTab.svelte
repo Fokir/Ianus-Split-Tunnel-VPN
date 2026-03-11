@@ -381,9 +381,12 @@
               on:click={() => openFormModal('vless')}>
               VLESS (Xray)
             </button>
-            <button class="w-full px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-700/50 transition-colors"
+            <button class="w-full px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-700/50 transition-colors flex items-center gap-2"
               on:click={() => openFormModal('anyconnect')}>
               AnyConnect
+              <span class="px-1.5 py-0.5 text-[0.5rem] font-semibold rounded bg-amber-500/20 text-amber-400 leading-none uppercase">
+                experimental
+              </span>
             </button>
           </div>
         {/if}
@@ -472,6 +475,11 @@
               <span class="px-1.5 py-0.5 text-[0.625rem] font-medium rounded bg-zinc-700/60 text-zinc-400 shrink-0 leading-none">
                 {protocolLabel(tunnel.protocol)}
               </span>
+              {#if tunnel.protocol === 'anyconnect'}
+                <span class="px-1.5 py-0.5 text-[0.5rem] font-semibold rounded bg-amber-500/20 text-amber-400 shrink-0 leading-none uppercase">
+                  experimental
+                </span>
+              {/if}
               {#if tunnel.externalIp || tunnel.adapterIp}
                 <span class="text-xs text-zinc-500 shrink-0 flex items-center gap-1">
                   {#if tunnel.countryCode}
