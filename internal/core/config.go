@@ -248,8 +248,6 @@ type DNSRouteConfig struct {
 	TunnelIDs []string `yaml:"tunnel_ids,omitempty"`
 	// Servers are DNS server addresses for queries.
 	Servers []string `yaml:"servers,omitempty"`
-	// Cache configures DNS response caching.
-	Cache DNSCacheYAMLConfig `yaml:"cache,omitempty"`
 	// FakeIP configures synthetic IP allocation for domain-matched DNS responses.
 	FakeIP FakeIPConfig `yaml:"fakeip,omitempty"`
 }
@@ -262,20 +260,6 @@ type FakeIPConfig struct {
 	// Enabled controls whether FakeIP is active (default true).
 	Enabled *bool  `yaml:"enabled,omitempty"`
 	CIDR    string `yaml:"cidr,omitempty"` // default "198.18.0.0/15"
-}
-
-// DNSCacheYAMLConfig holds DNS cache settings from YAML config.
-type DNSCacheYAMLConfig struct {
-	// Enabled controls whether DNS caching is active (default true).
-	Enabled *bool `yaml:"enabled,omitempty"`
-	// MaxSize is the maximum number of cache entries (default 10000).
-	MaxSize int `yaml:"max_size,omitempty"`
-	// MinTTL is the minimum TTL floor, e.g. "30s" (default 30s).
-	MinTTL string `yaml:"min_ttl,omitempty"`
-	// MaxTTL is the maximum TTL cap, e.g. "5m" (default 5m).
-	MaxTTL string `yaml:"max_ttl,omitempty"`
-	// NegTTL is the NXDOMAIN cache TTL, e.g. "60s" (default 60s).
-	NegTTL string `yaml:"neg_ttl,omitempty"`
 }
 
 // GlobalFilterConfig holds IP and app filters applied to all tunnels.

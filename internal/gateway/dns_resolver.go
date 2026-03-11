@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,14 +15,6 @@ import (
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/provider"
 )
-
-const prefetchChanSize = 64
-
-type prefetchRequest struct {
-	name   string // FQDN with trailing dot (cache key format)
-	qtype  uint16
-	qclass uint16
-}
 
 // dnsRespPool is a pool of 4KB buffers for DNS UDP response reads.
 // Used in forwardUDPSingle to avoid allocating 4KB per DNS query.
@@ -52,9 +43,6 @@ type DNSResolverConfig struct {
 	// FallbackDirect enables direct (non-VPN) fallback when all VPN servers fail.
 	FallbackDirect bool
 
-	// Cache configures DNS response caching. Nil disables caching.
-	// Use &DNSCacheConfig{} for defaults.
-	Cache *DNSCacheConfig
 }
 
 // DNSResolver is a local DNS forwarder that listens on the TUN adapter IP
@@ -75,8 +63,6 @@ type DNSResolver struct {
 	udpConn *net.UDPConn
 	tcpLn   net.Listener
 
-	cache *DNSCache // nil if caching disabled
-
 	// Domain-based routing.
 	domainMatcher atomic.Pointer[DomainMatcher]
 	domainTable   atomic.Pointer[DomainTable]
@@ -91,9 +77,6 @@ type DNSResolver struct {
 	// Goroutine limiters to prevent resource exhaustion under DNS flood.
 	udpSem chan struct{} // limits concurrent UDP handlers
 	tcpSem chan struct{} // limits concurrent TCP handlers
-
-	prefetchCh chan prefetchRequest
-	prefetchWg sync.WaitGroup
 
 	// tunnelDNS stores per-tunnel DNS servers (tunnelID → []netip.Addr).
 	// Used for tunnels like AnyConnect that provide their own DNS servers.
@@ -120,11 +103,6 @@ func NewDNSResolver(
 		providers: providers,
 		udpSem:    make(chan struct{}, 200),
 		tcpSem:    make(chan struct{}, 100),
-	}
-
-	// Initialize DNS cache if configured.
-	if config.Cache != nil {
-		r.cache = NewDNSCache(*config.Cache)
 	}
 
 	return r
@@ -189,20 +167,6 @@ func (r *DNSResolver) Start(ctx context.Context) error {
 		return fmt.Errorf("[DNS] listen TCP %s: %w", r.config.ListenAddr, err)
 	}
 
-	// Start prefetch worker for proactive cache refresh.
-	if r.cache != nil {
-		r.prefetchCh = make(chan prefetchRequest, prefetchChanSize)
-		r.cache.SetPrefetchCallback(func(name string, qtype, qclass uint16) {
-			select {
-			case r.prefetchCh <- prefetchRequest{name: name, qtype: qtype, qclass: qclass}:
-			default:
-				// Queue full — drop, not critical.
-			}
-		})
-		r.prefetchWg.Add(1)
-		go r.prefetchLoop(ctx)
-	}
-
 	r.wg.Add(2)
 	go r.udpLoop(ctx)
 	go r.tcpLoop(ctx)
@@ -227,19 +191,11 @@ func (r *DNSResolver) Stop() {
 		r.tcpLn.Close()
 	}
 	r.wg.Wait()
-	r.prefetchWg.Wait()
-	if r.cache != nil {
-		r.cache.Stop()
-	}
 	core.Log.Infof("DNS", "Resolver stopped")
 }
 
-// FlushCache clears the DNS response cache and domain table.
+// FlushCache clears the domain table.
 func (r *DNSResolver) FlushCache() {
-	if r.cache != nil {
-		r.cache.Flush()
-		core.Log.Infof("DNS", "DNS cache flushed")
-	}
 	if dt := r.domainTable.Load(); dt != nil {
 		dt.Flush()
 		core.Log.Infof("DNS", "Domain table flushed")
@@ -300,6 +256,7 @@ func (r *DNSResolver) handleUDPQuery(ctx context.Context, query []byte, clientAd
 // This is the core DNS resolution logic used by both the socket listener
 // (via handleUDPQuery) and the TUN router's in-band DNS hijack.
 func (r *DNSResolver) Resolve(ctx context.Context, query []byte) []byte {
+	start := time.Now()
 	name := extractDNSName(query)
 
 	// Block AAAA (IPv6) queries — return empty NOERROR response.
@@ -336,22 +293,6 @@ func (r *DNSResolver) Resolve(ctx context.Context, query []byte) []byte {
 		}
 	}
 
-	// Cache lookup.
-	if r.cache != nil {
-		qName, qtype, qclass, err := parseDNSQuestion(query)
-		if err == nil {
-			queryID := getDNSTransactionID(query)
-			if cached, ok := r.cache.Get(queryID, qName, qtype, qclass); ok {
-				core.Log.Debugf("DNS", "%s cache hit (UDP)", name)
-				// Record IPs from cached response too.
-				if domainResult.Matched {
-					r.recordDomainIPs(cached, name, routeTunnelID, domainResult.Action)
-				}
-				return cached
-			}
-		}
-	}
-
 	// Forward DNS query through all configured VPN tunnels in parallel.
 	resp, server, usedTunnel, err := r.forwardUDPAll(ctx, tunnelIDs, query)
 	if err == nil {
@@ -360,9 +301,8 @@ func (r *DNSResolver) Resolve(ctx context.Context, query []byte) []byte {
 		if domainResult.Matched && domainResult.Action != core.DomainBlock {
 			resp = r.rewriteResponseWithFakeIP(resp, name, routeTunnelID, domainResult.Action)
 		}
-		r.cacheStore(query, resp)
 		if name != "" {
-			core.Log.Debugf("DNS", "%s → %s via %s (UDP, route=%s)", name, server, usedTunnel, routeTunnelID)
+			core.Log.Debugf("DNS", "%s → %s via %s (UDP, route=%s) [%s]", name, server, usedTunnel, routeTunnelID, time.Since(start))
 		}
 		if domainResult.Matched {
 			r.recordDomainIPs(resp, name, routeTunnelID, domainResult.Action)
@@ -374,9 +314,8 @@ func (r *DNSResolver) Resolve(ctx context.Context, query []byte) []byte {
 	if r.config.FallbackDirect {
 		resp, server, err = r.forwardUDP(ctx, DirectTunnelID, query)
 		if err == nil {
-			r.cacheStore(query, resp)
 			if name != "" {
-				core.Log.Debugf("DNS", "%s → %s via direct/fallback (UDP)", name, server)
+				core.Log.Debugf("DNS", "%s → %s via direct/fallback (UDP) [%s]", name, server, time.Since(start))
 			}
 			return resp
 		}
@@ -386,14 +325,13 @@ func (r *DNSResolver) Resolve(ctx context.Context, query []byte) []byte {
 	// Handles the case when all VPN tunnels are removed and __direct__ is unavailable.
 	resp, err = r.forwardRawUDP(ctx, query)
 	if err == nil {
-		r.cacheStore(query, resp)
 		if name != "" {
-			core.Log.Debugf("DNS", "%s → raw fallback (UDP)", name)
+			core.Log.Debugf("DNS", "%s → raw fallback (UDP) [%s]", name, time.Since(start))
 		}
 		return resp
 	}
 
-	core.Log.Warnf("DNS", "All tunnels/servers failed for %s (UDP): %v", name, err)
+	core.Log.Warnf("DNS", "All tunnels/servers failed for %s (UDP): %v [%s]", name, err, time.Since(start))
 	return makeServFail(query)
 }
 
@@ -608,6 +546,7 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 		return
 	}
 
+	start := time.Now()
 	name := extractDNSName(query)
 
 	// Block AAAA (IPv6) queries — return empty NOERROR response.
@@ -653,24 +592,6 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 		}
 	}
 
-	// Cache lookup.
-	if r.cache != nil {
-		qName, qtype, qclass, parseErr := parseDNSQuestion(query)
-		if parseErr == nil {
-			queryID := getDNSTransactionID(query)
-			if cached, ok := r.cache.Get(queryID, qName, qtype, qclass); ok {
-				core.Log.Debugf("DNS", "%s cache hit (TCP)", name)
-				if err := writeTCPDNSResponse(clientConn, cached); err != nil {
-					core.Log.Warnf("DNS", "TCP write cached response: %v", err)
-				}
-				if domainResult.Matched {
-					r.recordDomainIPs(cached, name, routeTunnelID, domainResult.Action)
-				}
-				return
-			}
-		}
-	}
-
 	// Forward DNS query through all configured VPN tunnels in parallel.
 	resp, server, usedTunnel, err := r.forwardTCPAll(ctx, tunnelIDs, query)
 	if err != nil && r.config.FallbackDirect {
@@ -689,7 +610,7 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 	}
 
 	if err != nil {
-		core.Log.Warnf("DNS", "All tunnels/servers failed for %s (TCP): %v", name, err)
+		core.Log.Warnf("DNS", "All tunnels/servers failed for %s (TCP): %v [%s]", name, err, time.Since(start))
 		resp = makeServFail(query)
 		if resp == nil {
 			return
@@ -700,9 +621,8 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 		if domainResult.Matched && domainResult.Action != core.DomainBlock {
 			resp = r.rewriteResponseWithFakeIP(resp, name, routeTunnelID, domainResult.Action)
 		}
-		r.cacheStore(query, resp)
 		if name != "" {
-			core.Log.Debugf("DNS", "%s → %s via %s (TCP, route=%s)", name, server, usedTunnel, routeTunnelID)
+			core.Log.Debugf("DNS", "%s → %s via %s (TCP, route=%s) [%s]", name, server, usedTunnel, routeTunnelID, time.Since(start))
 		}
 		if domainResult.Matched {
 			r.recordDomainIPs(resp, name, routeTunnelID, domainResult.Action)
@@ -862,133 +782,6 @@ func (r *DNSResolver) forwardTCPSingle(ctx context.Context, prov provider.Tunnel
 	return resp, server, nil
 }
 
-// ---------------------------------------------------------------------------
-// DNS Prefetch
-// ---------------------------------------------------------------------------
-
-// prefetchLoop drains the prefetch channel and refreshes cache entries
-// that are close to expiration. A single worker serializes prefetch
-// requests to avoid overloading upstream DNS servers.
-func (r *DNSResolver) prefetchLoop(ctx context.Context) {
-	defer r.prefetchWg.Done()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case req := <-r.prefetchCh:
-			r.executePrefetch(ctx, req)
-		}
-	}
-}
-
-// executePrefetch resolves a DNS name in the background and updates the cache.
-// It mirrors the core logic of Resolve() in a simplified form.
-func (r *DNSResolver) executePrefetch(ctx context.Context, req prefetchRequest) {
-	query := buildPrefetchQuery(req.name, req.qtype, req.qclass)
-	if query == nil {
-		return
-	}
-
-	name := strings.TrimSuffix(req.name, ".")
-
-	// Re-evaluate domain rules (they may have changed since the original query).
-	tunnelIDs := r.config.TunnelIDs
-	routeTunnelID := ""
-	if len(tunnelIDs) > 0 {
-		routeTunnelID = tunnelIDs[0]
-	}
-	var domainResult DomainMatchResult
-	if dm := r.domainMatcher.Load(); dm != nil && name != "" {
-		domainResult = dm.Match(name)
-		if domainResult.Matched {
-			switch domainResult.Action {
-			case core.DomainBlock:
-				return // domain is now blocked, skip prefetch
-			case core.DomainDirect:
-				routeTunnelID = DirectTunnelID
-			case core.DomainRoute:
-				routeTunnelID = domainResult.TunnelID
-				if _, ok := r.tunnelDNS.Load(domainResult.TunnelID); ok {
-					tunnelIDs = []string{domainResult.TunnelID}
-				}
-			}
-		}
-	}
-
-	// Use a shorter timeout for prefetch — it's best-effort.
-	pfCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	resp, _, _, err := r.forwardUDPAll(pfCtx, tunnelIDs, query)
-	if err != nil {
-		core.Log.Debugf("DNS", "Prefetch failed for %s: %v", name, err)
-		return
-	}
-
-	// Apply FakeIP rewriting if domain-matched.
-	if domainResult.Matched && domainResult.Action != core.DomainBlock {
-		resp = r.rewriteResponseWithFakeIP(resp, name, routeTunnelID, domainResult.Action)
-	}
-
-	// Store fresh response in cache (replaces old entry, resets prefetchQueued).
-	r.cacheStore(query, resp)
-
-	// Update domain table.
-	if domainResult.Matched {
-		r.recordDomainIPs(resp, name, routeTunnelID, domainResult.Action)
-	}
-
-	core.Log.Debugf("DNS", "Prefetch refreshed %s", name)
-}
-
-// buildDNSQuery constructs a minimal DNS query from name/qtype/qclass.
-// The name must be an FQDN with trailing dot (e.g. "example.com.").
-// Returns nil if the name is empty or malformed.
-func buildPrefetchQuery(name string, qtype, qclass uint16) []byte {
-	if name == "" {
-		return nil
-	}
-
-	// Strip trailing dot for label splitting.
-	fqdn := strings.TrimSuffix(name, ".")
-	labels := strings.Split(fqdn, ".")
-	if len(labels) == 0 || (len(labels) == 1 && labels[0] == "") {
-		return nil
-	}
-
-	// Calculate QNAME wire length: sum(1+len(label)) + 1 (root).
-	qnameLen := 1 // root label (0x00)
-	for _, l := range labels {
-		if len(l) == 0 || len(l) > 63 {
-			return nil
-		}
-		qnameLen += 1 + len(l)
-	}
-
-	// Total: 12 (header) + qnameLen + 4 (QTYPE + QCLASS).
-	buf := make([]byte, 12+qnameLen+4)
-
-	// Header: ID=0 (don't care), RD=1, QDCOUNT=1.
-	buf[2] = 0x01 // RD=1
-	binary.BigEndian.PutUint16(buf[4:6], 1) // QDCOUNT=1
-
-	// QNAME.
-	pos := 12
-	for _, l := range labels {
-		buf[pos] = byte(len(l))
-		pos++
-		pos += copy(buf[pos:], l)
-	}
-	buf[pos] = 0 // root label
-	pos++
-
-	// QTYPE + QCLASS.
-	binary.BigEndian.PutUint16(buf[pos:], qtype)
-	binary.BigEndian.PutUint16(buf[pos+2:], qclass)
-
-	return buf
-}
-
 // defaultFallbackServers are used when all configured tunnels and direct
 // provider fail. These provide a last-resort DNS resolution path.
 var defaultFallbackServers = []string{"8.8.8.8:53", "1.1.1.1:53"}
@@ -1139,17 +932,6 @@ func makeServFail(query []byte) []byte {
 	resp[10], resp[11] = 0, 0
 
 	return resp
-}
-
-// cacheStore stores a DNS response in the cache if caching is enabled.
-func (r *DNSResolver) cacheStore(query, resp []byte) {
-	if r.cache == nil {
-		return
-	}
-	name, qtype, qclass, err := parseDNSQuestion(query)
-	if err == nil {
-		r.cache.Put(name, qtype, qclass, resp)
-	}
 }
 
 // makeNXDomain creates an NXDOMAIN response for the given query.

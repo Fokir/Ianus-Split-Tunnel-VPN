@@ -915,17 +915,9 @@ func saveConfigViaIPC(client *ipc.Client, cfg *core.Config) error {
 	}
 
 	// Build DNS config.
-	dnsEnabled := cfg.DNS.Cache.Enabled == nil || *cfg.DNS.Cache.Enabled
 	dnsCfg := &vpnapi.DNSConfig{
 		TunnelIds: cfg.DNS.TunnelIDs,
 		Servers:  cfg.DNS.Servers,
-		Cache: &vpnapi.DNSCacheConfig{
-			Enabled: dnsEnabled,
-			MaxSize: int32(cfg.DNS.Cache.MaxSize),
-			MinTtl:  cfg.DNS.Cache.MinTTL,
-			MaxTtl:  cfg.DNS.Cache.MaxTTL,
-			NegTtl:  cfg.DNS.Cache.NegTTL,
-		},
 	}
 
 	appConfig := &vpnapi.AppConfig{

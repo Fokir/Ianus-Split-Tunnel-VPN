@@ -234,7 +234,6 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 			Servers:        dnsConfig.FallbackServers,
 			TunnelIDs:      dnsConfig.TunnelIDs,
 			FallbackDirect: true,
-			Cache:          buildDNSCacheConfig(cfg.DNS.Cache),
 		}
 		dnsResolver = gateway.NewDNSResolver(resolverCfg, registry, providers)
 		dnsResolver.SetDirectIPCallback(func(ips []netip.Addr) {
@@ -901,31 +900,6 @@ func getStringSetting(settings map[string]any, key, defaultVal string) string {
 		}
 	}
 	return defaultVal
-}
-
-func buildDNSCacheConfig(yamlCfg core.DNSCacheYAMLConfig) *gateway.DNSCacheConfig {
-	if yamlCfg.Enabled != nil && !*yamlCfg.Enabled {
-		return nil
-	}
-	cfg := &gateway.DNSCacheConfig{
-		MaxSize: yamlCfg.MaxSize,
-	}
-	if yamlCfg.MinTTL != "" {
-		if d, err := time.ParseDuration(yamlCfg.MinTTL); err == nil {
-			cfg.MinTTL = d
-		}
-	}
-	if yamlCfg.MaxTTL != "" {
-		if d, err := time.ParseDuration(yamlCfg.MaxTTL); err == nil {
-			cfg.MaxTTL = d
-		}
-	}
-	if yamlCfg.NegTTL != "" {
-		if d, err := time.ParseDuration(yamlCfg.NegTTL); err == nil {
-			cfg.NegTTL = d
-		}
-	}
-	return cfg
 }
 
 func buildDomainMatcher(rules []core.DomainRule, geositeFilePath string, httpClient *http.Client) *gateway.DomainMatcher {

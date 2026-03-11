@@ -226,13 +226,6 @@ func configToProto(c core.Config) *vpnapi.AppConfig {
 		Dns: &vpnapi.DNSConfig{
 			TunnelIds: c.DNS.TunnelIDs,
 			Servers:   c.DNS.Servers,
-			Cache: &vpnapi.DNSCacheConfig{
-				Enabled: c.DNS.Cache.Enabled == nil || *c.DNS.Cache.Enabled,
-				MaxSize: int32(c.DNS.Cache.MaxSize),
-				MinTtl:  c.DNS.Cache.MinTTL,
-				MaxTtl:  c.DNS.Cache.MaxTTL,
-				NegTtl:  c.DNS.Cache.NegTTL,
-			},
 			Fakeip: &vpnapi.FakeIPConfig{
 				Enabled: c.DNS.FakeIP.Enabled == nil || *c.DNS.FakeIP.Enabled,
 				Cidr:    c.DNS.FakeIP.CIDR,
@@ -276,7 +269,6 @@ func configFromProto(pc *vpnapi.AppConfig) core.Config {
 	}
 
 	if pc.Dns != nil {
-		enabled := pc.Dns.Cache != nil && pc.Dns.Cache.Enabled
 		cfg.DNS = core.DNSRouteConfig{
 			TunnelIDs: pc.Dns.TunnelIds,
 			Servers:   pc.Dns.Servers,
@@ -284,15 +276,6 @@ func configFromProto(pc *vpnapi.AppConfig) core.Config {
 		// Backward compat: if tunnel_ids is empty but deprecated tunnel_id is set, use it.
 		if len(cfg.DNS.TunnelIDs) == 0 && pc.Dns.TunnelId != "" {
 			cfg.DNS.TunnelIDs = []string{pc.Dns.TunnelId}
-		}
-		if pc.Dns.Cache != nil {
-			cfg.DNS.Cache = core.DNSCacheYAMLConfig{
-				Enabled: &enabled,
-				MaxSize: int(pc.Dns.Cache.MaxSize),
-				MinTTL:  pc.Dns.Cache.MinTtl,
-				MaxTTL:  pc.Dns.Cache.MaxTtl,
-				NegTTL:  pc.Dns.Cache.NegTtl,
-			}
 		}
 		if pc.Dns.Fakeip != nil {
 			fakeipEnabled := pc.Dns.Fakeip.Enabled
