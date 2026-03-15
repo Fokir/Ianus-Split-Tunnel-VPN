@@ -18,7 +18,7 @@
 	url = https://github.com/amnezia-vpn/amneziawg-windows-client.git
 [submodule "refs/tailscale-wf"]
 	path = refs/tailscale-wf
-	url = https://github.com/tailscale/wf.git
+	url = https://github.com/Fokir/wf.git
 [submodule "refs/mullvad-split-tunnel"]
 	path = refs/mullvad-split-tunnel
 	url = https://github.com/mullvad/win-split-tunnel.git
