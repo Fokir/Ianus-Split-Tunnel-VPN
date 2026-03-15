@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,10 +21,30 @@ import (
 )
 
 // xrayLogBridge forwards xray-core log messages to our logging system.
+// Noisy "closed pipe" UDP errors are suppressed and summarized periodically.
 type xrayLogBridge struct{}
+
+// Suppression counters for noisy xray UDP errors (package-level, single instance).
+var (
+	xrayUDPSuppressed atomic.Int64
+	xrayUDPLastLogSec atomic.Int64
+)
 
 func (b *xrayLogBridge) Handle(msg xlog.Message) {
 	s := msg.String()
+
+	// Suppress noisy "closed pipe" UDP errors; log summary every 60s.
+	if strings.Contains(s, "read/write on closed pipe") {
+		count := xrayUDPSuppressed.Add(1)
+		now := time.Now().Unix()
+		last := xrayUDPLastLogSec.Load()
+		if now-last >= 60 && xrayUDPLastLogSec.CompareAndSwap(last, now) {
+			core.Log.Infof("xray", "Suppressed %d UDP 'closed pipe' errors in last 60s", count)
+			xrayUDPSuppressed.Store(0)
+		}
+		return
+	}
+
 	switch {
 	case strings.HasPrefix(s, "[Warning]"), strings.HasPrefix(s, "[Error]"):
 		core.Log.Warnf("xray", "%s", s)
