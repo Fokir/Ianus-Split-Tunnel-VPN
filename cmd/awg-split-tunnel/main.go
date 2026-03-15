@@ -705,7 +705,7 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 			}
 		}
 		updateChecker = update.NewChecker(version, interval, bus, nicHTTPClient)
-		go updateChecker.Start(ctx)
+		core.SafeGo("update.checker", func() { updateChecker.Start(ctx) })
 		core.Log.Infof("Update", "Auto-update checker started (interval=%s)", interval)
 	}
 
@@ -771,7 +771,7 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		deregisterSvc = opts[0].RegisterService(svc)
 	} else {
 		ipcServer = ipc.NewServer(svc)
-		go func() {
+		core.SafeGo("ipc.server", func() {
 			ln, err := plat.IPC.Listener()
 			if err != nil {
 				core.Log.Errorf("Core", "IPC listen error: %v", err)
@@ -781,7 +781,7 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 			if err := ipcServer.Start(ln); err != nil {
 				core.Log.Errorf("Core", "IPC server error: %v", err)
 			}
-		}()
+		})
 	}
 
 	// --- Wait for shutdown signal ---
@@ -864,7 +864,7 @@ mainLoop:
 	runCancel() // Cancel the run context
 
 	done := make(chan struct{})
-	go func() {
+	core.SafeGo("shutdown", func() {
 		if deregisterSvc != nil {
 			deregisterSvc()
 		}
@@ -899,7 +899,7 @@ mainLoop:
 		adapter.Close()
 
 		close(done)
-	}()
+	})
 
 	select {
 	case <-done:

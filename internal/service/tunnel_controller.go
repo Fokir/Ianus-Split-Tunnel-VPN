@@ -219,7 +219,7 @@ func (tc *TunnelControllerImpl) ConnectTunnelWithAuth(ctx context.Context, tunne
 			if ap.HasSavedSession() {
 				core.Log.Infof("Core", "AnyConnect tunnel %q has saved session, attempting resume...", tunnelID)
 				tc.deps.Registry.SetState(tunnelID, core.TunnelStateConnecting, nil)
-				go func() {
+				core.SafeGo(fmt.Sprintf("anyconnect.reconnect-%s", tunnelID), func() {
 					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
 					if reconnErr := ap.Connect(ctx); reconnErr != nil {
@@ -238,7 +238,7 @@ func (tc *TunnelControllerImpl) ConnectTunnelWithAuth(ctx context.Context, tunne
 						tc.deps.Registry.SetState(tunnelID, core.TunnelStateUp, nil)
 						tc.registerRawForwarder(tunnelID, ap)
 					}
-				}()
+				})
 				return
 			}
 			tc.deps.Registry.SetState(tunnelID, core.TunnelStateError, fmt.Errorf("session expired: %v", err))

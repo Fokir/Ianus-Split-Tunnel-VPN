@@ -168,8 +168,8 @@ func (r *DNSResolver) Start(ctx context.Context) error {
 	}
 
 	r.wg.Add(2)
-	go r.udpLoop(ctx)
-	go r.tcpLoop(ctx)
+	core.SuperviseWG(ctx, &r.wg, core.SupervisorConfig{Name: "dns.udp-loop"}, r.udpLoop)
+	core.SuperviseWG(ctx, &r.wg, core.SupervisorConfig{Name: "dns.tcp-loop"}, r.tcpLoop)
 
 	core.Log.Infof("DNS", "Resolver listening on %s (tunnels=%v, servers=%v, fallback_direct=%v)",
 		r.config.ListenAddr, r.config.TunnelIDs, r.config.Servers, r.config.FallbackDirect)
@@ -207,8 +207,6 @@ func (r *DNSResolver) FlushCache() {
 // ---------------------------------------------------------------------------
 
 func (r *DNSResolver) udpLoop(ctx context.Context) {
-	defer r.wg.Done()
-
 	buf := make([]byte, 4096)
 	for {
 		n, clientAddr, err := r.udpConn.ReadFromUDP(buf)
@@ -233,10 +231,10 @@ func (r *DNSResolver) udpLoop(ctx context.Context) {
 		// Limit concurrent handlers to prevent goroutine exhaustion.
 		select {
 		case r.udpSem <- struct{}{}:
-			go func() {
+			core.SafeGo("dns.handle-udp-query", func() {
 				defer func() { <-r.udpSem }()
 				r.handleUDPQuery(ctx, query, clientAddr)
-			}()
+			})
 		default:
 			// Semaphore full — drop query silently (client will retry).
 		}
@@ -373,6 +371,12 @@ func (r *DNSResolver) forwardUDP(ctx context.Context, tunnelID string, query []b
 	ch := make(chan result, len(servers))
 	for _, srv := range servers {
 		go func(server netip.Addr) {
+			defer func() {
+				if v := recover(); v != nil {
+					core.Log.Errorf("DNS", "panic in forwardUDPSingle to %s: %v", server, v)
+					ch <- result{err: fmt.Errorf("panic: %v", v)}
+				}
+			}()
 			resp, _, err := r.forwardUDPSingle(fanCtx, prov, server, query)
 			ch <- result{resp: resp, server: server, err: err}
 		}(srv)
@@ -419,6 +423,12 @@ func (r *DNSResolver) forwardUDPAll(ctx context.Context, tunnelIDs []string, que
 	ch := make(chan result, len(tunnelIDs))
 	for _, tid := range tunnelIDs {
 		go func(tunnelID string) {
+			defer func() {
+				if v := recover(); v != nil {
+					core.Log.Errorf("DNS", "panic in forwardUDP for tunnel %s: %v", tunnelID, v)
+					ch <- result{err: fmt.Errorf("panic: %v", v)}
+				}
+			}()
 			resp, server, err := r.forwardUDP(fanCtx, tunnelID, query)
 			ch <- result{resp, server, tunnelID, err}
 		}(tid)
@@ -495,8 +505,6 @@ func (r *DNSResolver) forwardUDPSingle(ctx context.Context, prov provider.Tunnel
 // ---------------------------------------------------------------------------
 
 func (r *DNSResolver) tcpLoop(ctx context.Context) {
-	defer r.wg.Done()
-
 	for {
 		conn, err := r.tcpLn.Accept()
 		if err != nil {
@@ -512,10 +520,10 @@ func (r *DNSResolver) tcpLoop(ctx context.Context) {
 		// Limit concurrent handlers.
 		select {
 		case r.tcpSem <- struct{}{}:
-			go func() {
+			core.SafeGo("dns.handle-tcp-query", func() {
 				defer func() { <-r.tcpSem }()
 				r.handleTCPQuery(ctx, conn)
-			}()
+			})
 		default:
 			conn.Close() // reject when overloaded
 		}
@@ -679,6 +687,12 @@ func (r *DNSResolver) forwardTCP(ctx context.Context, tunnelID string, query []b
 	ch := make(chan result, len(servers))
 	for _, srv := range servers {
 		go func(server netip.Addr) {
+			defer func() {
+				if v := recover(); v != nil {
+					core.Log.Errorf("DNS", "panic in forwardTCPSingle to %s: %v", server, v)
+					ch <- result{err: fmt.Errorf("panic: %v", v)}
+				}
+			}()
 			resp, _, err := r.forwardTCPSingle(fanCtx, prov, server, query)
 			ch <- result{resp: resp, server: server, err: err}
 		}(srv)
@@ -725,6 +739,12 @@ func (r *DNSResolver) forwardTCPAll(ctx context.Context, tunnelIDs []string, que
 	ch := make(chan result, len(tunnelIDs))
 	for _, tid := range tunnelIDs {
 		go func(tunnelID string) {
+			defer func() {
+				if v := recover(); v != nil {
+					core.Log.Errorf("DNS", "panic in forwardTCP for tunnel %s: %v", tunnelID, v)
+					ch <- result{err: fmt.Errorf("panic: %v", v)}
+				}
+			}()
 			resp, server, err := r.forwardTCP(fanCtx, tunnelID, query)
 			ch <- result{resp, server, tunnelID, err}
 		}(tid)

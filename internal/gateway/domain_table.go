@@ -76,7 +76,7 @@ func (dt *DomainTable) Len() int {
 
 // StartCleanup runs a background goroutine that removes expired entries every 60s.
 func (dt *DomainTable) StartCleanup(ctx context.Context) {
-	go func() {
+	core.SafeGo("domain-table.cleanup", func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 
@@ -88,7 +88,7 @@ func (dt *DomainTable) StartCleanup(ctx context.Context) {
 				dt.cleanup()
 			}
 		}
-	}()
+	})
 }
 
 // cleanup removes entries whose TTL has expired.

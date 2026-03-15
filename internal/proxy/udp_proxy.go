@@ -102,9 +102,9 @@ func (up *UDPProxy) Start(ctx context.Context) error {
 	// Start cached timestamp updater for fast-path activity tracking.
 	up.nowSec.Store(time.Now().Unix())
 	up.wg.Add(3)
-	go up.timestampUpdater(ctx)
-	go up.readLoop(ctx)
-	go up.cleanupLoop(ctx)
+	core.SuperviseWG(ctx, &up.wg, core.SupervisorConfig{Name: fmt.Sprintf("proxy.udp-timestamp-%d", up.port)}, up.timestampUpdater)
+	core.SuperviseWG(ctx, &up.wg, core.SupervisorConfig{Name: fmt.Sprintf("proxy.udp-read-%d", up.port)}, up.readLoop)
+	core.SuperviseWG(ctx, &up.wg, core.SupervisorConfig{Name: fmt.Sprintf("proxy.udp-cleanup-%d", up.port)}, up.cleanupLoop)
 
 	return nil
 }
@@ -133,8 +133,6 @@ func (up *UDPProxy) Stop() {
 
 // readLoop reads datagrams from the listener and dispatches them.
 func (up *UDPProxy) readLoop(ctx context.Context) {
-	defer up.wg.Done()
-
 	bp := udpBufPool.Get().(*[]byte)
 	defer udpBufPool.Put(bp)
 	buf := *bp
@@ -245,6 +243,11 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, sk netip.AddrPort) {
 	defer up.wg.Done()
 	defer up.removeSession(sk)
+	defer func() {
+		if v := recover(); v != nil {
+			core.Log.Errorf("Proxy", "panic in UDP readFromTunnel for %s: %v", sess.clientAddr, v)
+		}
+	}()
 
 	bp := udpBufPool.Get().(*[]byte)
 	defer udpBufPool.Put(bp)
@@ -299,8 +302,6 @@ func (up *UDPProxy) removeSession(sk netip.AddrPort) {
 
 // timestampUpdater updates the cached Unix timestamp every 250ms.
 func (up *UDPProxy) timestampUpdater(ctx context.Context) {
-	defer up.wg.Done()
-
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -316,8 +317,6 @@ func (up *UDPProxy) timestampUpdater(ctx context.Context) {
 
 // cleanupLoop periodically removes idle UDP sessions (>2min inactive).
 func (up *UDPProxy) cleanupLoop(ctx context.Context) {
-	defer up.wg.Done()
-
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 

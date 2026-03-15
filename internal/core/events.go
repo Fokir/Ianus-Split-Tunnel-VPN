@@ -20,6 +20,9 @@ const (
 	EventTunnelBanner    // Server sent a banner/MOTD message
 	EventTunnelResuming  // Tunnel is attempting session resumption
 	EventTunnelTimeout   // Tunnel idle or session timeout
+
+	EventSupervisorRestarted  // A supervised goroutine recovered from panic and restarted
+	EventSupervisorCircuitOpen // A supervisor exceeded max restarts and stopped
 )
 
 // AuthRequiredPayload is the payload for EventAuthRequired.
@@ -71,6 +74,19 @@ type BannerPayload struct {
 type TimeoutPayload struct {
 	TunnelID string
 	Kind     string // "idle" or "session"
+}
+
+// SupervisorRestartPayload is the payload for EventSupervisorRestarted.
+type SupervisorRestartPayload struct {
+	Name       string
+	Attempt    int
+	PanicValue any
+}
+
+// SupervisorCircuitPayload is the payload for EventSupervisorCircuitOpen.
+type SupervisorCircuitPayload struct {
+	Name        string
+	TotalPanics int
 }
 
 // Handler is a callback for bus subscribers.

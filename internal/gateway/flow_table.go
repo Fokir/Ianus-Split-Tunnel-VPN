@@ -209,8 +209,7 @@ func NewFlowTable() *FlowTable {
 // StartTimestampUpdater launches a goroutine that updates nowSec every 250ms.
 func (ft *FlowTable) StartTimestampUpdater(ctx context.Context) {
 	ft.wg.Add(1)
-	go func() {
-		defer ft.wg.Done()
+	core.SuperviseWG(ctx, &ft.wg, core.SupervisorConfig{Name: "flow.timestamp-updater"}, func(ctx context.Context) {
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
 		for {
@@ -221,7 +220,7 @@ func (ft *FlowTable) StartTimestampUpdater(ctx context.Context) {
 				ft.nowSec.Store(time.Now().Unix())
 			}
 		}
-	}()
+	})
 }
 
 // NowSec returns the cached Unix timestamp.
@@ -573,8 +572,7 @@ func (ft *FlowTable) LookupVpnIP(ip [4]byte) (string, bool) {
 // StartRawFlowCleanup periodically removes stale raw flow entries (>5 min idle).
 func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 	ft.wg.Add(1)
-	go func() {
-		defer ft.wg.Done()
+	core.SuperviseWG(ctx, &ft.wg, core.SupervisorConfig{Name: "flow.raw-cleanup"}, func(ctx context.Context) {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		// Preallocate candidates slice — reused across ticks to avoid GC churn.
@@ -643,7 +641,7 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 				}
 			}
 		}
-	}()
+	})
 }
 
 // SetRawFlowCleanupHook sets a callback invoked before removing stale raw flows.
@@ -757,8 +755,7 @@ func (ft *FlowTable) Stats() FlowTableStats {
 // StartTCPCleanup periodically removes stale TCP NAT entries (>5 min idle).
 func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 	ft.wg.Add(1)
-	go func() {
-		defer ft.wg.Done()
+	core.SuperviseWG(ctx, &ft.wg, core.SupervisorConfig{Name: "flow.tcp-cleanup"}, func(ctx context.Context) {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		// Preallocate candidates slice — reused across ticks to avoid GC churn.
@@ -823,15 +820,14 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 				}
 			}
 		}
-	}()
+	})
 }
 
 // StartUDPCleanup periodically removes stale UDP NAT entries
 // (>2 min for normal, >10 sec for DNS port 53).
 func (ft *FlowTable) StartUDPCleanup(ctx context.Context) {
 	ft.wg.Add(1)
-	go func() {
-		defer ft.wg.Done()
+	core.SuperviseWG(ctx, &ft.wg, core.SupervisorConfig{Name: "flow.udp-cleanup"}, func(ctx context.Context) {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		// Preallocate candidates slice — reused across ticks to avoid GC churn.
@@ -902,5 +898,5 @@ func (ft *FlowTable) StartUDPCleanup(ctx context.Context) {
 				}
 			}
 		}
-	}()
+	})
 }

@@ -107,7 +107,7 @@ func (tp *TunnelProxy) Start(ctx context.Context) error {
 	core.Log.Infof("Proxy", "Listening on %s", addr)
 
 	tp.wg.Add(1)
-	go tp.acceptLoop(ctx)
+	core.SuperviseWG(ctx, &tp.wg, core.SupervisorConfig{Name: fmt.Sprintf("proxy.tcp-accept-%d", tp.port)}, tp.acceptLoop)
 
 	return nil
 }
@@ -144,8 +144,6 @@ func (tp *TunnelProxy) untrackConn(c net.Conn) {
 }
 
 func (tp *TunnelProxy) acceptLoop(ctx context.Context) {
-	defer tp.wg.Done()
-
 	for {
 		conn, err := tp.listener.Accept()
 		if err != nil {
@@ -294,6 +292,11 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 // connections are never interrupted. Only idle/stalled connections timeout.
 func forward(dst, src net.Conn, direction, target string, wg *sync.WaitGroup) {
 	defer wg.Done()
+	defer func() {
+		if v := recover(); v != nil {
+			core.Log.Errorf("Proxy", "panic in forward %s %s: %v", direction, target, v)
+		}
+	}()
 
 	bp := fwdBufPool.Get().(*[]byte)
 	defer fwdBufPool.Put(bp)
