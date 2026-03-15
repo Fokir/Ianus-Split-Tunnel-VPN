@@ -171,7 +171,7 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	}
 
 	// === 8. Direct Provider + proxies ===
-	var nextProxyPort uint16 = 30000
+	var nextProxyPort uint16 = 31000 // 30000 often blocked by Hyper-V dynamic port reservations
 
 	// Create InterfaceBinder for binding sockets to real NIC (direct provider, HTTP client).
 	ifBinder := plat.NewInterfaceBinder()
