@@ -138,6 +138,9 @@ func (re *RuleEngine) MatchPreLoweredFrom(exeLower, baseLower string, startIdx i
 	defer re.mu.RUnlock()
 
 	for i := startIdx; i < len(re.rules); i++ {
+		if !re.rules[i].IsEnabled() {
+			continue // skip disabled rule
+		}
 		var matched bool
 		if re.regexCache[i] != nil {
 			matched = re.regexCache[i].MatchString(exeLower)
