@@ -20,8 +20,9 @@ const (
 // The pipe allows any authenticated user to connect (SDDL grant).
 func PipeListener() (net.Listener, error) {
 	cfg := &winio.PipeConfig{
-		// Allow all authenticated users to connect (GUI runs as regular user).
-		SecurityDescriptor: "D:P(A;;GA;;;AU)",
+		// SYSTEM + Administrators: full access; Interactive Users (console/RDP): full access.
+		// More restrictive than AU — excludes batch, service, and network logons.
+		SecurityDescriptor: "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;IU)",
 		MessageMode:        false,
 		InputBufferSize:    64 * 1024,
 		OutputBufferSize:   64 * 1024,
