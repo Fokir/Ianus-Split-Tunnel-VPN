@@ -352,6 +352,57 @@ type Config struct {
 	Update        UpdateConfig                  `yaml:"update,omitempty"`
 }
 
+// validProtocols is the set of recognized tunnel protocol identifiers.
+var validProtocols = map[string]bool{
+	ProtocolAmneziaWG:  true,
+	ProtocolWireGuard:  true,
+	ProtocolSOCKS5:     true,
+	ProtocolHTTPProxy:  true,
+	ProtocolVLESS:      true,
+	ProtocolAnyConnect: true,
+}
+
+// Validate performs basic sanity checks on the configuration.
+// Called after unmarshal to catch structural errors early.
+func (c *Config) Validate() error {
+	// Check for duplicate tunnel IDs.
+	seen := make(map[string]bool, len(c.Tunnels))
+	for i, t := range c.Tunnels {
+		if t.ID == "" {
+			return fmt.Errorf("tunnel[%d]: empty ID", i)
+		}
+		if t.Protocol == "" {
+			return fmt.Errorf("tunnel %q: empty protocol", t.ID)
+		}
+		if !validProtocols[t.Protocol] {
+			return fmt.Errorf("tunnel %q: unknown protocol %q", t.ID, t.Protocol)
+		}
+		if seen[t.ID] {
+			return fmt.Errorf("tunnel %q: duplicate ID", t.ID)
+		}
+		seen[t.ID] = true
+	}
+
+	// Validate rules reference existing tunnels or are drop-only.
+	for i, r := range c.Rules {
+		if r.Pattern == "" {
+			return fmt.Errorf("rule[%d]: empty pattern", i)
+		}
+		if r.TunnelID != "" && !seen[r.TunnelID] {
+			Log.Warnf("Core", "rule[%d] pattern=%q references unknown tunnel %q", i, r.Pattern, r.TunnelID)
+		}
+	}
+
+	// Validate domain rules.
+	for i, dr := range c.DomainRules {
+		if dr.Pattern == "" {
+			return fmt.Errorf("domain_rule[%d]: empty pattern", i)
+		}
+	}
+
+	return nil
+}
+
 // ConfigManager handles loading, saving, and hot-reloading configuration.
 type ConfigManager struct {
 	mu       sync.RWMutex
@@ -410,7 +461,7 @@ func (cm *ConfigManager) Load() error {
 		if err != nil {
 			return fmt.Errorf("[Core] failed to marshal migrated config: %w", err)
 		}
-		if err := os.WriteFile(cm.filePath, data, 0644); err != nil {
+		if err := os.WriteFile(cm.filePath, data, 0600); err != nil {
 			Log.Warnf("Core", "Failed to persist migrated config: %v", err)
 		}
 	}
@@ -419,6 +470,11 @@ func (cm *ConfigManager) Load() error {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return fmt.Errorf("[Core] failed to parse config: %w", err)
+	}
+
+	// Step 4: Validate config after unmarshal.
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("[Core] config validation: %w", err)
 	}
 
 	cm.mu.Lock()
@@ -448,7 +504,7 @@ func (cm *ConfigManager) writeFile(data []byte) error {
 		}
 	}
 
-	if err := os.WriteFile(cm.filePath, data, 0644); err != nil {
+	if err := os.WriteFile(cm.filePath, data, 0600); err != nil {
 		return fmt.Errorf("[Core] failed to write config %s: %w", cm.filePath, err)
 	}
 
