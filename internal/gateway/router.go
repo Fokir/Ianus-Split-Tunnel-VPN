@@ -291,6 +291,11 @@ type procFlowStat struct {
 }
 
 func (r *TUNRouter) gcPauseMonitor(ctx context.Context) {
+	defer func() {
+		if v := recover(); v != nil {
+			core.Log.Errorf("Perf", "PANIC in gcPauseMonitor: %v", v)
+		}
+	}()
 	var prevNumGC uint32
 	var stats runtime.MemStats
 	ticker := time.NewTicker(10 * time.Second)
@@ -330,8 +335,18 @@ func (r *TUNRouter) gcPauseMonitor(ctx context.Context) {
 // Uses a single pre-allocated buffer to eliminate per-packet heap allocations.
 func (r *TUNRouter) packetLoop(ctx context.Context) {
 	defer close(r.done)
+	defer func() {
+		if v := recover(); v != nil {
+			core.Log.Errorf("Gateway", "PANIC in packetLoop: %v", v)
+		}
+	}()
 
 	buf := make([]byte, maxPacketSize)
+
+	// Read error backoff to prevent CPU spin on persistent TUN failures.
+	const minReadErrBackoff = 10 * time.Millisecond
+	const maxReadErrBackoff = 1 * time.Second
+	readErrBackoff := minReadErrBackoff
 
 	// Perf: track stall stats per 10-second window.
 	var maxProcStall time.Duration
@@ -398,9 +413,15 @@ func (r *TUNRouter) packetLoop(ctx context.Context) {
 				return
 			default:
 				core.Log.Errorf("Gateway", "Read error: %v", err)
+				// Exponential backoff on persistent errors to avoid CPU spin.
+				time.Sleep(readErrBackoff)
+				if readErrBackoff < maxReadErrBackoff {
+					readErrBackoff *= 2
+				}
 				continue
 			}
 		}
+		readErrBackoff = minReadErrBackoff // reset on success
 
 		totalPkts++
 		procStart := time.Now()
@@ -531,7 +552,7 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 			basePrio, isAuto := mapRulePriority(rulePrio)
 			prio := resolvePriority(basePrio, isAuto, pkt, protoTCP, m.tpOff, m.srcP, m.dstP)
 			// Key raw flow by effective (real) dst IP so inbound lookups match.
-			r.flows.InsertRawFlow(protoTCP, effectiveDstIP, m.srcP, &RawFlowEntry{
+			r.flows.InsertRawFlow(protoTCP, effectiveDstIP, m.srcP, RawFlowEntry{
 				LastActivity: r.flows.NowSec(),
 				TunnelID:     tunnelID,
 				VpnIP:        vpnIP,
@@ -560,7 +581,7 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 	dstIP := netip.AddrFrom4(m.dstIP)
 
 	// Create NAT entry with fallback context for connection-level fallback.
-	natEntry := &NATEntry{
+	natEntry := NATEntry{
 		LastActivity:    r.flows.NowSec(),
 		OriginalDstIP:   dstIP,
 		OriginalDstPort: m.dstP,
@@ -595,7 +616,7 @@ func (r *TUNRouter) handleTCPProxyResponse(pkt []byte, m pktMeta) {
 	}
 
 	// Update activity timestamp.
-	atomic.StoreInt64(&entry.LastActivity, r.flows.NowSec())
+	r.flows.TouchTCP(dstIP, m.dstP)
 
 	// RST: connection aborted, clean up NAT entry.
 	if m.flags&tcpRST != 0 {
@@ -604,11 +625,7 @@ func (r *TUNRouter) handleTCPProxyResponse(pkt []byte, m pktMeta) {
 
 	// Track server-side FIN for faster cleanup.
 	if m.flags&tcpFIN != 0 {
-		fin := atomic.OrInt32(&entry.FinSeen, 0x2)
-		// Both FINs seen — schedule entry for short-lived cleanup (2s grace).
-		if fin|0x2 == 0x3 {
-			atomic.StoreInt64(&entry.LastActivity, r.flows.NowSec()-298)
-		}
+		r.flows.SetFinTCP(dstIP, m.dstP, 0x2)
 	}
 
 	tcpCkOff := m.tpOff + 16
@@ -637,7 +654,7 @@ func (r *TUNRouter) handleTCPExisting(pkt []byte, m pktMeta) {
 
 	// Check raw flow table first.
 	if rawEntry, ok := r.flows.GetRawFlow(protoTCP, effectiveDstIP, m.srcP); ok {
-		atomic.StoreInt64(&rawEntry.LastActivity, r.flows.NowSec())
+		r.flows.TouchRawFlow(protoTCP, effectiveDstIP, m.srcP)
 
 		// RST: clean up raw flow.
 		if m.flags&tcpRST != 0 {
@@ -668,7 +685,7 @@ func (r *TUNRouter) handleTCPExisting(pkt []byte, m pktMeta) {
 	}
 
 	// Update activity timestamp.
-	atomic.StoreInt64(&entry.LastActivity, r.flows.NowSec())
+	r.flows.TouchTCP(dstIP, m.srcP)
 
 	// RST: clean up.
 	if m.flags&tcpRST != 0 {
@@ -677,11 +694,7 @@ func (r *TUNRouter) handleTCPExisting(pkt []byte, m pktMeta) {
 
 	// Track client-side FIN for faster cleanup.
 	if m.flags&tcpFIN != 0 {
-		fin := atomic.OrInt32(&entry.FinSeen, 0x1)
-		// Both FINs seen — schedule entry for short-lived cleanup (2s grace).
-		if fin|0x1 == 0x3 {
-			atomic.StoreInt64(&entry.LastActivity, r.flows.NowSec()-298)
-		}
+		r.flows.SetFinTCP(dstIP, m.srcP, 0x1)
 	}
 
 	// Hairpin: swap IPs, rewrite dst port to proxy port.
@@ -728,7 +741,7 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 
 	// Fast path: existing raw flow.
 	if rawEntry, ok := r.flows.GetRawFlow(protoUDP, effectiveDstIP, m.srcP); ok {
-		atomic.StoreInt64(&rawEntry.LastActivity, r.flows.NowSec())
+		r.flows.TouchRawFlow(protoUDP, effectiveDstIP, m.srcP)
 		if rf, vpnIP, ok := r.getRawForwarder(rawEntry.TunnelID); ok {
 			// FakeIP: rewrite dst from FakeIP to real IP for existing flows.
 			if rawEntry.FakeIP != [4]byte{} {
@@ -744,7 +757,7 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	// Fast path: existing proxy NAT entry.
 	entry, exists := r.flows.GetUDP(dstIP, m.srcP)
 	if exists {
-		atomic.StoreInt64(&entry.LastActivity, r.flows.NowSec())
+		r.flows.TouchUDP(dstIP, m.srcP)
 
 		tunSwapIPs(pkt)
 		tunSetUDPPort(pkt, m.tpOff+2, entry.UDPProxyPort, m.tpOff+6)
@@ -798,7 +811,7 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 			basePrio, isAuto := mapRulePriority(rulePrio)
 			prio := resolvePriority(basePrio, isAuto, pkt, protoUDP, m.tpOff, m.srcP, m.dstP)
 			// Key raw flow by effective (real) dst IP so inbound lookups match.
-			r.flows.InsertRawFlow(protoUDP, effectiveDstIP, m.srcP, &RawFlowEntry{
+			r.flows.InsertRawFlow(protoUDP, effectiveDstIP, m.srcP, RawFlowEntry{
 				LastActivity: r.flows.NowSec(),
 				TunnelID:     tunnelID,
 				VpnIP:        vpnIP,
@@ -825,7 +838,7 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	}
 
 	// Create NAT entry with fallback context for connection-level fallback.
-	udpNATEntry := &UDPNATEntry{
+	udpNATEntry := UDPNATEntry{
 		LastActivity:    r.flows.NowSec(),
 		OriginalDstIP:   dstIP,
 		OriginalDstPort: m.dstP,
@@ -953,7 +966,7 @@ func (r *TUNRouter) handleICMP(pkt []byte, m pktMeta) {
 
 	// Fast path: existing raw flow (keyed by effective/real IP).
 	if rawEntry, ok := r.flows.GetRawFlow(protoICMP, effectiveDstIP, icmpID); ok {
-		atomic.StoreInt64(&rawEntry.LastActivity, r.flows.NowSec())
+		r.flows.TouchRawFlow(protoICMP, effectiveDstIP, icmpID)
 		if rf, vpnIP, ok := r.getRawForwarder(rawEntry.TunnelID); ok {
 			// FakeIP: rewrite dst from FakeIP to real IP before forwarding.
 			if rawEntry.FakeIP != [4]byte{} {
@@ -983,7 +996,7 @@ func (r *TUNRouter) handleICMP(pkt []byte, m pktMeta) {
 		return
 	}
 
-	r.flows.InsertRawFlow(protoICMP, effectiveDstIP, icmpID, &RawFlowEntry{
+	r.flows.InsertRawFlow(protoICMP, effectiveDstIP, icmpID, RawFlowEntry{
 		LastActivity: r.flows.NowSec(),
 		TunnelID:     tunnelID,
 		VpnIP:        vpnIP,
@@ -1541,7 +1554,7 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 
 	// Update activity timestamp so inbound-heavy flows (e.g. video streaming)
 	// are not evicted by the cleanup goroutine.
-	atomic.StoreInt64(&rawEntry.LastActivity, r.flows.NowSec())
+	r.flows.TouchRawFlow(proto, srcIP, dstPort)
 
 	// Clamp TCP MSS on inbound SYN-ACK to prevent client sending oversized segments.
 	if proto == protoTCP {
