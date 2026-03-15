@@ -18,6 +18,11 @@ import (
 // important for VPN tunneled traffic over high-latency links.
 const sockBufSize = 2 * 1024 * 1024
 
+// proxyIdleTimeout is the maximum time a forwarding goroutine will wait
+// for data before considering the connection idle and terminating.
+// Prevents goroutine leaks from abandoned/stalled connections.
+const proxyIdleTimeout = 5 * time.Minute
+
 // fwdBufPool reuses 1MB buffers for bidirectional TCP forwarding.
 // Larger buffers reduce syscall overhead during bulk transfers.
 var fwdBufPool = sync.Pool{
@@ -257,10 +262,15 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 		}
 		if result.RemoteConn != remoteConn {
 			// Fallback produced a new connection — swap it in.
-			// The old remoteConn is already closed by DetectEarlyEOF.
-			// The defer for the old remoteConn is no longer valid, but that's fine.
-			// The new remoteConn is already tracked and deferred for closing above.
+			// Old conn is already closed by DetectEarlyEOF; untrack it
+			// (original defers captured old value — they become harmless no-ops).
+			tp.untrackConn(remoteConn)
 			remoteConn = result.RemoteConn
+			tp.trackConn(remoteConn)
+			// Schedule cleanup for the new connection.
+			newConn := remoteConn
+			defer tp.untrackConn(newConn)
+			defer newConn.Close()
 
 			// Tune the new connection if it's a raw TCP conn.
 			if tc, ok := remoteConn.(*net.TCPConn); ok {
@@ -279,20 +289,44 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 	fwg.Wait()
 }
 
-// forward copies data from src to dst with pooled buffered I/O.
+// forward copies data from src to dst with idle timeout protection.
+// The read deadline is reset on each successful read, so truly active
+// connections are never interrupted. Only idle/stalled connections timeout.
 func forward(dst, src net.Conn, direction, target string, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	bp := fwdBufPool.Get().(*[]byte)
-	n, err := io.CopyBuffer(dst, src, *bp)
-	fwdBufPool.Put(bp)
+	defer fwdBufPool.Put(bp)
+	buf := *bp
 
-	if err != nil {
-		core.Log.Warnf("Proxy", "forward %s %s: %d bytes, err=%v (type=%T)", direction, target, n, err, err)
-	} else if n == 0 {
-		core.Log.Warnf("Proxy", "forward %s %s: 0 bytes (clean EOF — remote closed immediately)", direction, target)
-	} else {
-		core.Log.Debugf("Proxy", "forward %s %s: %d bytes", direction, target, n)
+	var total int64
+	for {
+		src.SetReadDeadline(time.Now().Add(proxyIdleTimeout))
+		nr, readErr := src.Read(buf)
+		if nr > 0 {
+			nw, writeErr := dst.Write(buf[:nr])
+			total += int64(nw)
+			if writeErr != nil {
+				core.Log.Warnf("Proxy", "forward %s %s: write err after %d bytes: %v", direction, target, total, writeErr)
+				break
+			}
+			if nw != nr {
+				core.Log.Warnf("Proxy", "forward %s %s: short write (%d/%d) after %d bytes", direction, target, nw, nr, total)
+				break
+			}
+		}
+		if readErr != nil {
+			if netErr, ok := readErr.(net.Error); ok && netErr.Timeout() {
+				core.Log.Debugf("Proxy", "forward %s %s: idle timeout (%v) after %d bytes", direction, target, proxyIdleTimeout, total)
+			} else if readErr != io.EOF && total > 0 {
+				core.Log.Warnf("Proxy", "forward %s %s: %d bytes, err=%v", direction, target, total, readErr)
+			} else if total == 0 {
+				core.Log.Warnf("Proxy", "forward %s %s: 0 bytes (clean EOF — remote closed immediately)", direction, target)
+			} else {
+				core.Log.Debugf("Proxy", "forward %s %s: %d bytes", direction, target, total)
+			}
+			break
+		}
 	}
 
 	// Signal half-close.

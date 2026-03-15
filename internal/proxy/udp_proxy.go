@@ -283,14 +283,18 @@ func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, sk net
 }
 
 // removeSession closes and removes a session by key.
+// Lock is released before Close() to avoid blocking other UDP goroutines.
 func (up *UDPProxy) removeSession(sk netip.AddrPort) {
 	up.sessionsMu.Lock()
-	if sess, ok := up.sessions[sk]; ok {
-		sess.closeOnce.Do(func() { sess.tunnelConn.Close() })
-		sess.cancel()
+	sess, ok := up.sessions[sk]
+	if ok {
 		delete(up.sessions, sk)
 	}
 	up.sessionsMu.Unlock()
+	if ok {
+		sess.closeOnce.Do(func() { sess.tunnelConn.Close() })
+		sess.cancel()
+	}
 }
 
 // timestampUpdater updates the cached Unix timestamp every 250ms.
