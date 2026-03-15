@@ -56,6 +56,27 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	// Initialize logger from config.
 	core.Log = core.NewLogger(cfg.Logging)
 
+	// Redirect OS-level stderr to the log file so that Go runtime panic
+	// stack traces (which bypass the log package) are captured on disk.
+	// Without this, panics in goroutines crash the process silently.
+	if f := core.Log.LogFile(); f != nil {
+		if err := redirectStderr(f); err != nil {
+			core.Log.Warnf("Core", "Failed to redirect stderr to log file: %v", err)
+		}
+	}
+
+	// Top-level panic recovery: catches any unrecovered panics that
+	// propagate up through runVPN and logs them before process exit.
+	defer func() {
+		if v := recover(); v != nil {
+			// Use both the logger (for structured output) and raw log (in case
+			// the logger itself is broken).
+			stack := debug.Stack()
+			core.Log.Errorf("Core", "FATAL PANIC: %v\n%s", v, stack)
+			log.Printf("[Core] FATAL PANIC: %v\n%s", v, stack)
+		}
+	}()
+
 	// Start log streamer early so it captures ALL log messages from the start.
 	logStreamer := service.NewLogStreamer(bus)
 	logStreamer.Start()

@@ -99,6 +99,14 @@ func NewLogger(cfg LogConfig) *Logger {
 	return l
 }
 
+// LogFile returns the current log file handle (nil if file logging is disabled).
+// Used by the caller to redirect stderr so that panic stack traces are captured.
+func (l *Logger) LogFile() *os.File {
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
+	return l.logFile
+}
+
 // Close flushes and closes the log file (if any).
 func (l *Logger) Close() {
 	l.fileMu.Lock()
