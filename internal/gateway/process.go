@@ -49,6 +49,9 @@ const (
 	tcpTableOwnerPIDConn = 4
 	// UDP_TABLE_OWNER_PID = 1
 	udpTableOwnerPID = 1
+	// maxPIDTableSize caps the buffer allocation for GetExtendedTcp/UdpTable
+	// to prevent unbounded memory growth from OS-reported sizes.
+	maxPIDTableSize = 16 * 1024 * 1024 // 16 MB
 )
 
 // FindPIDByPort finds the PID owning a connection with the given local port.
@@ -76,9 +79,10 @@ func (pi *ProcessIdentifier) findTCPPID(srcPort uint16) (uint32, error) {
 	)
 
 	if r == 122 { // ERROR_INSUFFICIENT_BUFFER
-		bigger := make([]byte, size)
-		*bp = bigger
-		buf = bigger
+		if size > maxPIDTableSize {
+			return 0, fmt.Errorf("GetExtendedTcpTable: requested size %d exceeds limit", size)
+		}
+		buf = make([]byte, size) // don't store oversized buffer back into pool
 		r, _, _ = procGetExtendedTcpTable.Call(
 			uintptr(unsafe.Pointer(&buf[0])),
 			uintptr(unsafe.Pointer(&size)),
@@ -133,9 +137,10 @@ func (pi *ProcessIdentifier) findUDPPID(srcPort uint16) (uint32, error) {
 	)
 
 	if r == 122 { // ERROR_INSUFFICIENT_BUFFER
-		bigger := make([]byte, size)
-		*bp = bigger
-		buf = bigger
+		if size > maxPIDTableSize {
+			return 0, fmt.Errorf("GetExtendedUdpTable: requested size %d exceeds limit", size)
+		}
+		buf = make([]byte, size) // don't store oversized buffer back into pool
 		r, _, _ = procGetExtendedUdpTable.Call(
 			uintptr(unsafe.Pointer(&buf[0])),
 			uintptr(unsafe.Pointer(&size)),

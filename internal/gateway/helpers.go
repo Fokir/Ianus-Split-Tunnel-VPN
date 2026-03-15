@@ -58,6 +58,9 @@ func checksumUpdate16(oldCk, oldVal, newVal uint16) uint16 {
 // tunSwapIPs swaps IPv4 src/dst addresses in-place (raw IP packet).
 // No checksum update needed: one's complement sum is commutative.
 func tunSwapIPs(pkt []byte) {
+	if len(pkt) < 20 {
+		return
+	}
 	// srcIP at offset 12, dstIP at offset 16.
 	var tmp [4]byte
 	copy(tmp[:], pkt[12:16])
@@ -157,6 +160,9 @@ func tunOverwriteDstIP(pkt []byte, newDst [4]byte, transportCkOff int) {
 
 // tunSetTCPPort writes a new 16-bit value at portOff and updates the TCP checksum.
 func tunSetTCPPort(pkt []byte, portOff int, newPort uint16, tcpCkOff int) {
+	if portOff+2 > len(pkt) || tcpCkOff+2 > len(pkt) {
+		return
+	}
 	old := binary.BigEndian.Uint16(pkt[portOff:])
 	binary.BigEndian.PutUint16(pkt[portOff:], newPort)
 	ck := binary.BigEndian.Uint16(pkt[tcpCkOff:])
@@ -166,6 +172,9 @@ func tunSetTCPPort(pkt []byte, portOff int, newPort uint16, tcpCkOff int) {
 // tunSetUDPPort writes a new 16-bit value at portOff and updates the UDP checksum.
 // Skips update if UDP checksum is 0 (disabled in IPv4).
 func tunSetUDPPort(pkt []byte, portOff int, newPort uint16, udpCkOff int) {
+	if portOff+2 > len(pkt) || udpCkOff+2 > len(pkt) {
+		return
+	}
 	old := binary.BigEndian.Uint16(pkt[portOff:])
 	binary.BigEndian.PutUint16(pkt[portOff:], newPort)
 	ck := binary.BigEndian.Uint16(pkt[udpCkOff:])
@@ -308,6 +317,9 @@ func buildUDPPacketBuf(buf []byte, srcIP, dstIP [4]byte, srcPort, dstPort uint16
 	const ipHdrLen = 20
 	const udpHdrLen = 8
 	totalLen := ipHdrLen + udpHdrLen + len(payload)
+	if cap(buf) < totalLen {
+		return nil
+	}
 
 	pkt := buf[:totalLen]
 

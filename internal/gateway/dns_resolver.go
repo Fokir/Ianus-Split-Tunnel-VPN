@@ -477,6 +477,12 @@ func (r *DNSResolver) forwardUDPSingle(ctx context.Context, prov provider.Tunnel
 		return nil, server, fmt.Errorf("response too short (%d bytes)", n)
 	}
 
+	// Validate DNS transaction ID matches the query to prevent cache poisoning.
+	if (*bp)[0] != query[0] || (*bp)[1] != query[1] {
+		dnsRespPool.Put(bp)
+		return nil, server, fmt.Errorf("DNS transaction ID mismatch (got 0x%02x%02x, want 0x%02x%02x)", (*bp)[0], (*bp)[1], query[0], query[1])
+	}
+
 	result := make([]byte, n)
 	copy(result, (*bp)[:n])
 	dnsRespPool.Put(bp)
