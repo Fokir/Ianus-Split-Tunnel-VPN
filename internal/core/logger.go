@@ -33,6 +33,16 @@ type LogConfig struct {
 // LogHook is a callback invoked for every log message that passes level filtering.
 type LogHook func(level LogLevel, tag, message string)
 
+// safeWriter wraps an io.Writer and silently ignores write errors.
+// Used to prevent os.Stderr failures (e.g. when running as a Windows Service
+// without a console) from blocking writes to subsequent writers in MultiWriter.
+type safeWriter struct{ w io.Writer }
+
+func (s safeWriter) Write(p []byte) (int, error) {
+	s.w.Write(p) //nolint:errcheck
+	return len(p), nil
+}
+
 // Logger provides per-component log level filtering.
 type Logger struct {
 	globalLevel LogLevel
@@ -82,7 +92,7 @@ func NewLogger(cfg LogConfig) *Logger {
 		if f := openLogFile(); f != nil {
 			l.logFile = f
 			l.currentDay = time.Now().YearDay()
-			log.SetOutput(io.MultiWriter(os.Stderr, f))
+			log.SetOutput(io.MultiWriter(f, safeWriter{os.Stderr}))
 		}
 	}
 
@@ -126,7 +136,7 @@ func (l *Logger) rotateIfNeeded() {
 	if f := openLogFile(); f != nil {
 		l.logFile = f
 		l.currentDay = today
-		log.SetOutput(io.MultiWriter(os.Stderr, f))
+		log.SetOutput(io.MultiWriter(f, safeWriter{os.Stderr}))
 	} else {
 		l.logFile = nil
 		log.SetOutput(os.Stderr)
