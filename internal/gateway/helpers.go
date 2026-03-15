@@ -18,8 +18,10 @@ const (
 
 	minICMPHdr = 8
 
-	icmpEchoReply   byte = 0
-	icmpEchoRequest byte = 8
+	icmpEchoReply      byte = 0
+	icmpDestUnreach    byte = 3
+	icmpEchoRequest    byte = 8
+	icmpTimeExceeded   byte = 11
 
 	tcpFIN byte = 0x01
 	tcpSYN byte = 0x02
@@ -66,6 +68,36 @@ func tunSwapIPs(pkt []byte) {
 // tunOverwriteSrcIP sets a new IPv4 source address and incrementally updates
 // both the IP header checksum and the transport checksum at transportCkOff.
 // transportCkOff == 0 means skip transport checksum update.
+
+// recalcIPChecksum recalculates the IPv4 header checksum from scratch.
+// ipHdr must be a slice containing exactly the IP header (IHL * 4 bytes).
+func recalcIPChecksum(ipHdr []byte) {
+	// Zero out existing checksum.
+	ipHdr[10] = 0
+	ipHdr[11] = 0
+	var sum uint32
+	for i := 0; i+1 < len(ipHdr); i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(ipHdr[i:]))
+	}
+	binary.BigEndian.PutUint16(ipHdr[10:], ^checksumFold(sum))
+}
+
+// recalcICMPChecksum recalculates the ICMP checksum from scratch.
+// pkt is the full IP packet; ihl is the IP header length (offset to ICMP header).
+func recalcICMPChecksum(pkt []byte, ihl int) {
+	// Zero out existing ICMP checksum (offset ihl+2).
+	pkt[ihl+2] = 0
+	pkt[ihl+3] = 0
+	var sum uint32
+	for i := ihl; i+1 < len(pkt); i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(pkt[i:]))
+	}
+	if len(pkt)%2 != 0 {
+		sum += uint32(pkt[len(pkt)-1]) << 8
+	}
+	binary.BigEndian.PutUint16(pkt[ihl+2:], ^checksumFold(sum))
+}
+
 func tunOverwriteSrcIP(pkt []byte, newSrc [4]byte, transportCkOff int) {
 	off := 12 // srcIP offset in raw IP
 

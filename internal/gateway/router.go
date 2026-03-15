@@ -3,9 +3,11 @@ package gateway
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net/netip"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -63,6 +65,10 @@ type TUNRouter struct {
 
 	// External byte reporting callback (for StatsCollector).
 	bytesReporter func(tunnelID string, tx, rx int64)
+
+	// Per-process new-flow counter for burst diagnostics (baseLower → *atomic.Int64).
+	// Reset every 10s in packetLoop; logged when burst threshold is exceeded.
+	procFlowCounts sync.Map
 
 	// Domain-based routing: resolved IP→tunnel.
 	domainTable  atomic.Pointer[DomainTable]
@@ -228,6 +234,62 @@ func (r *TUNRouter) writePacket(pkt []byte) {
 }
 
 // gcPauseMonitor periodically reports GC pause statistics.
+
+// trackNewFlow increments the per-process flow counter for burst diagnostics.
+// Called from resolveFlow when a process is identified. Lock-free hot path.
+func (r *TUNRouter) trackNewFlow(baseLower string) {
+	if v, ok := r.procFlowCounts.Load(baseLower); ok {
+		v.(*atomic.Int64).Add(1)
+		return
+	}
+	// Slow path: first flow for this process in this 10s window.
+	counter := &atomic.Int64{}
+	counter.Store(1)
+	if existing, loaded := r.procFlowCounts.LoadOrStore(baseLower, counter); loaded {
+		existing.(*atomic.Int64).Add(1)
+	}
+}
+
+// collectTopProcesses returns up to topN processes sorted by flow count,
+// then resets all counters. Called from packetLoop ticker on burst detection.
+func (r *TUNRouter) collectTopProcesses(topN int) []procFlowStat {
+	type kv struct {
+		name  string
+		count int64
+	}
+	var all []kv
+	r.procFlowCounts.Range(func(key, value any) bool {
+		name := key.(string)
+		count := value.(*atomic.Int64).Swap(0)
+		if count > 0 {
+			all = append(all, kv{name, count})
+		}
+		r.procFlowCounts.Delete(key)
+		return true
+	})
+
+	// Simple selection of top N by count (small slice, no need for heap).
+	for i := range min(topN, len(all)) {
+		for j := i + 1; j < len(all); j++ {
+			if all[j].count > all[i].count {
+				all[i], all[j] = all[j], all[i]
+			}
+		}
+	}
+	n := min(topN, len(all))
+	result := make([]procFlowStat, n)
+	for i := range n {
+		result[i] = procFlowStat{Name: all[i].name, Flows: all[i].count}
+	}
+	return result
+}
+
+// procFlowStat holds per-process flow count for burst diagnostics.
+type procFlowStat struct {
+	Name  string
+	Flows int64
+}
+
 func (r *TUNRouter) gcPauseMonitor(ctx context.Context) {
 	var prevNumGC uint32
 	var stats runtime.MemStats
@@ -277,6 +339,12 @@ func (r *TUNRouter) packetLoop(ctx context.Context) {
 	stallTicker := time.NewTicker(10 * time.Second)
 	defer stallTicker.Stop()
 
+	// Burst detection thresholds.
+	const (
+		burstPktThreshold     = 20000          // total packets in 10s window
+		burstLatencyThreshold = 50 * time.Millisecond // max packet latency
+	)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -294,6 +362,29 @@ func (r *TUNRouter) packetLoop(ctx context.Context) {
 				core.Log.Debugf("Perf", "10s: outPkts=%d | inPkts=%d maxIn=%s",
 					totalPkts, inCount, maxInbound)
 			}
+
+			// Burst diagnostics: log top processes when traffic spike detected.
+			totalTraffic := totalPkts + inCount
+			if totalTraffic > burstPktThreshold || maxProcStall > burstLatencyThreshold || maxInbound > burstLatencyThreshold {
+				if top := r.collectTopProcesses(5); len(top) > 0 {
+					var sb strings.Builder
+					for i, p := range top {
+						if i > 0 {
+							sb.WriteString(", ")
+						}
+						fmt.Fprintf(&sb, "%s=%d", p.Name, p.Flows)
+					}
+					core.Log.Warnf("Perf", "Burst detected (%d total pkts): top processes by new flows: %s",
+						totalTraffic, sb.String())
+				}
+			} else {
+				// No burst — just reset counters silently.
+				r.procFlowCounts.Range(func(key, value any) bool {
+					r.procFlowCounts.Delete(key)
+					return true
+				})
+			}
+
 			maxProcStall = 0
 			totalPkts = 0
 			slowProcPkts = 0
@@ -1140,6 +1231,9 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 		return "", 0, flowPass, 0, fb
 	}
 
+	// Track per-process flow count for burst diagnostics.
+	r.trackNewFlow(baseLower)
+
 	// Check global DisallowedApps — always bypass VPN.
 	if f != nil && f.IsDisallowedApp(exeLower, baseLower) {
 		return "", 0, flowPass, 0, fb
@@ -1379,6 +1473,8 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 	var transportCkOff int
 	var srcIP [4]byte
 	var dstPort uint16
+	var isICMPError bool // Time Exceeded / Dest Unreachable (tracert support)
+	var embOff int       // offset of embedded IP header in ICMP error packets
 
 	switch proto {
 	case protoTCP:
@@ -1399,14 +1495,38 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 		if len(pkt) < ihl+minICMPHdr {
 			return false
 		}
-		// Only handle Echo Reply (type 0).
-		if pkt[ihl] != icmpEchoReply {
+		icmpType := pkt[ihl]
+		switch icmpType {
+		case icmpEchoReply:
+			// Echo Reply: srcIP is the responder, ICMP ID is in header.
+			copy(srcIP[:], pkt[12:16])
+			dstPort = binary.BigEndian.Uint16(pkt[ihl+4:])
+		case icmpTimeExceeded, icmpDestUnreach:
+			// Time Exceeded / Dest Unreachable: payload contains the original
+			// IP header + first 8 bytes of original transport data.
+			// Extract original dst IP and ICMP ID from the embedded packet
+			// to match against the outbound raw flow.
+			embOff = ihl + minICMPHdr // start of embedded original IP header
+			if len(pkt) < embOff+minIPv4Hdr+minICMPHdr {
+				return false
+			}
+			embIHL := int(pkt[embOff]&0x0f) * 4
+			if embIHL < minIPv4Hdr || len(pkt) < embOff+embIHL+minICMPHdr {
+				return false
+			}
+			// Only handle embedded ICMP (tracert sends Echo Request).
+			if pkt[embOff+9] != protoICMP {
+				return false
+			}
+			// Original destination IP = flow key srcIP.
+			copy(srcIP[:], pkt[embOff+16:embOff+20])
+			// ICMP Identifier from embedded ICMP header.
+			dstPort = binary.BigEndian.Uint16(pkt[embOff+embIHL+4:])
+			isICMPError = true
+		default:
 			return false
 		}
 		// ICMP has no pseudo-header checksum — transportCkOff stays 0.
-		copy(srcIP[:], pkt[12:16])
-		// Use ICMP Identifier as pseudo-port for flow lookup.
-		dstPort = binary.BigEndian.Uint16(pkt[ihl+4:])
 	default:
 		return false
 	}
@@ -1435,6 +1555,22 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 	// responses from the FakeIP it connected to.
 	if rawEntry.FakeIP != [4]byte{} {
 		tunOverwriteSrcIP(pkt, rawEntry.FakeIP, transportCkOff)
+	}
+
+	// ICMP error packets (Time Exceeded, Dest Unreachable): rewrite embedded
+	// original IP header so the OS can match the error to the outbound socket.
+	if isICMPError && embOff > 0 {
+		embIHL := int(pkt[embOff]&0x0f) * 4
+		// Embedded src IP: VPN IP → TUN IP (socket bound to TUN IP).
+		copy(pkt[embOff+12:embOff+16], r.tunIP[:])
+		// FakeIP: rewrite embedded dst IP from real IP back to FakeIP.
+		if rawEntry.FakeIP != [4]byte{} {
+			copy(pkt[embOff+16:embOff+20], rawEntry.FakeIP[:])
+		}
+		// Recalculate embedded IP header checksum.
+		recalcIPChecksum(pkt[embOff : embOff+embIHL])
+		// Recalculate outer ICMP checksum (covers entire ICMP message).
+		recalcICMPChecksum(pkt, ihl)
 	}
 
 	// Write to TUN adapter — this copies into WinTUN ring buffer.
