@@ -25,9 +25,10 @@ const (
 
 // LogConfig holds logging configuration from YAML.
 type LogConfig struct {
-	Level       string            `yaml:"level,omitempty"`
-	Components  map[string]string `yaml:"components,omitempty"`
-	FileEnabled *bool             `yaml:"file_enabled,omitempty"` // write logs to file (nil = true)
+	Level               string            `yaml:"level,omitempty"`
+	Components          map[string]string `yaml:"components,omitempty"`
+	FileEnabled         *bool             `yaml:"file_enabled,omitempty"`          // write logs to file (nil = true)
+	VerboseProviderLogs bool              `yaml:"verbose_provider_logs,omitempty"` // enable verbose xray/provider logs (default: false)
 }
 
 // LogHook is a callback invoked for every log message that passes level filtering.
@@ -45,10 +46,11 @@ func (s safeWriter) Write(p []byte) (int, error) {
 
 // Logger provides per-component log level filtering.
 type Logger struct {
-	globalLevel LogLevel
-	components  map[string]LogLevel // lowercase component name → level (immutable after init)
-	levelCache  sync.Map            // tag → LogLevel (lock-free cache)
-	hook        atomic.Pointer[LogHook]
+	globalLevel         LogLevel
+	components          map[string]LogLevel // lowercase component name → level (immutable after init)
+	levelCache          sync.Map            // tag → LogLevel (lock-free cache)
+	hook                atomic.Pointer[LogHook]
+	verboseProviderLogs bool // log verbose xray/provider messages
 
 	fileMu      sync.Mutex // guards logFile + currentDay
 	logFile     *os.File   // file sink (nil if file logging is disabled)
@@ -79,8 +81,9 @@ func ParseLevel(s string) LogLevel {
 // Automatically sets up file logging to a logs/ directory next to the executable.
 func NewLogger(cfg LogConfig) *Logger {
 	l := &Logger{
-		globalLevel: ParseLevel(cfg.Level),
-		components:  make(map[string]LogLevel, len(cfg.Components)),
+		globalLevel:         ParseLevel(cfg.Level),
+		components:          make(map[string]LogLevel, len(cfg.Components)),
+		verboseProviderLogs: cfg.VerboseProviderLogs,
 	}
 	for name, level := range cfg.Components {
 		l.components[strings.ToLower(name)] = ParseLevel(level)
@@ -182,6 +185,11 @@ func (l *Logger) levelFor(tag string) LogLevel {
 	}
 	l.levelCache.Store(tag, lvl)
 	return lvl
+}
+
+// VerboseProviderLogs returns whether verbose provider/xray logging is enabled.
+func (l *Logger) VerboseProviderLogs() bool {
+	return l.verboseProviderLogs
 }
 
 // SetHook installs a callback that receives every log message passing level filtering.

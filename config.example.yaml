@@ -115,6 +115,7 @@ dns:
 logging:
   level: info
   file_enabled: false  # Write logs to logs/ directory (default: false)
+  verbose_provider_logs: false  # Enable verbose xray/provider logs (default: false)
   # Per-component overrides (lowercase component name):
   #   core, gateway, route, wfp, dns, proxy, rule, awg, direct
   # components:

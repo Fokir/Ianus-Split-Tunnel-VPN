@@ -49,7 +49,10 @@ func (b *xrayLogBridge) Handle(msg xlog.Message) {
 	case strings.HasPrefix(s, "[Warning]"), strings.HasPrefix(s, "[Error]"):
 		core.Log.Warnf("xray", "%s", s)
 	case strings.HasPrefix(s, "[Info]"):
-		core.Log.Debugf("xray", "%s", s)
+		// Verbose xray Info logs are suppressed unless verbose_provider_logs is enabled.
+		if core.Log.VerboseProviderLogs() {
+			core.Log.Debugf("xray", "%s", s)
+		}
 	// [Debug] from xray-core is too verbose even for debug; drop it.
 	}
 }
