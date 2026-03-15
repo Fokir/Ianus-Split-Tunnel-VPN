@@ -25,6 +25,70 @@ var dnsRespPool = sync.Pool{
 	},
 }
 
+// dnsUDPConnCache pools persistent SOCKS5 UDP connections per (tunnel, server)
+// pair to avoid creating a new SOCKS5 UDP ASSOCIATE for every DNS query.
+// This dramatically reduces connection churn and memory usage in xray-core.
+type dnsUDPConnCache struct {
+	mu    sync.Mutex
+	pools map[string][]net.Conn
+}
+
+func newDNSUDPConnCache() *dnsUDPConnCache {
+	return &dnsUDPConnCache{
+		pools: make(map[string][]net.Conn),
+	}
+}
+
+const dnsUDPConnCacheMaxPerKey = 4
+
+func (c *dnsUDPConnCache) Get(tunnelID string, server netip.Addr) net.Conn {
+	key := tunnelID + "\x00" + server.String()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if conns := c.pools[key]; len(conns) > 0 {
+		conn := conns[len(conns)-1]
+		c.pools[key] = conns[:len(conns)-1]
+		return conn
+	}
+	return nil
+}
+
+func (c *dnsUDPConnCache) Put(tunnelID string, server netip.Addr, conn net.Conn) {
+	key := tunnelID + "\x00" + server.String()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.pools[key]) >= dnsUDPConnCacheMaxPerKey {
+		conn.Close()
+		return
+	}
+	c.pools[key] = append(c.pools[key], conn)
+}
+
+func (c *dnsUDPConnCache) CloseAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, conns := range c.pools {
+		for _, conn := range conns {
+			conn.Close()
+		}
+		delete(c.pools, k)
+	}
+}
+
+func (c *dnsUDPConnCache) InvalidateTunnel(tunnelID string) {
+	prefix := tunnelID + "\x00"
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, conns := range c.pools {
+		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
+			for _, conn := range conns {
+				conn.Close()
+			}
+			delete(c.pools, k)
+		}
+	}
+}
+
 // DNSResolverConfig configures the local DNS resolver.
 type DNSResolverConfig struct {
 	// ListenAddr is the address to listen on (e.g. "10.255.0.1:53").
@@ -82,6 +146,10 @@ type DNSResolver struct {
 	// Used for tunnels like AnyConnect that provide their own DNS servers.
 	tunnelDNS sync.Map
 
+	// udpConnCache pools persistent UDP connections to avoid creating a
+	// new SOCKS5 UDP ASSOCIATE per DNS query (major xray-core memory saver).
+	udpConnCache *dnsUDPConnCache
+
 	started atomic.Bool
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
@@ -98,11 +166,12 @@ func NewDNSResolver(
 	}
 
 	r := &DNSResolver{
-		config:    config,
-		registry:  registry,
-		providers: providers,
-		udpSem:    make(chan struct{}, 200),
-		tcpSem:    make(chan struct{}, 100),
+		config:       config,
+		registry:     registry,
+		providers:    providers,
+		udpSem:       make(chan struct{}, 200),
+		tcpSem:       make(chan struct{}, 100),
+		udpConnCache: newDNSUDPConnCache(),
 	}
 
 	return r
@@ -190,6 +259,7 @@ func (r *DNSResolver) Stop() {
 	if r.tcpLn != nil {
 		r.tcpLn.Close()
 	}
+	r.udpConnCache.CloseAll()
 	r.wg.Wait()
 	core.Log.Infof("DNS", "Resolver stopped")
 }
@@ -355,7 +425,7 @@ func (r *DNSResolver) forwardUDP(ctx context.Context, tunnelID string, query []b
 
 	// Single server — no parallelism overhead.
 	if len(servers) == 1 {
-		return r.forwardUDPSingle(ctx, prov, servers[0], query)
+		return r.forwardUDPSingle(ctx, prov, tunnelID, servers[0], query)
 	}
 
 	// Fan-out to all servers in parallel, return first success.
@@ -377,7 +447,7 @@ func (r *DNSResolver) forwardUDP(ctx context.Context, tunnelID string, query []b
 					ch <- result{err: fmt.Errorf("panic: %v", v)}
 				}
 			}()
-			resp, _, err := r.forwardUDPSingle(fanCtx, prov, server, query)
+			resp, _, err := r.forwardUDPSingle(fanCtx, prov, tunnelID, server, query)
 			ch <- result{resp: resp, server: server, err: err}
 		}(srv)
 	}
@@ -449,55 +519,84 @@ func (r *DNSResolver) forwardUDPAll(ctx context.Context, tunnelIDs []string, que
 }
 
 // forwardUDPSingle sends a DNS query to a single server via the given provider.
-func (r *DNSResolver) forwardUDPSingle(ctx context.Context, prov provider.TunnelProvider, server netip.Addr, query []byte) ([]byte, netip.Addr, error) {
+func (r *DNSResolver) forwardUDPSingle(ctx context.Context, prov provider.TunnelProvider, tunnelID string, server netip.Addr, query []byte) ([]byte, netip.Addr, error) {
 	addr := net.JoinHostPort(server.String(), "53")
 
-	conn, err := prov.DialUDP(ctx, addr)
-	if errors.Is(err, provider.ErrUDPNotSupported) {
-		// Provider doesn't support UDP — use DNS-over-TCP (RFC 1035 §4.2.2).
-		core.Log.Debugf("DNS", "UDP not supported by provider, falling back to TCP for %s", server)
-		return r.forwardTCPSingle(ctx, prov, server, query)
-	}
-	if err != nil {
-		return nil, server, err
-	}
-	defer conn.Close()
+	// Try cached connection first, then fresh connection. Retry once on stale cached conn.
+	for attempt := range 2 {
+		var conn net.Conn
+		var cached bool
 
-	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
-	} else {
-		conn.SetDeadline(time.Now().Add(r.config.Timeout))
-	}
+		if attempt == 0 {
+			conn = r.udpConnCache.Get(tunnelID, server)
+		}
+		if conn == nil {
+			var err error
+			conn, err = prov.DialUDP(ctx, addr)
+			if errors.Is(err, provider.ErrUDPNotSupported) {
+				// Provider doesn't support UDP — use DNS-over-TCP (RFC 1035 §4.2.2).
+				core.Log.Debugf("DNS", "UDP not supported by provider, falling back to TCP for %s", server)
+				return r.forwardTCPSingle(ctx, prov, server, query)
+			}
+			if err != nil {
+				return nil, server, err
+			}
+		} else {
+			cached = true
+		}
 
-	if _, err := conn.Write(query); err != nil {
-		return nil, server, err
-	}
+		if deadline, ok := ctx.Deadline(); ok {
+			conn.SetDeadline(deadline)
+		} else {
+			conn.SetDeadline(time.Now().Add(r.config.Timeout))
+		}
 
-	// Use pooled 4KB buffer for reading, then copy to right-sized result.
-	// This avoids pinning 4KB per response (especially in DNS cache).
-	bp := dnsRespPool.Get().(*[]byte)
-	n, err := conn.Read(*bp)
-	if err != nil {
+		if _, err := conn.Write(query); err != nil {
+			conn.Close()
+			if cached {
+				continue // retry with fresh connection
+			}
+			return nil, server, err
+		}
+
+		// Use pooled 4KB buffer for reading, then copy to right-sized result.
+		// This avoids pinning 4KB per response (especially in DNS cache).
+		bp := dnsRespPool.Get().(*[]byte)
+		n, err := conn.Read(*bp)
+		if err != nil {
+			dnsRespPool.Put(bp)
+			conn.Close()
+			if cached {
+				continue // retry with fresh connection
+			}
+			return nil, server, err
+		}
+
+		if n < 12 {
+			dnsRespPool.Put(bp)
+			conn.Close()
+			return nil, server, fmt.Errorf("response too short (%d bytes)", n)
+		}
+
+		// Validate DNS transaction ID matches the query to prevent cache poisoning.
+		if (*bp)[0] != query[0] || (*bp)[1] != query[1] {
+			dnsRespPool.Put(bp)
+			conn.Close()
+			return nil, server, fmt.Errorf("DNS transaction ID mismatch (got 0x%02x%02x, want 0x%02x%02x)", (*bp)[0], (*bp)[1], query[0], query[1])
+		}
+
+		result := make([]byte, n)
+		copy(result, (*bp)[:n])
 		dnsRespPool.Put(bp)
-		return nil, server, err
+
+		// Return connection to cache for reuse.
+		conn.SetDeadline(time.Time{})
+		r.udpConnCache.Put(tunnelID, server, conn)
+
+		return result, server, nil
 	}
 
-	if n < 12 {
-		dnsRespPool.Put(bp)
-		return nil, server, fmt.Errorf("response too short (%d bytes)", n)
-	}
-
-	// Validate DNS transaction ID matches the query to prevent cache poisoning.
-	if (*bp)[0] != query[0] || (*bp)[1] != query[1] {
-		dnsRespPool.Put(bp)
-		return nil, server, fmt.Errorf("DNS transaction ID mismatch (got 0x%02x%02x, want 0x%02x%02x)", (*bp)[0], (*bp)[1], query[0], query[1])
-	}
-
-	result := make([]byte, n)
-	copy(result, (*bp)[:n])
-	dnsRespPool.Put(bp)
-
-	return result, server, nil
+	return nil, server, fmt.Errorf("DNS query to %s via %s failed after retry", server, tunnelID)
 }
 
 // ---------------------------------------------------------------------------
@@ -1056,13 +1155,7 @@ func (r *DNSResolver) recordDomainIPs(resp []byte, domain string, tunnelID strin
 			copy(ip[:], resp[pos:pos+4])
 
 			// Clamp TTL: min 60s, max 3600s.
-			clampedTTL := ttl
-			if clampedTTL < 60 {
-				clampedTTL = 60
-			}
-			if clampedTTL > 3600 {
-				clampedTTL = 3600
-			}
+			clampedTTL := max(60, min(ttl, 3600))
 
 			dt.Insert(ip, &DomainEntry{
 				TunnelID:  tunnelID,

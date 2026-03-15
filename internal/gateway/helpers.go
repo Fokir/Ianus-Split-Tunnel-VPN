@@ -211,9 +211,7 @@ func clampTCPMSS(pkt []byte, tpOff int) {
 	}
 
 	optEnd := tpOff + dataOff
-	if optEnd > len(pkt) {
-		optEnd = len(pkt)
-	}
+	optEnd = min(optEnd, len(pkt))
 
 	// Walk TCP options looking for MSS (kind=2, length=4).
 	for pos := tpOff + minTCPHdr; pos < optEnd; {

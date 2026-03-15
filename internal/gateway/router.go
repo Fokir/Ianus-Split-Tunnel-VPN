@@ -312,9 +312,7 @@ func (r *TUNRouter) gcPauseMonitor(ctx context.Context) {
 			}
 			// Report new GC cycles since last check.
 			cycles := stats.NumGC - prevNumGC
-			if cycles > 256 {
-				cycles = 256 // PauseNs is a circular buffer of 256
-			}
+			cycles = min(cycles, 256) // PauseNs is a circular buffer of 256
 			var maxPause time.Duration
 			for i := prevNumGC; i < stats.NumGC; i++ {
 				p := time.Duration(stats.PauseNs[i%256])
@@ -1298,7 +1296,7 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// Safety bound: at most len(rules) iterations to prevent infinite loops.
 	maxIter := len(r.rules.GetRules())
 
-	for iter := 0; iter < maxIter; iter++ {
+	for range maxIter {
 		// On failover iterations, search from the next index.
 		if inFailover {
 			var idx int

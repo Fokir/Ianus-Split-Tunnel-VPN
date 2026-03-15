@@ -30,6 +30,15 @@ var (
 	xrayUDPLastLogSec atomic.Int64
 )
 
+// socks5UDPReadPool pools temporary buffers for socks5UDPConn.Read()
+// to avoid per-packet heap allocation (typically 4358 bytes per DNS query).
+var socks5UDPReadPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 4096+262)
+		return &b
+	},
+}
+
 func (b *xrayLogBridge) Handle(msg xlog.Message) {
 	s := msg.String()
 
@@ -657,9 +666,18 @@ type socks5UDPConn struct {
 }
 
 func (c *socks5UDPConn) Read(b []byte) (int, error) {
-	// Read from relay, strip SOCKS5 UDP header.
-	buf := make([]byte, len(b)+262) // max SOCKS5 UDP header = 262 bytes
-	n, err := c.udpConn.Read(buf)
+	// Use pooled buffer to avoid per-packet heap allocation.
+	needed := len(b) + 262 // max SOCKS5 UDP header = 262 bytes
+	bp := socks5UDPReadPool.Get().(*[]byte)
+	defer socks5UDPReadPool.Put(bp)
+
+	buf := *bp
+	if needed > len(buf) {
+		buf = make([]byte, needed)
+		*bp = buf
+	}
+
+	n, err := c.udpConn.Read(buf[:needed])
 	if err != nil {
 		return 0, err
 	}
@@ -693,7 +711,19 @@ func (c *socks5UDPConn) Read(b []byte) (int, error) {
 }
 
 func (c *socks5UDPConn) Write(b []byte) (int, error) {
-	packet := make([]byte, len(c.header)+len(b))
+	needed := len(c.header) + len(b)
+
+	// Use pooled buffer to avoid per-packet heap allocation.
+	bp := socks5UDPReadPool.Get().(*[]byte)
+	defer socks5UDPReadPool.Put(bp)
+
+	packet := *bp
+	if needed > len(packet) {
+		packet = make([]byte, needed)
+		*bp = packet
+	}
+	packet = packet[:needed]
+
 	copy(packet, c.header)
 	copy(packet[len(c.header):], b)
 	if _, err := c.udpConn.Write(packet); err != nil {

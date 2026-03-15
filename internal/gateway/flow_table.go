@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"maps"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -541,9 +542,7 @@ func (ft *FlowTable) RegisterVpnIP(vpnIP [4]byte, tunnelID string) {
 	defer ft.vpnIPMu.Unlock()
 	old := ft.vpnIPMap.Load()
 	newMap := make(map[[4]byte]string, len(*old)+1)
-	for k, v := range *old {
-		newMap[k] = v
-	}
+	maps.Copy(newMap, *old)
 	newMap[vpnIP] = tunnelID
 	ft.vpnIPMap.Store(&newMap)
 }
@@ -625,9 +624,7 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
 						shard.mu.Lock()
 						if len(shard.index) < maxEntriesPerShard/4 {
 							newIndex := make(map[rawFlowKey]int32, len(shard.index)*2)
-							for k, v := range shard.index {
-								newIndex[k] = v
-							}
+							maps.Copy(newIndex, shard.index)
 							shard.index = newIndex
 						}
 						shard.mu.Unlock()
@@ -659,9 +656,7 @@ func (ft *FlowTable) RegisterProxyPort(port uint16) {
 	defer ft.proxyPortsMu.Unlock()
 	old := ft.proxyPorts.Load()
 	newMap := make(map[uint16]struct{}, len(*old)+1)
-	for k, v := range *old {
-		newMap[k] = v
-	}
+	maps.Copy(newMap, *old)
 	newMap[port] = struct{}{}
 	ft.proxyPorts.Store(&newMap)
 }
@@ -690,9 +685,7 @@ func (ft *FlowTable) RegisterUDPProxyPort(port uint16) {
 	defer ft.udpProxyPortsMu.Unlock()
 	old := ft.udpProxyPorts.Load()
 	newMap := make(map[uint16]struct{}, len(*old)+1)
-	for k, v := range *old {
-		newMap[k] = v
-	}
+	maps.Copy(newMap, *old)
 	newMap[port] = struct{}{}
 	ft.udpProxyPorts.Store(&newMap)
 }
@@ -804,9 +797,7 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 						shard.mu.Lock()
 						if len(shard.index) < maxEntriesPerShard/4 {
 							newIndex := make(map[natKey]int32, len(shard.index)*2)
-							for k, v := range shard.index {
-								newIndex[k] = v
-							}
+							maps.Copy(newIndex, shard.index)
 							shard.index = newIndex
 						}
 						shard.mu.Unlock()
@@ -884,9 +875,7 @@ func (ft *FlowTable) StartUDPCleanup(ctx context.Context) {
 						shard.mu.Lock()
 						if len(shard.index) < maxEntriesPerShard/4 {
 							newIndex := make(map[natKey]int32, len(shard.index)*2)
-							for k, v := range shard.index {
-								newIndex[k] = v
-							}
+							maps.Copy(newIndex, shard.index)
 							shard.index = newIndex
 						}
 						shard.mu.Unlock()
