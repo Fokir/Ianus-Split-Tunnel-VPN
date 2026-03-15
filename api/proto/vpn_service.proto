@@ -75,6 +75,7 @@ message DomainRule {
   string tunnel_id = 2;         // only for DOMAIN_ACTION_ROUTE
   DomainAction action = 3;
   bool active = 4;              // tunnel is connected (for UI display)
+  bool enabled = 5;             // user can disable rule without deleting it
 }
 
 // ─── Rule messages ──────────────────────────────────────────────────
@@ -85,6 +86,7 @@ message Rule {
   FallbackPolicy fallback = 3;
   string priority = 4;         // "auto", "realtime", "normal", "low"
   bool active = 5;             // tunnel is connected, rule is active
+  bool enabled = 6;            // user can disable rule without deleting it
 }
 
 // ─── DNS config ─────────────────────────────────────────────────────

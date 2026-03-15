@@ -133,16 +133,22 @@ func ruleToProto(r core.Rule) *vpnapi.Rule {
 		TunnelId: r.TunnelID,
 		Fallback: vpnapi.FallbackPolicy(r.Fallback),
 		Priority: prio,
+		Enabled:  r.IsEnabled(),
 	}
 }
 
 func ruleFromProto(pr *vpnapi.Rule) core.Rule {
-	return core.Rule{
+	r := core.Rule{
 		Pattern:  pr.Pattern,
 		TunnelID: pr.TunnelId,
 		Fallback: core.FallbackPolicy(pr.Fallback),
 		Priority: parsePriorityProto(pr.Priority),
 	}
+	if !pr.Enabled {
+		enabled := false
+		r.Enabled = &enabled
+	}
+	return r
 }
 
 func parsePriorityProto(s string) core.RulePriority {
@@ -157,15 +163,21 @@ func domainRuleToProto(r core.DomainRule) *vpnapi.DomainRule {
 		Pattern:  r.Pattern,
 		TunnelId: r.TunnelID,
 		Action:   vpnapi.DomainAction(r.Action),
+		Enabled:  r.IsEnabled(),
 	}
 }
 
 func domainRuleFromProto(pr *vpnapi.DomainRule) core.DomainRule {
-	return core.DomainRule{
+	r := core.DomainRule{
 		Pattern:  pr.Pattern,
 		TunnelID: pr.TunnelId,
 		Action:   core.DomainAction(pr.Action),
 	}
+	if !pr.Enabled {
+		enabled := false
+		r.Enabled = &enabled
+	}
+	return r
 }
 
 // ─── Subscription conversions ────────────────────────────────────────

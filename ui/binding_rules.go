@@ -19,6 +19,7 @@ type RuleInfo struct {
 	Fallback string `json:"fallback"` // "allow_direct", "block", "drop", "failover"
 	Priority string `json:"priority"` // "auto", "realtime", "normal", "low"
 	Active   bool   `json:"active"`   // tunnel is connected, rule is active
+	Enabled  bool   `json:"enabled"`  // user can disable rule without deleting it
 }
 
 func fallbackStr(f vpnapi.FallbackPolicy) string {
@@ -66,6 +67,7 @@ func (b *BindingService) ListRules() ([]RuleInfo, error) {
 			Fallback: fallbackStr(r.Fallback),
 			Priority: prio,
 			Active:   r.Active,
+			Enabled:  r.Enabled,
 		})
 	}
 	return rules, nil
@@ -83,6 +85,7 @@ func (b *BindingService) SaveRules(rules []RuleInfo) error {
 			TunnelId: r.TunnelID,
 			Fallback: fallbackFromStr(r.Fallback),
 			Priority: prio,
+			Enabled:  r.Enabled,
 		})
 	}
 	resp, err := b.client.Service.SaveRules(context.Background(), &vpnapi.SaveRulesRequest{Rules: protoRules})
@@ -100,8 +103,9 @@ func (b *BindingService) SaveRules(rules []RuleInfo) error {
 type DomainRuleInfo struct {
 	Pattern  string `json:"pattern"`
 	TunnelID string `json:"tunnelId"`
-	Action   string `json:"action"` // "route", "direct", "block"
+	Action   string `json:"action"`  // "route", "direct", "block"
 	Active   bool   `json:"active"`
+	Enabled  bool   `json:"enabled"` // user can disable rule without deleting it
 }
 
 func domainActionStr(a vpnapi.DomainAction) string {
@@ -140,6 +144,7 @@ func (b *BindingService) ListDomainRules() ([]DomainRuleInfo, error) {
 			TunnelID: r.TunnelId,
 			Action:   domainActionStr(r.Action),
 			Active:   r.Active,
+			Enabled:  r.Enabled,
 		})
 	}
 	return rules, nil
@@ -152,6 +157,7 @@ func (b *BindingService) SaveDomainRules(rules []DomainRuleInfo) error {
 			Pattern:  r.Pattern,
 			TunnelId: r.TunnelID,
 			Action:   domainActionFromStr(r.Action),
+			Enabled:  r.Enabled,
 		})
 	}
 	resp, err := b.client.Service.SaveDomainRules(context.Background(), &vpnapi.SaveDomainRulesRequest{Rules: protoRules})

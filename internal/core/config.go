@@ -204,6 +204,13 @@ type DomainRule struct {
 	TunnelID string `yaml:"tunnel_id,omitempty"`
 	// Action defines the routing behavior.
 	Action DomainAction `yaml:"action"`
+	// Enabled controls whether this rule is active. nil or true = enabled.
+	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+// IsEnabled returns true if the rule is enabled (nil defaults to true).
+func (r DomainRule) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
 }
 
 // DomainMatchFunc matches a domain name against domain rules.
@@ -221,6 +228,13 @@ type Rule struct {
 	Fallback FallbackPolicy `yaml:"fallback"`
 	// Priority defines packet scheduling priority: auto (default), realtime, normal, low.
 	Priority RulePriority `yaml:"priority,omitempty"`
+	// Enabled controls whether this rule is active. nil or true = enabled.
+	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+// IsEnabled returns true if the rule is enabled (nil defaults to true).
+func (r Rule) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
 }
 
 // TunnelConfig holds the configuration for a single VPN tunnel.
@@ -466,7 +480,7 @@ func (cm *ConfigManager) GetRules() []Rule {
 	return result
 }
 
-// SetRules replaces the routing rules.
+// SetRules replaces the routing rules and publishes EventConfigReloaded.
 func (cm *ConfigManager) SetRules(rules []Rule) {
 	cm.mu.Lock()
 	cm.config.Rules = rules
@@ -475,6 +489,14 @@ func (cm *ConfigManager) SetRules(rules []Rule) {
 	if cm.bus != nil {
 		cm.bus.Publish(Event{Type: EventConfigReloaded})
 	}
+}
+
+// SetRulesQuiet replaces the routing rules without publishing EventConfigReloaded.
+// Use when the caller handles side effects (e.g. RPC handlers that apply changes directly).
+func (cm *ConfigManager) SetRulesQuiet(rules []Rule) {
+	cm.mu.Lock()
+	cm.config.Rules = rules
+	cm.mu.Unlock()
 }
 
 // GetDomainRules returns domain routing rules.
@@ -486,7 +508,7 @@ func (cm *ConfigManager) GetDomainRules() []DomainRule {
 	return result
 }
 
-// SetDomainRules replaces the domain routing rules.
+// SetDomainRules replaces the domain routing rules and publishes EventConfigReloaded.
 func (cm *ConfigManager) SetDomainRules(rules []DomainRule) {
 	cm.mu.Lock()
 	cm.config.DomainRules = rules
@@ -495,6 +517,14 @@ func (cm *ConfigManager) SetDomainRules(rules []DomainRule) {
 	if cm.bus != nil {
 		cm.bus.Publish(Event{Type: EventConfigReloaded})
 	}
+}
+
+// SetDomainRulesQuiet replaces the domain routing rules without publishing EventConfigReloaded.
+// Use when the caller handles side effects (e.g. RPC handlers that apply changes directly).
+func (cm *ConfigManager) SetDomainRulesQuiet(rules []DomainRule) {
+	cm.mu.Lock()
+	cm.config.DomainRules = rules
+	cm.mu.Unlock()
 }
 
 // SetTunnelOrder saves the display order for all tunnels (manual + subscription).

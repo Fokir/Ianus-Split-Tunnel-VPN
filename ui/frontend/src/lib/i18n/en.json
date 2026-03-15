@@ -222,7 +222,9 @@
     "oneRule": "rule",
     "group": "Group",
     "clickToRenameGroup": "Double-click to rename group",
-    "selectFolder": "Select folder as pattern"
+    "selectFolder": "Select folder as pattern",
+    "enabled": "Enabled",
+    "disabled": "Disabled"
   },
   "domains": {
     "title": "Domain routing",
@@ -267,7 +269,9 @@
     "viaTunnel": "Via tunnel",
     "direct": "Direct (bypass VPN)",
     "block": "Block",
-    "selectTunnel": "Select tunnel..."
+    "selectTunnel": "Select tunnel...",
+    "enabled": "Enabled",
+    "disabled": "Disabled"
   },
   "settings": {
     "title": "Settings",

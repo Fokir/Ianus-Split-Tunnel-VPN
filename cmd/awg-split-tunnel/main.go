@@ -911,6 +911,9 @@ func buildDomainMatcher(rules []core.DomainRule, geositeFilePath string, httpCli
 	geositeCategories := make(map[string]core.DomainRule)
 
 	for _, r := range rules {
+		if !r.IsEnabled() {
+			continue // skip disabled rule
+		}
 		prefix, value := splitDomainPattern(r.Pattern)
 		switch prefix {
 		case "geosite":
@@ -945,6 +948,9 @@ func buildDomainMatcher(rules []core.DomainRule, geositeFilePath string, httpCli
 func buildGeoIPMatcher(rules []core.DomainRule, geoipFilePath string, httpClient *http.Client) *gateway.GeoIPMatcher {
 	geoipCategories := make(map[string]core.DomainRule)
 	for _, r := range rules {
+		if !r.IsEnabled() {
+			continue // skip disabled rule
+		}
 		prefix, value := splitDomainPattern(r.Pattern)
 		if prefix == "geoip" && value != "" {
 			geoipCategories[value] = r

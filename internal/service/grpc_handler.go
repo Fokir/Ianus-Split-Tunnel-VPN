@@ -232,7 +232,7 @@ func (s *Service) SaveRules(_ context.Context, req *vpnapi.SaveRulesRequest) (*v
 		rules = append(rules, ruleFromProto(pr))
 	}
 	s.rules.SetRules(rules)
-	s.cfg.SetRules(rules)
+	s.cfg.SetRulesQuiet(rules)
 	if err := s.cfg.Save(); err != nil {
 		return &vpnapi.SaveRulesResponse{Success: false, Error: err.Error()}, nil
 	}
@@ -266,7 +266,7 @@ func (s *Service) SaveDomainRules(_ context.Context, req *vpnapi.SaveDomainRules
 	for _, pr := range req.Rules {
 		rules = append(rules, domainRuleFromProto(pr))
 	}
-	s.cfg.SetDomainRules(rules)
+	s.cfg.SetDomainRulesQuiet(rules)
 	if err := s.cfg.Save(); err != nil {
 		return &vpnapi.SaveDomainRulesResponse{Success: false, Error: err.Error()}, nil
 	}

@@ -127,9 +127,10 @@
   function handleSaveRule(e) {
     const { rule, editIndex: idx } = e.detail;
     if (idx >= 0) {
-      rules[idx] = { ...rule };
+      // Preserve enabled state when editing via modal
+      rules[idx] = { ...rule, enabled: rules[idx].enabled !== false };
     } else {
-      rules = [...rules, { ...rule }];
+      rules = [...rules, { ...rule, enabled: true }];
     }
     dirty = true;
     showModal = false;
@@ -137,6 +138,12 @@
 
   function removeRule(index) {
     rules = rules.filter((_, i) => i !== index);
+    dirty = true;
+  }
+
+  function toggleRule(index) {
+    rules[index] = { ...rules[index], enabled: rules[index].enabled === false ? true : false };
+    rules = rules;
     dirty = true;
   }
 
@@ -379,6 +386,7 @@
   on:addRule={openAddModal}
   on:editRule={e => openEditModal(e.detail)}
   on:removeRule={e => removeRule(e.detail)}
+  on:toggleRule={e => toggleRule(e.detail)}
   on:reorder={handleReorder}
   on:rename={handleRename}
   on:quickWizard={() => showQuickWizard = true}

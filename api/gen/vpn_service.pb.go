@@ -488,7 +488,8 @@ type DomainRule struct {
 	Pattern       string                 `protobuf:"bytes,1,opt,name=pattern,proto3" json:"pattern,omitempty"`                   // "domain:vk.com", "full:example.com", "keyword:google", "geosite:ru"
 	TunnelId      string                 `protobuf:"bytes,2,opt,name=tunnel_id,json=tunnelId,proto3" json:"tunnel_id,omitempty"` // only for DOMAIN_ACTION_ROUTE
 	Action        DomainAction           `protobuf:"varint,3,opt,name=action,proto3,enum=awg.vpn.v1.DomainAction" json:"action,omitempty"`
-	Active        bool                   `protobuf:"varint,4,opt,name=active,proto3" json:"active,omitempty"` // tunnel is connected (for UI display)
+	Active        bool                   `protobuf:"varint,4,opt,name=active,proto3" json:"active,omitempty"`   // tunnel is connected (for UI display)
+	Enabled       bool                   `protobuf:"varint,5,opt,name=enabled,proto3" json:"enabled,omitempty"` // user can disable rule without deleting it
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -551,6 +552,13 @@ func (x *DomainRule) GetActive() bool {
 	return false
 }
 
+func (x *DomainRule) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
 type Rule struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Pattern       string                 `protobuf:"bytes,1,opt,name=pattern,proto3" json:"pattern,omitempty"`
@@ -558,6 +566,7 @@ type Rule struct {
 	Fallback      FallbackPolicy         `protobuf:"varint,3,opt,name=fallback,proto3,enum=awg.vpn.v1.FallbackPolicy" json:"fallback,omitempty"`
 	Priority      string                 `protobuf:"bytes,4,opt,name=priority,proto3" json:"priority,omitempty"` // "auto", "realtime", "normal", "low"
 	Active        bool                   `protobuf:"varint,5,opt,name=active,proto3" json:"active,omitempty"`    // tunnel is connected, rule is active
+	Enabled       bool                   `protobuf:"varint,6,opt,name=enabled,proto3" json:"enabled,omitempty"`  // user can disable rule without deleting it
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -623,6 +632,13 @@ func (x *Rule) GetPriority() string {
 func (x *Rule) GetActive() bool {
 	if x != nil {
 		return x.Active
+	}
+	return false
+}
+
+func (x *Rule) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
 	}
 	return false
 }
@@ -4318,19 +4334,21 @@ const file_vpn_service_proto_rawDesc = "" +
 	"externalIp\x12!\n" +
 	"\fcountry_code\x18\a \x01(\tR\vcountryCode\x12\x1d\n" +
 	"\n" +
-	"sort_index\x18\b \x01(\x05R\tsortIndex\"\x8d\x01\n" +
+	"sort_index\x18\b \x01(\x05R\tsortIndex\"\xa7\x01\n" +
 	"\n" +
 	"DomainRule\x12\x18\n" +
 	"\apattern\x18\x01 \x01(\tR\apattern\x12\x1b\n" +
 	"\ttunnel_id\x18\x02 \x01(\tR\btunnelId\x120\n" +
 	"\x06action\x18\x03 \x01(\x0e2\x18.awg.vpn.v1.DomainActionR\x06action\x12\x16\n" +
-	"\x06active\x18\x04 \x01(\bR\x06active\"\xa9\x01\n" +
+	"\x06active\x18\x04 \x01(\bR\x06active\x12\x18\n" +
+	"\aenabled\x18\x05 \x01(\bR\aenabled\"\xc3\x01\n" +
 	"\x04Rule\x12\x18\n" +
 	"\apattern\x18\x01 \x01(\tR\apattern\x12\x1b\n" +
 	"\ttunnel_id\x18\x02 \x01(\tR\btunnelId\x126\n" +
 	"\bfallback\x18\x03 \x01(\x0e2\x1a.awg.vpn.v1.FallbackPolicyR\bfallback\x12\x1a\n" +
 	"\bpriority\x18\x04 \x01(\tR\bpriority\x12\x16\n" +
-	"\x06active\x18\x05 \x01(\bR\x06active\"\x90\x01\n" +
+	"\x06active\x18\x05 \x01(\bR\x06active\x12\x18\n" +
+	"\aenabled\x18\x06 \x01(\bR\aenabled\"\x90\x01\n" +
 	"\x0eDNSCacheConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x19\n" +
 	"\bmax_size\x18\x02 \x01(\x05R\amaxSize\x12\x17\n" +

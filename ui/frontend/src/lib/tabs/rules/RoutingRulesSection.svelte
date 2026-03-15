@@ -220,12 +220,13 @@
               <col />
               <col style="width:140px" />
               <col style="width:100px" />
+              <col style="width:40px" />
               <col style="width:96px" />
             </colgroup>
             <tbody>
               {#each group.rules as rule, ri (rule.realIndex)}
                 <tr
-                  class="border-t border-zinc-700/30 hover:bg-zinc-800/30 transition-colors {rule.active === false ? 'opacity-50' : ''} {dragOverGroupIdx === gi && dragOverRuleIdx === ri ? 'border-t-2 !border-t-blue-500' : ''}"
+                  class="border-t border-zinc-700/30 hover:bg-zinc-800/30 transition-colors {rule.enabled === false ? 'opacity-40' : rule.active === false ? 'opacity-50' : ''} {dragOverGroupIdx === gi && dragOverRuleIdx === ri ? 'border-t-2 !border-t-blue-500' : ''}"
                   on:dragover={e => handleGroupDragOver(e, gi, ri)}
                   on:dragleave={handleGroupDragLeave}
                   on:drop={e => handleGroupDrop(e, gi, ri)}
@@ -260,6 +261,17 @@
                     <span class="inline-block px-1.5 py-0.5 text-xs rounded {priorityColor(rule.priority)}">
                       {priorityLabel(rule.priority)}
                     </span>
+                  </td>
+                  <td class="px-1 py-2.5 text-center">
+                    <!-- svelte-ignore a11y-click-events-have-key-events -->
+                    <!-- svelte-ignore a11y-no-static-element-interactions -->
+                    <div
+                      class="inline-flex items-center justify-center w-8 h-5 rounded-full cursor-pointer transition-colors {rule.enabled !== false ? 'bg-emerald-500/80' : 'bg-zinc-600'}"
+                      on:click={() => dispatch('toggleRule', rule.realIndex)}
+                      title={rule.enabled !== false ? $t('rules.enabled') : $t('rules.disabled')}
+                    >
+                      <div class="w-3.5 h-3.5 rounded-full bg-white shadow transition-transform {rule.enabled !== false ? 'translate-x-1.5' : '-translate-x-1.5'}"></div>
+                    </div>
                   </td>
                   <td class="px-4 py-2.5 text-right w-24">
                     <button

@@ -59,6 +59,7 @@
         tunnelId: selectedTunnels[i].id,
         fallback: isLast ? 'allow_direct' : 'failover',
         priority: 'auto',
+        enabled: true,
       });
     }
     dispatch('confirm', { rules: newRules, pattern });

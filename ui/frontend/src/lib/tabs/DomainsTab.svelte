@@ -155,7 +155,8 @@
       pattern,
       tunnelId: modalRule.action === 'route' ? modalRule.tunnelId : '',
       action: modalRule.action,
-      active: true
+      active: true,
+      enabled: editIndex >= 0 ? (rules[editIndex].enabled !== false ? true : false) : true
     };
     if (editIndex >= 0) {
       rules[editIndex] = rule;
@@ -165,6 +166,12 @@
     }
     dirty = true;
     closeModal();
+  }
+
+  function toggleRule(index) {
+    rules[index] = { ...rules[index], enabled: rules[index].enabled === false ? true : false };
+    rules = rules;
+    dirty = true;
   }
 
   function removeRule(index) {
@@ -358,6 +365,7 @@
             <th class="text-left px-4 py-2.5 font-medium">{$t('domains.type')}</th>
             <th class="text-left px-4 py-2.5 font-medium">{$t('domains.action')}</th>
             <th class="text-left px-4 py-2.5 font-medium">{$t('domains.tunnel')}</th>
+            <th class="w-10 px-0 py-2.5"></th>
             <th class="text-right px-4 py-2.5 font-medium w-24"></th>
           </tr>
         </thead>
@@ -365,7 +373,7 @@
           {#each rules as rule, index (rule.pattern + '-' + index)}
             {@const parsed = parsePattern(rule.pattern)}
             <tr
-              class="border-t border-zinc-700/30 hover:bg-zinc-800/30 transition-colors {rule.active === false ? 'opacity-50' : ''} {dragOverIndex === index ? 'border-t-2 !border-t-blue-500' : ''}"
+              class="border-t border-zinc-700/30 hover:bg-zinc-800/30 transition-colors {rule.enabled === false ? 'opacity-40' : rule.active === false ? 'opacity-50' : ''} {dragOverIndex === index ? 'border-t-2 !border-t-blue-500' : ''}"
               on:dragover={e => handleDragOver(e, index)}
               on:dragleave={handleDragLeave}
               on:drop={e => handleDrop(e, index)}
@@ -403,6 +411,17 @@
               </td>
               <td class="px-4 py-2.5 {rule.active === false ? 'text-zinc-500' : 'text-zinc-300'}">
                 {rule.action === 'route' ? tunnelName(rule.tunnelId) : ''}
+              </td>
+              <td class="px-1 py-2.5 text-center">
+                <!-- svelte-ignore a11y-click-events-have-key-events -->
+                <!-- svelte-ignore a11y-no-static-element-interactions -->
+                <div
+                  class="inline-flex items-center justify-center w-8 h-5 rounded-full cursor-pointer transition-colors {rule.enabled !== false ? 'bg-emerald-500/80' : 'bg-zinc-600'}"
+                  on:click={() => toggleRule(index)}
+                  title={rule.enabled !== false ? $t('domains.enabled') : $t('domains.disabled')}
+                >
+                  <div class="w-3.5 h-3.5 rounded-full bg-white shadow transition-transform {rule.enabled !== false ? 'translate-x-1.5' : '-translate-x-1.5'}"></div>
+                </div>
               </td>
               <td class="px-4 py-2.5 text-right">
                 <button

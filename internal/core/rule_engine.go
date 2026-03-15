@@ -71,6 +71,9 @@ func (re *RuleEngine) Match(exePath string) MatchResult {
 	baseLower := filepath.Base(exeLower)
 
 	for i, rule := range re.rules {
+		if !rule.IsEnabled() {
+			continue // skip disabled rule
+		}
 		var matched bool
 		if re.regexCache[i] != nil {
 			matched = re.regexCache[i].MatchString(exeLower)
@@ -101,6 +104,9 @@ func (re *RuleEngine) MatchPreLowered(exeLower, baseLower string) MatchResult {
 	defer re.mu.RUnlock()
 
 	for i, rule := range re.rules {
+		if !rule.IsEnabled() {
+			continue // skip disabled rule
+		}
 		var matched bool
 		if re.regexCache[i] != nil {
 			matched = re.regexCache[i].MatchString(exeLower)
