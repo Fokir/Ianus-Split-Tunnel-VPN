@@ -34,18 +34,21 @@ const (
 )
 
 // WFP GUIDs for our provider and sublayer.
+// Deterministic UUIDs derived from project name to avoid collisions with
+// other WFP providers. These must remain stable across versions to allow
+// orphan cleanup to identify our own filters after crash recovery.
 var (
 	awgProviderID = wf.ProviderID{
-		Data1: 0xABCD0001,
-		Data2: 0x0001,
-		Data3: 0x0001,
-		Data4: [8]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
+		Data1: 0xE6A7B2C8,
+		Data2: 0x3D4F,
+		Data3: 0x5A1E,
+		Data4: [8]byte{0x9B, 0x80, 0xC2, 0xE4, 0xF6, 0xA8, 0xD0, 0xB2},
 	}
 	awgSublayerID = wf.SublayerID{
-		Data1: 0xABCD0002,
-		Data2: 0x0002,
-		Data3: 0x0002,
-		Data4: [8]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
+		Data1: 0xF7B8C3D9,
+		Data2: 0x4E50,
+		Data3: 0x6B2F,
+		Data4: [8]byte{0xAC, 0x91, 0xD3, 0xF5, 0xE7, 0xB9, 0xE1, 0xC3},
 	}
 )
 
@@ -264,13 +267,16 @@ func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 		return fmt.Errorf("[WFP] AppID(%s): %w", exePath, err)
 	}
 
+	// Quick check under lock — avoid duplicate work.
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if _, exists := w.rules[key]; exists {
-		return nil // already blocked
+		w.mu.Unlock()
+		return nil
 	}
+	w.mu.Unlock()
 
+	// Add WFP rules WITHOUT holding the lock. addRuleWithRetry may sleep
+	// on transient BFE failures, and we don't want to block other WFP ops.
 	var ruleIDs []wf.RuleID
 
 	// Block outbound connections and inbound accept on non-TUN interfaces.
@@ -338,7 +344,19 @@ func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 		ruleIDs = append(ruleIDs, recvRuleID)
 	}
 
+	// Store results under the lock. Double-check to handle concurrent calls.
+	w.mu.Lock()
+	if _, exists := w.rules[key]; exists {
+		w.mu.Unlock()
+		// Race: another goroutine already added rules. Clean up ours.
+		for _, id := range ruleIDs {
+			w.session.DeleteRule(id)
+		}
+		return nil
+	}
 	w.rules[key] = ruleIDs
+	w.mu.Unlock()
+
 	core.Log.Debugf("WFP", "Blocked %s on real NIC (%d rules, dual-stack)", key, len(ruleIDs))
 	return nil
 }
@@ -1245,6 +1263,36 @@ func (w *WFPManager) Close() error {
 		return err
 	}
 	return nil
+}
+
+// VerifyRulesExist checks that all registered WFP rules still exist in the BFE.
+// Returns a list of process keys whose rules were removed by external software
+// (antivirus, firewall, group policy). The caller should re-apply these rules.
+func (w *WFPManager) VerifyRulesExist() []string {
+	allRules, err := w.session.Rules()
+	if err != nil {
+		core.Log.Errorf("WFP", "Cannot enumerate rules for health check: %v", err)
+		return nil
+	}
+	existing := make(map[wf.RuleID]bool, len(allRules))
+	for _, r := range allRules {
+		existing[r.ID] = true
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	var missing []string
+	for key, ruleIDs := range w.rules {
+		for _, id := range ruleIDs {
+			if !existing[id] {
+				core.Log.Warnf("WFP", "Rule %v for %q was removed externally", id, key)
+				missing = append(missing, key)
+				break // one missing rule is enough to flag the key
+			}
+		}
+	}
+	return missing
 }
 
 // CleanupConflictingWFP removes orphaned WFP providers, sublayers, and filters
