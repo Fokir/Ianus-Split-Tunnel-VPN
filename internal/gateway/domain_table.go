@@ -17,6 +17,10 @@ type DomainEntry struct {
 	ExpiresAt int64  // unix seconds
 }
 
+// maxDomainEntries caps the domain table to prevent unbounded growth.
+// At ~170 bytes/entry, 20K entries ≈ 3.4 MB.
+const maxDomainEntries = 20000
+
 // DomainTable is a dynamic IP→tunnel map populated from DNS responses.
 // RWMutex-based (not sharded) — expected <5K entries.
 type DomainTable struct {
@@ -45,8 +49,20 @@ func (dt *DomainTable) Lookup(ip [4]byte) (*DomainEntry, bool) {
 }
 
 // Insert adds or updates an IP→domain mapping.
+// Evicts ~10% of entries when the table exceeds maxDomainEntries.
 func (dt *DomainTable) Insert(ip [4]byte, entry *DomainEntry) {
 	dt.mu.Lock()
+	if len(dt.entries) >= maxDomainEntries {
+		// Evict ~10% — map iteration is random in Go, giving rough LRU behavior.
+		evict := maxDomainEntries / 10
+		for k := range dt.entries {
+			if evict <= 0 {
+				break
+			}
+			delete(dt.entries, k)
+			evict--
+		}
+	}
 	dt.entries[ip] = entry
 	dt.mu.Unlock()
 }

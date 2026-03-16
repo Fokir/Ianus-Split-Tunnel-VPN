@@ -14,20 +14,20 @@ import (
 )
 
 // sockBufSize is the socket buffer size for TCP proxy connections.
-// 2 MB buffers allow large TCP windows for high throughput, especially
-// important for VPN tunneled traffic over high-latency links.
-const sockBufSize = 2 * 1024 * 1024
+// 256 KB is sufficient for high throughput; TCP auto-tuning handles
+// actual window sizes. Avoids excessive RSS under many connections.
+const sockBufSize = 256 * 1024
 
 // proxyIdleTimeout is the maximum time a forwarding goroutine will wait
 // for data before considering the connection idle and terminating.
 // Prevents goroutine leaks from abandoned/stalled connections.
 const proxyIdleTimeout = 5 * time.Minute
 
-// fwdBufPool reuses 1MB buffers for bidirectional TCP forwarding.
-// Larger buffers reduce syscall overhead during bulk transfers.
+// fwdBufPool reuses 128KB buffers for bidirectional TCP forwarding.
+// 128KB balances syscall overhead reduction with memory efficiency.
 var fwdBufPool = sync.Pool{
 	New: func() any {
-		b := make([]byte, 1024*1024)
+		b := make([]byte, 128*1024)
 		return &b
 	},
 }

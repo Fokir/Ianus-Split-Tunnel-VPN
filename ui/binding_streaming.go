@@ -42,6 +42,12 @@ func (b *BindingService) runLogStream() {
 			return
 		}
 
+		// Skip emitting events when window is hidden to reduce
+		// WebView2 JS activity and memory pressure.
+		if !b.windowVisible.Load() {
+			continue
+		}
+
 		var ts string
 		if entry.Timestamp != nil {
 			ts = entry.Timestamp.AsTime().Format(time.RFC3339Nano)
@@ -90,29 +96,40 @@ func (b *BindingService) runStatsStream() {
 			return
 		}
 
-		tunnels := make([]map[string]interface{}, 0, len(snap.Tunnels))
-		for _, t := range snap.Tunnels {
-			tunnels = append(tunnels, map[string]interface{}{
-				"tunnelId":   t.TunnelId,
-				"state":      tunnelStateStr(t.State),
-				"speedTx":    t.SpeedTx,
-				"speedRx":    t.SpeedRx,
-				"bytesTx":    t.BytesTx,
-				"bytesRx":    t.BytesRx,
-				"packetLoss": t.PacketLoss,
-				"latencyMs":  t.LatencyMs,
-				"jitterMs":   t.JitterMs,
-			})
+		visible := b.windowVisible.Load()
 
-			// Detect state transitions for notifications.
+		var tunnels []map[string]interface{}
+		if visible {
+			tunnels = make([]map[string]interface{}, 0, len(snap.Tunnels))
+		}
+
+		for _, t := range snap.Tunnels {
+			if visible {
+				tunnels = append(tunnels, map[string]interface{}{
+					"tunnelId":   t.TunnelId,
+					"state":      tunnelStateStr(t.State),
+					"speedTx":    t.SpeedTx,
+					"speedRx":    t.SpeedRx,
+					"bytesTx":    t.BytesTx,
+					"bytesRx":    t.BytesRx,
+					"packetLoss": t.PacketLoss,
+					"latencyMs":  t.LatencyMs,
+					"jitterMs":   t.JitterMs,
+				})
+			}
+
+			// Detect state transitions for OS-level notifications.
+			// These fire regardless of window visibility.
 			prev, hasPrev := prevStates[t.TunnelId]
 			if hasPrev {
 				if prev == vpnapi.TunnelState_TUNNEL_STATE_UP && t.State == vpnapi.TunnelState_TUNNEL_STATE_ERROR {
 					if tunnelProtocols[t.TunnelId] == "anyconnect" {
 						b.notifMgr.NotifyAuthRequired(t.TunnelId)
-						app.Event.Emit("auth-required", map[string]interface{}{
-							"tunnelId": t.TunnelId,
-						})
+						if visible {
+							app.Event.Emit("auth-required", map[string]interface{}{
+								"tunnelId": t.TunnelId,
+							})
+						}
 					} else {
 						b.notifMgr.NotifyTunnelError(t.TunnelId, "Connection lost")
 					}
@@ -124,16 +141,18 @@ func (b *BindingService) runStatsStream() {
 				if prev == vpnapi.TunnelState_TUNNEL_STATE_UP && t.State == vpnapi.TunnelState_TUNNEL_STATE_CONNECTING {
 					if tunnelProtocols[t.TunnelId] == "anyconnect" {
 						b.notifMgr.NotifySessionResuming(t.TunnelId)
-						app.Event.Emit("tunnel-resuming", map[string]interface{}{
-							"tunnelId": t.TunnelId,
-						})
+						if visible {
+							app.Event.Emit("tunnel-resuming", map[string]interface{}{
+								"tunnelId": t.TunnelId,
+							})
+						}
 					}
 				}
 			}
 			prevStates[t.TunnelId] = t.State
 
-			// Emit banner event (deduplicated).
-			if t.Banner != "" {
+			// Emit banner event (deduplicated) — only when visible.
+			if visible && t.Banner != "" {
 				bannerKey := t.TunnelId + ":" + t.Banner
 				if b.seenBanners == nil {
 					b.seenBanners = make(map[string]struct{})
@@ -154,9 +173,11 @@ func (b *BindingService) runStatsStream() {
 			}
 		}
 
-		app.Event.Emit("stats-update", map[string]interface{}{
-			"tunnels": tunnels,
-		})
+		if visible {
+			app.Event.Emit("stats-update", map[string]interface{}{
+				"tunnels": tunnels,
+			})
+		}
 	}
 }
 

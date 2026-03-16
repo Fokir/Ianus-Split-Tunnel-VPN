@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"awg-split-tunnel/internal/core"
@@ -170,65 +171,85 @@ func ListGeoIPCategories(path string) ([]string, error) {
 	return codes, nil
 }
 
-// ─── GeoIPResolver — caching IP→country lookup ─────────────────────
-
-// geoipResolverEntry maps a country code to its PrefixTrie.
-type geoipResolverEntry struct {
-	code string
-	trie *PrefixTrie
-}
+// ─── GeoIPResolver — lazy cached IP→country lookup ──────────────────
+//
+// Instead of building 240+ PrefixTries at startup (~288 MB), the resolver
+// parses geoip.dat on demand when Lookup is first called and caches results.
+// Since Lookup is only used for displaying country codes of VPN server IPs
+// (typically 5-10 unique IPs), memory usage is near zero.
 
 // GeoIPResolver resolves IP addresses to country codes using geoip.dat.
+// Lazy: parses the file on first lookup, caches results permanently.
 type GeoIPResolver struct {
-	entries []geoipResolverEntry
+	geoipPath string
+	mu        sync.Mutex
+	cache     map[netip.Addr]string
 }
 
-// NewGeoIPResolver parses geoip.dat and builds a PrefixTrie per country.
+// NewGeoIPResolver creates a lazy resolver that parses geoip.dat on demand.
+// No file I/O or memory allocation happens until the first Lookup call.
 func NewGeoIPResolver(geoipPath string) (*GeoIPResolver, error) {
-	data, err := os.ReadFile(geoipPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read geoip.dat for resolver: %w", err)
+	if _, err := os.Stat(geoipPath); err != nil {
+		return nil, fmt.Errorf("geoip.dat not found: %w", err)
 	}
-
-	cats := parseGeoIPList(data)
-	resolver := &GeoIPResolver{}
-
-	for _, cat := range cats {
-		trie := NewPrefixTrie()
-		count := 0
-		for _, cidr := range cat.CIDRs {
-			if len(cidr.IP) == 4 {
-				var ip [4]byte
-				copy(ip[:], cidr.IP)
-				trie.Insert(ip, cidr.Prefix)
-				count++
-			}
-		}
-		if count > 0 {
-			resolver.entries = append(resolver.entries, geoipResolverEntry{
-				code: strings.ToUpper(cat.Code),
-				trie: trie,
-			})
-		}
-	}
-
-	core.Log.Infof("Core", "GeoIP resolver built: %d countries", len(resolver.entries))
-	return resolver, nil
+	return &GeoIPResolver{
+		geoipPath: geoipPath,
+		cache:     make(map[netip.Addr]string, 16),
+	}, nil
 }
 
 // Lookup returns the 2-letter country code for the given IP address.
-// Returns empty string if no match found.
+// Returns empty string if no match found. Results are cached.
 func (r *GeoIPResolver) Lookup(addr netip.Addr) string {
 	if r == nil || !addr.Is4() {
 		return ""
 	}
-	ip4 := addr.As4()
-	for i := range r.entries {
-		if r.entries[i].trie.Contains(ip4) {
-			return r.entries[i].code
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if code, ok := r.cache[addr]; ok {
+		return code
+	}
+
+	code := r.findCountry(addr.As4())
+	r.cache[addr] = code
+	return code
+}
+
+// findCountry parses geoip.dat and searches for the country containing the IP.
+// The parsed data is temporary and GC'd after return.
+func (r *GeoIPResolver) findCountry(ip4 [4]byte) string {
+	data, err := os.ReadFile(r.geoipPath)
+	if err != nil {
+		return ""
+	}
+	cats := parseGeoIPList(data)
+	for _, cat := range cats {
+		for _, cidr := range cat.CIDRs {
+			if len(cidr.IP) == 4 && cidrContainsIP(cidr.IP, cidr.Prefix, ip4) {
+				return strings.ToUpper(cat.Code)
+			}
 		}
 	}
 	return ""
+}
+
+// cidrContainsIP checks if ip is within the CIDR defined by cidrIP/prefix.
+func cidrContainsIP(cidrIP []byte, prefix int, ip [4]byte) bool {
+	fullBytes := prefix / 8
+	for i := 0; i < fullBytes && i < 4; i++ {
+		if ip[i] != cidrIP[i] {
+			return false
+		}
+	}
+	if rem := prefix % 8; rem > 0 && fullBytes < 4 {
+		mask := byte(0xFF) << (8 - rem)
+		if (ip[fullBytes] & mask) != (cidrIP[fullBytes] & mask) {
+			return false
+		}
+	}
+	return true
 }
 
 // --- Raw protobuf decoding for geoip.dat ---

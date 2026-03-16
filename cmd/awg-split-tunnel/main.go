@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -83,6 +84,23 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	defer logStreamer.Stop() // safe to call multiple times; ensures cleanup on early init errors
 
 	core.Log.Infof("Core", "AWG Split Tunnel %s starting...", version)
+
+	// Debug pprof server on localhost (for memory profiling).
+	core.SafeGo("debug.pprof", func() {
+		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+			core.Log.Debugf("Core", "pprof server: %v", err)
+		}
+	})
+
+	// Periodically return freed heap pages to the OS.
+	// Complements SetMemoryLimit by ensuring RSS reflects actual usage.
+	core.SafeGo("memory.scavenger", func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			debug.FreeOSMemory()
+		}
+	})
 
 	// Clean up any orphaned routes from previous crashes.
 	if err := gateway.CleanupOrphanedRoutes(); err != nil {

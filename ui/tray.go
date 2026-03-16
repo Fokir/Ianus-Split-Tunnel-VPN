@@ -11,14 +11,13 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-func setupTray(app *application.App, mainWindow *application.WebviewWindow, binding *BindingService) {
+func setupTray(app *application.App, binding *BindingService) {
 	systray := app.SystemTray.New()
 	systray.SetIcon(trayIconPNG)
 
-	// Left-click on tray icon opens the main window.
+	// Left-click on tray icon opens/creates the main window.
 	systray.OnClick(func() {
-		mainWindow.Show()
-		mainWindow.Focus()
+		showMainWindow("")
 	})
 
 	menu := app.Menu.New()
@@ -40,9 +39,7 @@ func setupTray(app *application.App, mainWindow *application.WebviewWindow, bind
 	for _, tab := range tabItems {
 		t := tab
 		menu.Add(t.label).OnClick(func(_ *application.Context) {
-			mainWindow.Show()
-			mainWindow.Focus()
-			app.Event.Emit("navigate", t.path)
+			showMainWindow(t.path)
 		})
 	}
 
@@ -59,10 +56,10 @@ func setupTray(app *application.App, mainWindow *application.WebviewWindow, bind
 	systray.SetMenu(menu)
 
 	// Update tray state periodically based on VPN status.
-	go updateTrayState(app, systray, binding)
+	go updateTrayState(systray, binding)
 }
 
-func updateTrayState(app *application.App, systray *application.SystemTray, binding *BindingService) {
+func updateTrayState(systray *application.SystemTray, binding *BindingService) {
 	// Subscribe to stats stream to update tray icon.
 	stream, err := binding.client.Service.StreamStats(binding.ctx, &vpnapi.StatsStreamRequest{
 		IntervalMs: 2000,

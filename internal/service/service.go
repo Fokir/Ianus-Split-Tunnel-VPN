@@ -68,6 +68,13 @@ type Service struct {
 	reconnectMgr      *ReconnectManager
 	healthMon         *HealthMonitor
 
+	// Cached geo category lists (parsed from geoip.dat / geosite.dat).
+	// Avoids re-reading and re-parsing 20-30 MB protobuf files on every UI request.
+	geositeCatsMu sync.Mutex
+	geositeCats   []string
+	geoipCatsMu   sync.Mutex
+	geoipCats     []string
+
 	mu sync.RWMutex
 }
 

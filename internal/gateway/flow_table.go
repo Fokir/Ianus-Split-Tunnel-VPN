@@ -11,6 +11,22 @@ import (
 	"awg-split-tunnel/internal/core"
 )
 
+// stringIntern deduplicates frequently repeated strings (tunnelID, exeLower,
+// baseLower). In practice there are ~5-10 unique values across 100K+ entries.
+// Using sync.Map for read-heavy access pattern on the hot path.
+var stringIntern sync.Map
+
+func internStr(s string) string {
+	if s == "" {
+		return ""
+	}
+	if v, ok := stringIntern.Load(s); ok {
+		return v.(string)
+	}
+	stringIntern.Store(s, s)
+	return s
+}
+
 // ---------------------------------------------------------------------------
 // NAT key and entry types — ported from packet_router.go
 // ---------------------------------------------------------------------------
@@ -238,6 +254,9 @@ func (ft *FlowTable) Wait() { ft.wg.Wait() }
 // InsertTCP creates a NAT entry for a new TCP connection.
 // Evicts a random entry if the shard is at capacity.
 func (ft *FlowTable) InsertTCP(dstIP netip.Addr, srcPort uint16, entry NATEntry) {
+	entry.TunnelID = internStr(entry.TunnelID)
+	entry.ExeLower = internStr(entry.ExeLower)
+	entry.BaseLower = internStr(entry.BaseLower)
 	nk := makeNATKey(dstIP, srcPort)
 	shard := &ft.tcp[natShardIndex(nk)]
 	shard.mu.Lock()
@@ -366,6 +385,9 @@ func (ft *FlowTable) LookupNAT(addrKey string) (core.NATInfo, bool) {
 // InsertUDP creates a NAT entry for a new UDP flow.
 // Evicts a random entry if the shard is at capacity.
 func (ft *FlowTable) InsertUDP(dstIP netip.Addr, srcPort uint16, entry UDPNATEntry) {
+	entry.TunnelID = internStr(entry.TunnelID)
+	entry.ExeLower = internStr(entry.ExeLower)
+	entry.BaseLower = internStr(entry.BaseLower)
 	nk := makeNATKey(dstIP, srcPort)
 	shard := &ft.udp[natShardIndex(nk)]
 	shard.mu.Lock()
@@ -465,6 +487,7 @@ func (ft *FlowTable) LookupUDPNAT(addrKey string) (core.NATInfo, bool) {
 // InsertRawFlow creates a raw flow entry for a TCP or UDP flow.
 // Evicts a random entry if the shard is at capacity.
 func (ft *FlowTable) InsertRawFlow(proto byte, dstIP [4]byte, srcPort uint16, entry RawFlowEntry) {
+	entry.TunnelID = internStr(entry.TunnelID)
 	k := makeRawFlowKey(proto, dstIP, srcPort)
 	shard := &ft.raw[rawFlowShardIndex(k)]
 	shard.mu.Lock()

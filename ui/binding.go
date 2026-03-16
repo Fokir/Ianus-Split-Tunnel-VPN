@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"awg-split-tunnel/internal/ipc"
 
@@ -24,17 +25,35 @@ type BindingService struct {
 	statsStreamOnce sync.Once
 	notifMgr        *NotificationManager
 	seenBanners     map[string]struct{} // deduplicate banner events
+
+	// windowVisible tracks whether the main window is shown.
+	// When false, streaming goroutines skip emitting Wails events
+	// to reduce WebView2 activity and memory pressure.
+	windowVisible atomic.Bool
 }
 
 // NewBindingService creates a BindingService wrapping the IPC client.
 func NewBindingService(client *ipc.Client) *BindingService {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &BindingService{
+	bs := &BindingService{
 		client:   client,
 		ctx:      ctx,
 		cancel:   cancel,
 		notifMgr: NewNotificationManager(),
 	}
+	bs.windowVisible.Store(true) // window starts visible
+	return bs
+}
+
+// OnWindowHidden marks the window as hidden. Streaming goroutines
+// will skip emitting Wails events to reduce WebView2 memory pressure.
+func (b *BindingService) OnWindowHidden() {
+	b.windowVisible.Store(false)
+}
+
+// OnWindowShown marks the window as visible. Streaming resumes emitting events.
+func (b *BindingService) OnWindowShown() {
+	b.windowVisible.Store(true)
 }
 
 // Shutdown cancels all background streaming goroutines.

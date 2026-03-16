@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -26,6 +27,16 @@ import (
 var assets embed.FS
 
 const serviceBinary = "awg-split-tunnel.exe"
+
+// Package-level state for window lifecycle (destroy/recreate pattern).
+// SystemTray keeps the app alive; the window is destroyed on close to free
+// WebView2 memory (~100-200 MB) and recreated on demand from tray.
+var (
+	mainWindow   *application.WebviewWindow
+	mainWindowMu sync.Mutex
+	mainApp      *application.App
+	mainBinding  *BindingService
+)
 
 func main() {
 	runtime.LockOSThread()
@@ -45,28 +56,51 @@ func main() {
 	defer client.Close()
 
 	// Create the binding service that exposes gRPC methods to the frontend.
-	binding := NewBindingService(client)
+	mainBinding = NewBindingService(client)
 
 	// Restore previously active tunnel connections (if enabled in settings).
-	if err := binding.RestoreConnections(); err != nil {
+	if err := mainBinding.RestoreConnections(); err != nil {
 		log.Printf("[UI] RestoreConnections: %v", err)
 	}
 
 	// Create Wails application.
-	app := application.New(application.Options{
+	mainApp = application.New(application.Options{
 		Name:        "AWG Split Tunnel",
 		Description: "Multi-tunnel VPN client with per-process split tunneling",
 		Icon:        trayIconPNG,
 		Services: []application.Service{
-			application.NewService(binding),
+			application.NewService(mainBinding),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
+		Windows: application.WindowsOptions{
+			DisableQuitOnLastWindowClosed: true,
+		},
 	})
 
-	// Create main window (hidden initially, shown from tray or on start).
-	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
+	// Create initial window (destroyed on close to free WebView2 memory).
+	mainWindow = createMainWindow()
+
+	// Listen for "show UI" messages from duplicate instances.
+	registerWindowMessageHook(func() {
+		showMainWindow("")
+	})
+
+	// Setup system tray (uses showMainWindow to create/show window on demand).
+	setupTray(mainApp, mainBinding)
+
+	// Run the application.
+	if err := mainApp.Run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// createMainWindow creates a WebView2 window with destroy-on-close hook.
+// When closed, the window and its WebView2 processes are destroyed to free
+// ~100-200 MB of memory. A fresh window is recreated on next tray click.
+func createMainWindow() *application.WebviewWindow {
+	w := mainApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "AWG Split Tunnel",
 		Width:            950,
 		Height:           700,
@@ -80,24 +114,40 @@ func main() {
 		},
 	})
 
-	// Hide window instead of closing when the user clicks the X button.
-	mainWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-		mainWindow.Hide()
-		e.Cancel()
+	// Let the window close naturally — Wails destroys the WebView2 runtime,
+	// freeing browser/renderer/GPU processes (~100-200 MB).
+	w.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		mainWindowMu.Lock()
+		mainWindow = nil
+		mainWindowMu.Unlock()
+		mainBinding.OnWindowHidden()
 	})
 
-	// Listen for "show UI" messages from duplicate instances.
-	registerWindowMessageHook(func() {
+	return w
+}
+
+// showMainWindow shows the existing window or creates a new one.
+// Optional navigateTo path triggers a frontend route change.
+func showMainWindow(navigateTo string) {
+	mainWindowMu.Lock()
+	defer mainWindowMu.Unlock()
+
+	if mainWindow != nil {
+		mainBinding.OnWindowShown()
 		mainWindow.Show()
 		mainWindow.Focus()
-	})
+		if navigateTo != "" {
+			mainApp.Event.Emit("navigate", navigateTo)
+		}
+		return
+	}
 
-	// Setup system tray.
-	setupTray(app, mainWindow, binding)
-
-	// Run the application.
-	if err := app.Run(); err != nil {
-		log.Fatal(err)
+	mainBinding.OnWindowShown()
+	mainWindow = createMainWindow()
+	mainWindow.Show()
+	mainWindow.Focus()
+	if navigateTo != "" {
+		mainApp.Event.Emit("navigate", navigateTo)
 	}
 }
 

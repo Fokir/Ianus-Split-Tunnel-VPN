@@ -288,10 +288,23 @@ func (s *Service) ListGeositeCategories(_ context.Context, _ *emptypb.Empty) (*v
 	if s.geositeFilePath == "" {
 		return &vpnapi.GeositeCategoriesResponse{}, nil
 	}
+	// Return cached result if available (avoids re-parsing 10 MB protobuf).
+	s.geositeCatsMu.Lock()
+	if s.geositeCats != nil {
+		cats := s.geositeCats
+		s.geositeCatsMu.Unlock()
+		return &vpnapi.GeositeCategoriesResponse{Categories: cats}, nil
+	}
+	s.geositeCatsMu.Unlock()
+
 	categories, err := gateway.ListGeositeCategories(s.geositeFilePath)
 	if err != nil {
-		return &vpnapi.GeositeCategoriesResponse{}, nil // return empty on error
+		return &vpnapi.GeositeCategoriesResponse{}, nil
 	}
+
+	s.geositeCatsMu.Lock()
+	s.geositeCats = categories
+	s.geositeCatsMu.Unlock()
 	return &vpnapi.GeositeCategoriesResponse{Categories: categories}, nil
 }
 
@@ -309,6 +322,14 @@ func (s *Service) UpdateGeosite(_ context.Context, _ *emptypb.Empty) (*vpnapi.Up
 			// Non-fatal: geosite was updated successfully.
 		}
 	}
+	// Invalidate cached category lists so next ListGeo*Categories re-parses.
+	s.geositeCatsMu.Lock()
+	s.geositeCats = nil
+	s.geositeCatsMu.Unlock()
+	s.geoipCatsMu.Lock()
+	s.geoipCats = nil
+	s.geoipCatsMu.Unlock()
+
 	// Rebuild domain matcher with updated geo data.
 	if s.domainReloader != nil {
 		rules := s.cfg.GetDomainRules()
@@ -323,10 +344,23 @@ func (s *Service) ListGeoIPCategories(_ context.Context, _ *emptypb.Empty) (*vpn
 	if s.geoipFilePath == "" {
 		return &vpnapi.GeositeCategoriesResponse{}, nil
 	}
+	// Return cached result if available (avoids re-parsing 20 MB protobuf).
+	s.geoipCatsMu.Lock()
+	if s.geoipCats != nil {
+		cats := s.geoipCats
+		s.geoipCatsMu.Unlock()
+		return &vpnapi.GeositeCategoriesResponse{Categories: cats}, nil
+	}
+	s.geoipCatsMu.Unlock()
+
 	categories, err := gateway.ListGeoIPCategories(s.geoipFilePath)
 	if err != nil {
 		return &vpnapi.GeositeCategoriesResponse{}, nil
 	}
+
+	s.geoipCatsMu.Lock()
+	s.geoipCats = categories
+	s.geoipCatsMu.Unlock()
 	return &vpnapi.GeositeCategoriesResponse{Categories: categories}, nil
 }
 
