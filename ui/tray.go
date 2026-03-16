@@ -16,8 +16,13 @@ func setupTray(app *application.App, binding *BindingService) {
 	systray.SetIcon(trayIconPNG)
 
 	// Left-click on tray icon opens/creates the main window.
+	// Must dispatch via goroutine: OnClick runs inside wndProc on the main
+	// thread. Creating a WebView2 window inline causes reentrancy issues
+	// because setupChromium needs message loop processing. A goroutine lets
+	// InvokeSync post a message instead of executing inline, so window
+	// creation happens after wndProc returns.
 	systray.OnClick(func() {
-		showMainWindow("")
+		go showMainWindow("")
 	})
 
 	menu := app.Menu.New()
@@ -39,7 +44,7 @@ func setupTray(app *application.App, binding *BindingService) {
 	for _, tab := range tabItems {
 		t := tab
 		menu.Add(t.label).OnClick(func(_ *application.Context) {
-			showMainWindow(t.path)
+			go showMainWindow(t.path)
 		})
 	}
 
