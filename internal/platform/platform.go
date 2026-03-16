@@ -23,4 +23,9 @@ type Platform struct {
 	// FlushSystemDNS flushes the system DNS cache
 	// (ipconfig /flushdns on Windows, dscacheutil on macOS).
 	FlushSystemDNS func() error
+
+	// EnsureFirewallRules creates OS firewall inbound allow rules for AWG
+	// executables so that hairpin NAT packets on the TUN adapter are not
+	// blocked by the host firewall. May be nil on platforms that don't need it.
+	EnsureFirewallRules func()
 }

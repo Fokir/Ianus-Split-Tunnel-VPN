@@ -166,6 +166,11 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		}
 	}
 
+	// === 4a3. Ensure Windows Firewall allows AWG executables (hairpin NAT) ===
+	if plat.EnsureFirewallRules != nil {
+		plat.EnsureFirewallRules()
+	}
+
 	// === 4b. Block all IPv6 traffic ===
 	if err := procFilter.BlockAllIPv6(); err != nil {
 		core.Log.Warnf("Core", "Failed to block IPv6: %v", err)

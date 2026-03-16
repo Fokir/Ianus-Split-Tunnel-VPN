@@ -44,5 +44,7 @@ func NewPlatform() *platform.Platform {
 			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 			return cmd.Run()
 		},
+
+		EnsureFirewallRules: gateway.EnsureFirewallRules,
 	}
 }
