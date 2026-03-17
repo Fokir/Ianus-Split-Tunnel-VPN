@@ -444,6 +444,15 @@ message ApplyUpdateResponse {
   string error = 2;
 }
 
+message UpdateProgress {
+  string stage = 1;           // "downloading", "extracting", "launching_updater"
+  int32 percent = 2;          // 0-100
+  int64 downloaded_bytes = 3; // bytes downloaded so far
+  int64 total_bytes = 4;      // total bytes to download
+  bool done = 5;              // true when updater is spawned successfully
+  string error = 6;           // non-empty on failure
+}
+
 // -- Autostart --
 
 message AutostartConfig {
@@ -551,6 +560,7 @@ service VPNService {
   // -- Updates --
   rpc CheckUpdate(google.protobuf.Empty) returns (CheckUpdateResponse);
   rpc ApplyUpdate(google.protobuf.Empty) returns (ApplyUpdateResponse);
+  rpc ApplyUpdateStream(google.protobuf.Empty) returns (stream UpdateProgress);
 
   // -- Conflicting services --
   rpc CheckConflictingServices(google.protobuf.Empty) returns (ConflictingServicesResponse);

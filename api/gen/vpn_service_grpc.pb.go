@@ -57,6 +57,7 @@ const (
 	VPNService_FlushDNS_FullMethodName                 = "/awg.vpn.v1.VPNService/FlushDNS"
 	VPNService_CheckUpdate_FullMethodName              = "/awg.vpn.v1.VPNService/CheckUpdate"
 	VPNService_ApplyUpdate_FullMethodName              = "/awg.vpn.v1.VPNService/ApplyUpdate"
+	VPNService_ApplyUpdateStream_FullMethodName        = "/awg.vpn.v1.VPNService/ApplyUpdateStream"
 	VPNService_CheckConflictingServices_FullMethodName = "/awg.vpn.v1.VPNService/CheckConflictingServices"
 	VPNService_StopConflictingServices_FullMethodName  = "/awg.vpn.v1.VPNService/StopConflictingServices"
 )
@@ -115,6 +116,7 @@ type VPNServiceClient interface {
 	// -- Updates --
 	CheckUpdate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*CheckUpdateResponse, error)
 	ApplyUpdate(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ApplyUpdateResponse, error)
+	ApplyUpdateStream(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[UpdateProgress], error)
 	// -- Conflicting services --
 	CheckConflictingServices(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConflictingServicesResponse, error)
 	StopConflictingServices(ctx context.Context, in *StopConflictingServicesRequest, opts ...grpc.CallOption) (*StopConflictingServicesResponse, error)
@@ -516,6 +518,25 @@ func (c *vPNServiceClient) ApplyUpdate(ctx context.Context, in *emptypb.Empty, o
 	return out, nil
 }
 
+func (c *vPNServiceClient) ApplyUpdateStream(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[UpdateProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &VPNService_ServiceDesc.Streams[2], VPNService_ApplyUpdateStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[emptypb.Empty, UpdateProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type VPNService_ApplyUpdateStreamClient = grpc.ServerStreamingClient[UpdateProgress]
+
 func (c *vPNServiceClient) CheckConflictingServices(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ConflictingServicesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ConflictingServicesResponse)
@@ -590,6 +611,7 @@ type VPNServiceServer interface {
 	// -- Updates --
 	CheckUpdate(context.Context, *emptypb.Empty) (*CheckUpdateResponse, error)
 	ApplyUpdate(context.Context, *emptypb.Empty) (*ApplyUpdateResponse, error)
+	ApplyUpdateStream(*emptypb.Empty, grpc.ServerStreamingServer[UpdateProgress]) error
 	// -- Conflicting services --
 	CheckConflictingServices(context.Context, *emptypb.Empty) (*ConflictingServicesResponse, error)
 	StopConflictingServices(context.Context, *StopConflictingServicesRequest) (*StopConflictingServicesResponse, error)
@@ -713,6 +735,9 @@ func (UnimplementedVPNServiceServer) CheckUpdate(context.Context, *emptypb.Empty
 }
 func (UnimplementedVPNServiceServer) ApplyUpdate(context.Context, *emptypb.Empty) (*ApplyUpdateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplyUpdate not implemented")
+}
+func (UnimplementedVPNServiceServer) ApplyUpdateStream(*emptypb.Empty, grpc.ServerStreamingServer[UpdateProgress]) error {
+	return status.Error(codes.Unimplemented, "method ApplyUpdateStream not implemented")
 }
 func (UnimplementedVPNServiceServer) CheckConflictingServices(context.Context, *emptypb.Empty) (*ConflictingServicesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CheckConflictingServices not implemented")
@@ -1393,6 +1418,17 @@ func _VPNService_ApplyUpdate_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VPNService_ApplyUpdateStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(emptypb.Empty)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(VPNServiceServer).ApplyUpdateStream(m, &grpc.GenericServerStream[emptypb.Empty, UpdateProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type VPNService_ApplyUpdateStreamServer = grpc.ServerStreamingServer[UpdateProgress]
+
 func _VPNService_CheckConflictingServices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -1594,6 +1630,11 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StreamStats",
 			Handler:       _VPNService_StreamStats_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "ApplyUpdateStream",
+			Handler:       _VPNService_ApplyUpdateStream_Handler,
 			ServerStreams: true,
 		},
 	},

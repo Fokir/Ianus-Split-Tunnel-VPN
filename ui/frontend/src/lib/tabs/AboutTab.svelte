@@ -15,6 +15,7 @@
   let checking = false;
   let updating = false;
   let updateError = '';
+  let updateProgress = { stage: '', percent: 0 };
 
   function handleUpdateAvailable(event) {
     const data = event.data;
@@ -28,8 +29,32 @@
     }
   }
 
+  function handleUpdateProgress(event) {
+    const data = event.data;
+    if (!data) return;
+
+    if (data.error) {
+      updateError = data.error;
+      updating = false;
+      updateProgress = { stage: '', percent: 0 };
+      return;
+    }
+
+    updateProgress = {
+      stage: data.stage || '',
+      percent: data.percent || 0,
+      downloadedBytes: data.downloadedBytes || 0,
+      totalBytes: data.totalBytes || 0,
+    };
+
+    if (data.done) {
+      updateProgress = { stage: 'done', percent: 100 };
+    }
+  }
+
   onMount(async () => {
     Events.On('update-available', handleUpdateAvailable);
+    Events.On('update-progress', handleUpdateProgress);
 
     try {
       const status = await api.getStatus();
@@ -42,6 +67,7 @@
 
   onDestroy(() => {
     Events.Off('update-available', handleUpdateAvailable);
+    Events.Off('update-progress', handleUpdateProgress);
   });
 
   function formatUptime(seconds) {
@@ -80,14 +106,31 @@
     }
   }
 
+  function getProgressLabel(stage, percent) {
+    switch (stage) {
+      case 'downloading':
+        return $t('about.downloading', { percent });
+      case 'extracting':
+        return $t('about.extracting');
+      case 'launching_updater':
+        return $t('about.launching');
+      case 'done':
+        return $t('about.updating');
+      default:
+        return $t('about.updating');
+    }
+  }
+
   async function applyUpdate() {
     updating = true;
     updateError = '';
+    updateProgress = { stage: 'downloading', percent: 0 };
     try {
-      await api.applyUpdate();
+      await api.applyUpdateWithProgress();
     } catch (e) {
       updateError = e.message || $t('about.updateError');
       updating = false;
+      updateProgress = { stage: '', percent: 0 };
     }
   }
 </script>
@@ -144,11 +187,22 @@
         <div class="text-xs text-zinc-400 max-h-24 overflow-y-auto whitespace-pre-wrap">{updateInfo.releaseNotes}</div>
       {/if}
       <button
-        class="w-full px-3 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40"
+        class="update-btn w-full px-3 py-2 text-sm font-medium rounded-md text-white transition-colors disabled:pointer-events-none relative overflow-hidden"
+        class:bg-blue-600={!updating}
+        class:hover:bg-blue-500={!updating}
+        class:bg-zinc-700={updating}
         on:click={applyUpdate}
         disabled={updating}
       >
-        {updating ? $t('about.updating') : $t('about.update')}
+        {#if updating}
+          <div
+            class="absolute inset-0 bg-blue-600 transition-all duration-300 ease-out"
+            style="width: {updateProgress.percent}%"
+          ></div>
+          <span class="relative z-10">{getProgressLabel(updateProgress.stage, updateProgress.percent)}</span>
+        {:else}
+          {$t('about.update')}
+        {/if}
       </button>
     </div>
   {/if}

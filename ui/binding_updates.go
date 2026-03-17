@@ -49,6 +49,47 @@ func (b *BindingService) ApplyUpdate() error {
 	return nil
 }
 
+// ApplyUpdateWithProgress starts the update and streams progress events to the frontend.
+// Emits "update-progress" events with {stage, percent, downloadedBytes, totalBytes, done, error}.
+func (b *BindingService) ApplyUpdateWithProgress() error {
+	app := application.Get()
+
+	stream, err := b.client.Service.ApplyUpdateStream(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		for {
+			msg, err := stream.Recv()
+			if err != nil {
+				app.Event.Emit("update-progress", map[string]interface{}{
+					"error": err.Error(),
+				})
+				return
+			}
+
+			payload := map[string]interface{}{
+				"stage":           msg.Stage,
+				"percent":         msg.Percent,
+				"downloadedBytes": msg.DownloadedBytes,
+				"totalBytes":      msg.TotalBytes,
+				"done":            msg.Done,
+			}
+			if msg.Error != "" {
+				payload["error"] = msg.Error
+			}
+			app.Event.Emit("update-progress", payload)
+
+			if msg.Done || msg.Error != "" {
+				return
+			}
+		}
+	}()
+
+	return nil
+}
+
 // StartUpdateNotifier starts a background goroutine that checks for updates
 // shortly after startup and then once per hour. The daemon's Checker.Start()
 // also polls GitHub on its own interval and caches the result — this goroutine

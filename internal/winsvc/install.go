@@ -197,6 +197,39 @@ func IsServiceRunning() bool {
 	return status.State == svc.Running
 }
 
+// SetRecoveryActions sets (or clears) SCM recovery actions for the service.
+// Pass nil to disable all recovery (no-restart-on-crash).
+func SetRecoveryActions(actions []mgr.RecoveryAction) error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return &ServiceError{Op: "connect to SCM", Err: err}
+	}
+	defer m.Disconnect()
+
+	s, err := m.OpenService(ServiceName)
+	if err != nil {
+		return &ServiceError{Op: "open service", Err: err}
+	}
+	defer s.Close()
+
+	if actions == nil {
+		actions = []mgr.RecoveryAction{
+			{Type: mgr.NoAction, Delay: 0},
+		}
+	}
+	return s.SetRecoveryActions(actions, 86400)
+}
+
+// RestoreDefaultRecoveryActions re-enables the default recovery actions
+// (restart on first 3 failures).
+func RestoreDefaultRecoveryActions() error {
+	return SetRecoveryActions([]mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
+	})
+}
+
 // SetStartType changes the service start type (Automatic, Manual, Disabled).
 func SetStartType(startType uint32) error {
 	m, err := mgr.Connect()

@@ -114,6 +114,96 @@ func (s *Service) ApplyUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.Ap
 	return &vpnapi.ApplyUpdateResponse{Success: true}, nil
 }
 
+// ApplyUpdateStream streams download/install progress to the client.
+func (s *Service) ApplyUpdateStream(_ *emptypb.Empty, stream vpnapi.VPNService_ApplyUpdateStreamServer) error {
+	if s.updateChecker == nil {
+		return stream.Send(&vpnapi.UpdateProgress{Error: "update checker not initialized"})
+	}
+
+	info := s.updateChecker.GetLatestInfo()
+	if info == nil {
+		return stream.Send(&vpnapi.UpdateProgress{Error: "no update available"})
+	}
+
+	// Report initial state.
+	_ = stream.Send(&vpnapi.UpdateProgress{
+		Stage:      "downloading",
+		Percent:    0,
+		TotalBytes: info.AssetSize,
+	})
+
+	// Download with progress callback.
+	progressFn := func(downloaded, total int64) {
+		pct := int32(0)
+		if total > 0 {
+			pct = int32(downloaded * 80 / total) // 0-80% for download
+		}
+		_ = stream.Send(&vpnapi.UpdateProgress{
+			Stage:           "downloading",
+			Percent:         pct,
+			DownloadedBytes: downloaded,
+			TotalBytes:      total,
+		})
+	}
+
+	extractDir, err := update.Download(stream.Context(), info, s.httpClient, progressFn)
+	if err != nil {
+		return stream.Send(&vpnapi.UpdateProgress{Error: fmt.Sprintf("download failed: %v", err)})
+	}
+
+	cleanupExtract := true
+	defer func() {
+		if cleanupExtract {
+			os.RemoveAll(filepath.Dir(extractDir))
+		}
+	}()
+
+	_ = stream.Send(&vpnapi.UpdateProgress{
+		Stage:   "extracting",
+		Percent: 85,
+	})
+
+	// Find updater binary.
+	exe, err := os.Executable()
+	if err != nil {
+		return stream.Send(&vpnapi.UpdateProgress{Error: fmt.Sprintf("cannot determine install dir: %v", err)})
+	}
+	installDir := filepath.Dir(exe)
+	updaterPath := filepath.Join(installDir, "awg-split-tunnel-updater.exe")
+
+	if _, err := os.Stat(updaterPath); err != nil {
+		return stream.Send(&vpnapi.UpdateProgress{Error: "updater binary not found"})
+	}
+
+	_ = stream.Send(&vpnapi.UpdateProgress{
+		Stage:   "launching_updater",
+		Percent: 95,
+	})
+
+	// Launch updater as a fully detached process.
+	core.Log.Infof("Update", "Launching updater: %s", updaterPath)
+	cmd := exec.Command(updaterPath,
+		"--install-dir", installDir,
+		"--temp-dir", extractDir,
+		"--start-service",
+		"--launch-gui",
+	)
+	cmd.Dir = installDir
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | 0x00000008, // DETACHED_PROCESS
+	}
+	if err := cmd.Start(); err != nil {
+		return stream.Send(&vpnapi.UpdateProgress{Error: fmt.Sprintf("failed to launch updater: %v", err)})
+	}
+
+	cleanupExtract = false
+	return stream.Send(&vpnapi.UpdateProgress{
+		Stage:   "launching_updater",
+		Percent: 100,
+		Done:    true,
+	})
+}
+
 // ─── Conflicting services ──────────────────────────────────────────
 
 func (s *Service) CheckConflictingServices(_ context.Context, _ *emptypb.Empty) (*vpnapi.ConflictingServicesResponse, error) {

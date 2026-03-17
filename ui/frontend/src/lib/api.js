@@ -188,6 +188,10 @@ export function applyUpdate() {
   return BindingService.ApplyUpdate();
 }
 
+export function applyUpdateWithProgress() {
+  return BindingService.ApplyUpdateWithProgress();
+}
+
 export function startUpdateNotifier() {
   return BindingService.StartUpdateNotifier();
 }

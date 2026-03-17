@@ -6,6 +6,7 @@ import (
 	"context"
 	"embed"
 	_ "embed"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -40,6 +41,9 @@ var (
 
 func main() {
 	runtime.LockOSThread()
+
+	minimized := flag.Bool("minimized", false, "Start minimized to system tray")
+	flag.Parse()
 
 	// Single-instance guard: only one UI process is allowed.
 	if !acquireSingleInstance() {
@@ -79,8 +83,10 @@ func main() {
 		},
 	})
 
-	// Create initial window (destroyed on close to free WebView2 memory).
-	mainWindow = createMainWindow()
+	// Create initial window unless started minimized (e.g. after update).
+	if !*minimized {
+		mainWindow = createMainWindow()
+	}
 
 	// Listen for "show UI" messages from duplicate instances.
 	registerWindowMessageHook(func() {

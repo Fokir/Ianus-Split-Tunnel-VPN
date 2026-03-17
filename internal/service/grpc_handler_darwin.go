@@ -85,6 +85,11 @@ func (s *Service) ApplyUpdate(ctx context.Context, _ *emptypb.Empty) (*vpnapi.Ap
 	return &vpnapi.ApplyUpdateResponse{Success: true}, nil
 }
 
+func (s *Service) ApplyUpdateStream(_ *emptypb.Empty, stream vpnapi.VPNService_ApplyUpdateStreamServer) error {
+	// TODO: implement streaming update for macOS
+	return stream.Send(&vpnapi.UpdateProgress{Error: "streaming update not implemented on macOS"})
+}
+
 func (s *Service) CheckConflictingServices(_ context.Context, _ *emptypb.Empty) (*vpnapi.ConflictingServicesResponse, error) {
 	// No conflicting service detection on macOS.
 	return &vpnapi.ConflictingServicesResponse{}, nil

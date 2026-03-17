@@ -64,9 +64,12 @@ func main() {
 	pw.Show()
 	defer pw.Close()
 
-	// Step 1: Wait for service and GUI to exit.
+	// Step 1: Disable SCM recovery so force-kill doesn't trigger auto-restart.
 	pw.SetStatus("Stopping service...")
 	pw.SetProgress(5)
+	restoreRecovery := disableSCMRecovery()
+	defer restoreRecovery()
+
 	logger.Printf("Waiting for service and GUI to exit...")
 	if err := waitForProcessExit(*installDir, 30*time.Second); err != nil {
 		logger.Printf("Warning: %v (proceeding anyway)", err)
@@ -149,7 +152,10 @@ func main() {
 		if _, err := os.Stat(guiPath); err == nil {
 			logger.Printf("Launching GUI: %s", guiPath)
 			if err := launchGUIProcess(guiPath); err != nil {
-				logger.Printf("Warning: failed to launch GUI: %v", err)
+				logger.Printf("Warning: CreateProcessAsUser failed: %v — trying ShellExecute fallback", err)
+				if err := launchGUIFallback(guiPath); err != nil {
+					logger.Printf("Error: ShellExecute fallback also failed: %v", err)
+				}
 			}
 		}
 	}
@@ -166,56 +172,69 @@ func main() {
 	time.Sleep(1 * time.Second)
 }
 
+// disableSCMRecovery temporarily disables SCM recovery actions so that
+// a force-killed service process is not restarted automatically.
+// Returns a restore function that re-enables them.
+func disableSCMRecovery() func() {
+	if !winsvc.IsServiceInstalled() {
+		return func() {}
+	}
+	// Set empty recovery actions (no restart on failure).
+	_ = winsvc.SetRecoveryActions(nil)
+	return func() {
+		// Restore default recovery actions after update.
+		_ = winsvc.RestoreDefaultRecoveryActions()
+	}
+}
+
 // waitForProcessExit waits until service and GUI processes stop.
-func waitForProcessExit(installDir string, timeout time.Duration) error {
+func waitForProcessExit(_ string, _ time.Duration) error {
+	// Kill the GUI first — it has no persistent state to lose and killing it
+	// before the service avoids UI error popups from a broken gRPC connection.
+	if isProcessRunning("awg-split-tunnel-ui.exe") {
+		_ = exec.Command("taskkill", "/F", "/IM", "awg-split-tunnel-ui.exe").Run()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if !isProcessRunning("awg-split-tunnel-ui.exe") {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
 	// Stop the service gracefully via SCM if running.
 	if winsvc.IsServiceRunning() {
 		if err := winsvc.StopService(); err != nil {
-			return fmt.Errorf("stop service: %w", err)
+			// StopService failed — force kill below.
+			_ = fmt.Errorf("stop service: %w", err)
 		}
 	}
 
 	// Wait for the service process to actually terminate (not just SCM status).
-	// StopService returns when SCM reports Stopped, but the process may still
-	// be running its shutdown sequence (up to 10s timeout).
 	svcDeadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(svcDeadline) {
 		if !isProcessRunning("awg-split-tunnel.exe") {
-			break
+			return nil
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+
+	// Force kill the service process if it's still hanging.
 	if isProcessRunning("awg-split-tunnel.exe") {
-		// Force kill the service process if it's still hanging.
 		_ = exec.Command("taskkill", "/F", "/IM", "awg-split-tunnel.exe").Run()
-		time.Sleep(1 * time.Second)
-	}
-
-	// Give the GUI a few seconds to notice the service is gone and exit on its own.
-	gracePeriod := 5 * time.Second
-	if gracePeriod > timeout {
-		gracePeriod = timeout
-	}
-	deadline := time.Now().Add(gracePeriod)
-	for time.Now().Before(deadline) {
-		if !isProcessRunning("awg-split-tunnel-ui.exe") {
-			return nil
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if !isProcessRunning("awg-split-tunnel.exe") {
+				return nil
+			}
+			time.Sleep(500 * time.Millisecond)
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
 
-	// GUI didn't exit gracefully — force kill it.
-	_ = exec.Command("taskkill", "/F", "/IM", "awg-split-tunnel-ui.exe").Run()
-
-	// Wait for the process to actually terminate.
-	deadline = time.Now().Add(timeout - gracePeriod)
-	for time.Now().Before(deadline) {
-		if !isProcessRunning("awg-split-tunnel-ui.exe") {
-			return nil
-		}
-		time.Sleep(500 * time.Millisecond)
+	if isProcessRunning("awg-split-tunnel.exe") {
+		return fmt.Errorf("timeout waiting for service to exit after taskkill")
 	}
-	return fmt.Errorf("timeout waiting for GUI to exit after taskkill")
+	return nil
 }
 
 // isProcessRunning checks if a process with the given name is running.
@@ -359,7 +378,7 @@ func launchGUIProcess(guiPath string) error {
 
 	// Prepare command line and startup info.
 	exe, _ := windows.UTF16PtrFromString(guiPath)
-	cmdLine, _ := windows.UTF16PtrFromString(fmt.Sprintf(`"%s" --minimized`, guiPath))
+	cmdLine, _ := windows.UTF16PtrFromString(fmt.Sprintf(`"%s"`, guiPath))
 	workDir, _ := windows.UTF16PtrFromString(filepath.Dir(guiPath))
 	desktop, _ := windows.UTF16PtrFromString(`winsta0\default`)
 
@@ -387,6 +406,38 @@ func launchGUIProcess(guiPath string) error {
 
 	windows.CloseHandle(pi.Thread)
 	windows.CloseHandle(pi.Process)
+	return nil
+}
+
+// launchGUIFallback uses Windows Task Scheduler to launch the GUI in the
+// interactive user's session. This works reliably from SYSTEM context when
+// CreateProcessAsUser fails (e.g. locked desktop, RDP sessions).
+func launchGUIFallback(guiPath string) error {
+	const taskName = "AWGSplitTunnelGUILaunch"
+
+	// Create a one-time task that runs as the interactive (logged-on) user.
+	createArgs := []string{
+		"/create",
+		"/tn", taskName,
+		"/tr", fmt.Sprintf(`"%s"`, guiPath),
+		"/sc", "once",
+		"/st", "00:00",
+		"/f",
+		"/it", // interactive only — runs in the logged-on user's session
+	}
+	if err := exec.Command("schtasks", createArgs...).Run(); err != nil {
+		return fmt.Errorf("schtasks create: %w", err)
+	}
+
+	// Run the task immediately.
+	if err := exec.Command("schtasks", "/run", "/tn", taskName).Run(); err != nil {
+		// Clean up the task even on run failure.
+		_ = exec.Command("schtasks", "/delete", "/tn", taskName, "/f").Run()
+		return fmt.Errorf("schtasks run: %w", err)
+	}
+
+	// Clean up the task (no longer needed).
+	_ = exec.Command("schtasks", "/delete", "/tn", taskName, "/f").Run()
 	return nil
 }
 
