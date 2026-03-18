@@ -708,6 +708,10 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	statsCollector := service.NewStatsCollector(registry, bus)
 	tunRouter.SetBytesReporter(statsCollector.AddBytes)
 
+	// === 11e. Connection Monitor ===
+	connMon := service.NewConnectionMonitor(flows, domainTable, nil)
+	go connMon.Start(ctx)
+
 	// === 12. Start TUN Router ===
 	if err := tunRouter.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start TUN router: %w", err)
@@ -787,6 +791,7 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		UpdateChecker:       updateChecker,
 		ReconnectManager:    reconnectMgr,
 		HealthMonitor:       healthMon,
+		ConnMonitor:         connMon,
 	})
 	svc.Start(ctx)
 

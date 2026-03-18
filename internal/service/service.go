@@ -67,6 +67,7 @@ type Service struct {
 	updateChecker     *update.Checker
 	reconnectMgr      *ReconnectManager
 	healthMon         *HealthMonitor
+	connMonitor       *ConnectionMonitor
 
 	// Cached geo category lists (parsed from geoip.dat / geosite.dat).
 	// Avoids re-reading and re-parsing 20-30 MB protobuf files on every UI request.
@@ -108,6 +109,8 @@ type Config struct {
 	ReconnectManager *ReconnectManager
 	// HealthMonitor checks peer liveness for WG/AWG tunnels.
 	HealthMonitor *HealthMonitor
+	// ConnMonitor tracks active connections for the Connections gRPC stream.
+	ConnMonitor *ConnectionMonitor
 }
 
 // New creates a new Service instance.
@@ -140,6 +143,7 @@ func New(c Config) *Service {
 	s.updateChecker = c.UpdateChecker
 	s.reconnectMgr = c.ReconnectManager
 	s.healthMon = c.HealthMonitor
+	s.connMonitor = c.ConnMonitor
 
 	// Initialize GeoIP resolver for IP→country lookup (best-effort).
 	if c.GeoIPFilePath != "" {
