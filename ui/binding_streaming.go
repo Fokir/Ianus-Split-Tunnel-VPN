@@ -210,6 +210,58 @@ func logLevelStr(l vpnapi.LogLevel) string {
 	}
 }
 
+// ─── Connection Monitor streaming ────────────────────────────────────
+
+// StartConnectionMonitorStream starts streaming connection snapshots to the frontend.
+// Safe to call multiple times; only the first call starts the stream.
+func (b *BindingService) StartConnectionMonitorStream() {
+	b.connMonOnce.Do(func() {
+		go b.runConnectionMonitorStream()
+	})
+}
+
+func (b *BindingService) runConnectionMonitorStream() {
+	for {
+		if b.client == nil {
+			time.Sleep(time.Second)
+			continue
+		}
+		stream, err := b.client.Service.StreamConnections(b.ctx, &vpnapi.ConnectionMonitorRequest{})
+		if err != nil {
+			log.Printf("[UI] connection monitor stream error: %v", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		for {
+			snap, err := stream.Recv()
+			if err != nil {
+				log.Printf("[UI] connection monitor stream recv: %v", err)
+				break
+			}
+			if !b.windowVisible.Load() {
+				continue
+			}
+			connections := make([]map[string]interface{}, 0, len(snap.Connections))
+			for _, c := range snap.Connections {
+				connections = append(connections, map[string]interface{}{
+					"processName":  c.ProcessName,
+					"processPath":  c.ProcessPath,
+					"protocol":     c.Protocol,
+					"dstIp":        c.DstIp,
+					"dstPort":      c.DstPort,
+					"domain":       c.Domain,
+					"tunnelId":     c.TunnelId,
+					"state":        c.State,
+					"country":      c.Country,
+					"lastActivity": c.LastActivity,
+				})
+			}
+			app := application.Get()
+			app.Event.Emit("connection-snapshot", connections)
+		}
+	}
+}
+
 // SaveLogsToFile writes log content to the specified file path.
 func (b *BindingService) SaveLogsToFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)

@@ -23,6 +23,7 @@ type BindingService struct {
 	cancel          context.CancelFunc // cancels all streaming goroutines
 	logStreamOnce   sync.Once
 	statsStreamOnce sync.Once
+	connMonOnce     sync.Once
 	notifMgr        *NotificationManager
 	seenBanners     map[string]struct{} // deduplicate banner events
 
