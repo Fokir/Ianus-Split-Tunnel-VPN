@@ -46,13 +46,17 @@ internal/provider/hysteria2/
 
 ### Implementation Details
 - **Protocol constant:** `ProtocolHysteria2 = "hysteria2"` in `core/config.go`
-- **Connect():** Creates QUIC connection via `hysteria2.NewClient(clientConfig)`. Client config includes server address, TLS config (SNI, insecure), auth (password), bandwidth hints, and optional obfuscation.
-- **DialTCP():** `client.TCP(addr)` returns `net.Conn` — proxied TCP connection through QUIC tunnel.
-- **DialUDP():** `client.UDP()` returns `HyUDPConn`. Needs `net.Conn`-compatible adapter wrapping `HyUDPConn.ReadFrom`/`WriteTo` into `Read`/`Write` with connected-UDP semantics.
-- **Disconnect():** `client.Close()` — graceful QUIC teardown.
+- **Library API:** The actual `github.com/apernet/hysteria/core/v2` API must be verified at implementation time. The method names below are illustrative — the real API may differ. If the library does not expose an embeddable client API, fall back to using hysteria2 as a local SOCKS5 subprocess.
+- **Connect():** Creates QUIC connection via hysteria2 client API. Client config includes server address, TLS config (SNI, insecure), auth (password), bandwidth hints, and optional obfuscation.
+- **DialTCP():** Proxied TCP connection through QUIC tunnel → returns `net.Conn`.
+- **DialUDP():** Returns UDP connection through QUIC tunnel. The hysteria2 UDP API returns a packet-oriented connection — needs a `net.Conn`-compatible adapter that wraps `ReadFrom`/`WriteTo` into `Read`/`Write` with connected-UDP semantics (buffer incoming packets, track remote addr from first Write).
+- **Disconnect():** Graceful QUIC teardown.
+- **Reconnection:** QUIC connection is persistent. On connection drop, provider transitions to Error state. The tunnel controller's health monitor calls `Connect()` again (same pattern as other providers). In-flight `DialTCP`/`DialUDP` calls return error immediately when client is nil/closed.
 - **GetServerEndpoints():** Returns parsed server address for bypass route creation.
 - **Bandwidth hints:** Passed to server for Brutal CC — this is what gives speed advantage on lossy networks. If not set, server uses default (may throttle).
 - **Obfuscation:** Salamander mode XORs QUIC packets with a key, making them undetectable as QUIC by DPI.
+- **Log tag:** `[Hysteria2]`
+- **Dependency note:** Pulls in `quic-go` and its dependencies — adds ~5-10MB to binary size.
 
 ### Registration
 In `tunnel_controller.go` `CreateProvider()`:
@@ -90,12 +94,15 @@ tunnels:
       server: "example.com"
       port: 22
       username: "user"
-      password: "pass"                    # auth option 1
-      private_key_path: "~/.ssh/id_ed25519"  # auth option 2
-      private_key_passphrase: ""          # if key is encrypted
-      host_key: "ssh-ed25519 AAAA..."     # known host (empty = accept any)
-      keepalive_interval: 30              # seconds, default 30
+      password: "pass"                         # auth option 1
+      private_key_path: "C:/Users/user/.ssh/id_ed25519"  # auth option 2 (absolute path, ~ expanded via os.UserHomeDir)
+      private_key_passphrase: ""               # if key is encrypted
+      host_key: "ssh-ed25519 AAAA..."          # known host fingerprint
+      insecure_skip_host_key: false            # DANGEROUS: skip host key verification (default: false)
+      keepalive_interval: 30                   # seconds, default 30
 ```
+
+**Security:** Host key verification is **required by default**. If `host_key` is empty and `insecure_skip_host_key` is false, `Connect()` returns an error asking the user to provide a host key. Setting `insecure_skip_host_key: true` disables verification with a WARN-level log message. This matches the Hysteria2 `insecure` pattern.
 
 ### Files
 ```
@@ -105,12 +112,15 @@ internal/provider/ssh/
 
 ### Implementation Details
 - **Protocol constant:** `ProtocolSSH = "ssh"` in `core/config.go`
-- **Connect():** `ssh.Dial("tcp", addr, clientConfig)`. Auth methods: password (`ssh.Password`) and/or publickey (`ssh.PublicKeys` from parsed private key file). Host key callback uses `host_key` setting if provided, otherwise `ssh.InsecureIgnoreHostKey()` with a log warning.
+- **Connect():** `ssh.Dial("tcp", addr, clientConfig)`. Auth methods: password (`ssh.Password`) and/or publickey (`ssh.PublicKeys` from parsed private key file). Host key callback: if `host_key` is set, verify against it; if `insecure_skip_host_key` is true, accept any (WARN log); otherwise return error.
+- **Private key path:** Tilde (`~`) is expanded via `os.UserHomeDir()`. Relative paths resolved relative to config file directory (not exe).
 - **DialTCP():** `client.Dial("tcp", addr)` — SSH channel-based TCP forwarding (equivalent to `ssh -L`).
 - **DialUDP():** Returns `ErrUDPNotSupported` (same pattern as HTTP Proxy provider).
-- **Keepalive:** Background goroutine sends `client.SendRequest("keepalive@openssh.com", true, nil)` every N seconds. If keepalive fails, marks state as Error and triggers reconnect.
+- **Keepalive:** Background goroutine sends `client.SendRequest("keepalive@openssh.com", true, nil)` every N seconds. If keepalive fails, marks state as Error.
+- **Reconnection:** Provider transitions to Error state on keepalive failure or connection drop. The tunnel controller's health monitor calls `Connect()` again. Provider does not attempt internal reconnection — consistent with other providers.
 - **State management:** `sync.RWMutex`-protected state. Transitions: Down → Connecting → Up → Error/Down.
 - **GetServerEndpoints():** Returns server:port for bypass route.
+- **Log tag:** `[SSH]`
 
 ### UDP Limitation
 DNS queries for processes bound to SSH tunnel will use DNS-over-TCP fallback, which is already implemented in `dns_resolver.go`. This is acceptable — SSH tunnels are typically used for web browsing where TCP DNS has negligible impact.
@@ -127,6 +137,7 @@ case core.ProtocolSSH:
         PrivateKeyPath:       getStringSetting(s, "private_key_path", ""),
         PrivateKeyPassphrase: getStringSetting(s, "private_key_passphrase", ""),
         HostKey:              getStringSetting(s, "host_key", ""),
+        InsecureSkipHostKey:  getBoolSetting(s, "insecure_skip_host_key", false),
         KeepaliveInterval:    getIntSetting(s, "keepalive_interval", 30),
     }
     return ssh.New(name, cfg)
@@ -142,17 +153,16 @@ New streaming gRPC RPC + Wails binding + Svelte tab. Data sourced from flow tabl
 ### Proto Definition
 ```protobuf
 message ConnectionEntry {
-  uint32 pid = 1;
-  string process_name = 2;       // "chrome.exe"
-  string process_path = 3;       // full path
-  string protocol = 4;           // "TCP" / "UDP"
-  string dst_ip = 5;
-  uint32 dst_port = 6;
-  string domain = 7;             // from domain table reverse lookup
-  string tunnel_id = 8;
-  string state = 9;              // "active" / "fin"
-  string country = 10;           // GeoIP: "RU", "US", etc.
-  int64 created_at = 11;         // unix seconds
+  string process_name = 1;       // "chrome.exe" (from BaseLower, empty for raw flows)
+  string process_path = 2;       // full path (from ExeLower, empty for raw flows)
+  string protocol = 3;           // "TCP" / "UDP"
+  string dst_ip = 4;
+  uint32 dst_port = 5;
+  string domain = 6;             // from domain table reverse lookup
+  string tunnel_id = 7;
+  string state = 8;              // "active" / "fin"
+  string country = 9;            // GeoIP: "RU", "US", etc.
+  int64 last_activity = 10;      // unix seconds, last packet seen
 }
 
 message ConnectionMonitorRequest {
@@ -172,42 +182,72 @@ rpc StreamConnections(ConnectionMonitorRequest) returns (stream ConnectionSnapsh
 
 **`internal/service/connection_monitor.go`** — New file:
 - `ConnectionMonitor` struct: holds references to FlowTable, ProcessIdentifier, DomainTable, GeoIPMatcher
-- `Start(ctx)` — launches snapshot goroutine (2s interval)
+- `Start(ctx)` — launches snapshot goroutine (2s interval). **Only ticks when there are active subscribers** (skip work otherwise).
 - `Subscribe() <-chan *ConnectionSnapshot` / `Unsubscribe(ch)`
-- Each tick: calls `FlowTable.SnapshotNAT()` + `FlowTable.SnapshotRaw()`, enriches with process name, domain, GeoIP country, sends to subscribers
+- Each tick: calls `FlowTable.SnapshotNAT()` + `FlowTable.SnapshotUDP()` + `FlowTable.SnapshotRaw()`, enriches with process name, domain, GeoIP country, sends to subscribers
+- **Snapshot size limit:** Max 2000 entries per snapshot (sorted by LastActivity desc). Normal operation has ~100-500 active flows; the limit protects against pathological cases.
+
+### Process Info Strategy
+
+**NAT entries (TCP/UDP proxy path):** `ExeLower` and `BaseLower` are already stored at flow insertion time. Use `BaseLower` as `process_name` and `ExeLower` as `process_path`. PID is **not** stored in flow table and is **not** resolved at snapshot time (avoiding expensive reverse lookups for closed connections). PID field in proto is set to 0 (unknown).
+
+**Raw flow entries (IP-level tunnels):** No process info stored. These entries represent raw IP forwarding where PID was resolved at routing time but not persisted. Process info shows as "unknown" in the monitor. This is acceptable — raw flows are used by AmneziaWG/WireGuard tunnels where all traffic for a process goes through one tunnel anyway.
 
 ### Flow Table Changes (`flow_table.go`)
 
 New methods (read-only, no hot-path impact):
-- `SnapshotNAT() []NATSnapshotEntry` — iterates all shards under RLock, copies active NAT entries (TCP proxy path)
-- `SnapshotRaw() []RawSnapshotEntry` — iterates all shards under RLock, copies active raw flow entries (IP-level tunnels)
+- `SnapshotNAT() []NATSnapshotEntry` — iterates TCP NAT shards under RLock, copies active entries
+- `SnapshotUDP() []UDPSnapshotEntry` — iterates UDP NAT shards under RLock, copies active entries
+- `SnapshotRaw() []RawSnapshotEntry` — iterates raw flow shards under RLock, copies active entries
 
 Snapshot structs (lightweight copies):
 ```go
 type NATSnapshotEntry struct {
-    SrcPort       uint16
-    OriginalDstIP netip.Addr
+    SrcPort         uint16
+    OriginalDstIP   netip.Addr
     OriginalDstPort uint16
-    TunnelID      string
-    LastActivity  int64
-    FinSeen       int32
+    ResolvedDstIP   netip.Addr    // FakeIP → real IP (if applicable)
+    TunnelID        string
+    ExeLower        string        // process path (lowercase)
+    BaseLower       string        // process name (lowercase)
+    LastActivity    int64
+    FinSeen         int32
+}
+
+type UDPSnapshotEntry struct {
+    SrcPort         uint16
+    OriginalDstIP   netip.Addr
+    OriginalDstPort uint16
+    ResolvedDstIP   netip.Addr
+    TunnelID        string
+    ExeLower        string
+    BaseLower       string
+    LastActivity    int64
 }
 
 type RawSnapshotEntry struct {
-    Protocol    uint8
-    DstIP       netip.Addr
-    SrcPort     uint16
-    TunnelID    string
+    Protocol     uint8
+    DstIP        netip.Addr
+    SrcPort      uint16
+    TunnelID     string
     LastActivity int64
-    FakeIP      netip.Addr
-    RealDstIP   netip.Addr
+    FakeIP       netip.Addr
+    RealDstIP    netip.Addr
 }
 ```
 
 ### Domain Table Changes (`domain_table.go`)
 
 New method:
-- `ReverseLookup(ip netip.Addr) string` — reverse lookup IP → domain name. The domain table already stores `ip → DomainEntry` mapping; this just exposes the domain name field.
+- `ReverseLookup(ip netip.Addr) string` — reverse lookup IP → domain name. The domain table stores `[4]byte → DomainEntry` mapping (IPv4 only); this just exposes the domain name field. IPv6 destinations return empty string (acceptable given the existing IPv4-only domain table).
+
+### `created_at` Semantics
+
+The `created_at` field in `ConnectionEntry` maps to `LastActivity` from the flow table. This value is set at insertion time and continuously updated — so it represents "last seen", not "created". The field is renamed to `last_activity` in the proto to avoid confusion:
+
+```protobuf
+  int64 last_activity = 11;     // unix seconds, last packet seen
+```
 
 ### gRPC Handler (`grpc_handler.go`)
 
@@ -296,5 +336,9 @@ Add keys to `en.json` and `ru.json`:
 ## Out of Scope
 - Hysteria2 port hopping (future enhancement)
 - SSH SOCKS5 dynamic forwarding (`-D` mode) — direct TCP forwarding is simpler and sufficient
+- SSH agent forwarding (`ssh-agent`) — future enhancement
 - Per-connection byte counters (would require hot-path changes to flow table)
 - Connection history / persistence (only live connections shown)
+- PID resolution at snapshot time (expensive, unreliable for closed connections)
+- IPv6 domain reverse lookup (domain table is IPv4-only)
+- DPI Bypass interaction with Hysteria2 Salamander obfuscation (orthogonal features, no conflict — DPI Bypass operates at TCP level, Hysteria2 uses QUIC)
