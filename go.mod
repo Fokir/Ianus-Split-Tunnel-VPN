@@ -5,6 +5,7 @@ go 1.25.7
 require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/amnezia-vpn/amneziawg-go v0.0.0-00010101000000-000000000000
+	github.com/apernet/hysteria/core/v2 v2.7.1
 	github.com/go-toast/toast v0.0.0-20190211030409-01e6764cf0a4
 	github.com/pion/dtls/v3 v3.1.2
 	github.com/tailscale/wf v0.0.0-00010101000000-000000000000
@@ -25,12 +26,12 @@ require (
 	github.com/ProtonMail/go-crypto v1.3.0 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/andybalholm/brotli v1.0.6 // indirect
-	github.com/apernet/hysteria/core/v2 v2.7.1 // indirect
 	github.com/apernet/quic-go v0.59.1-0.20260217092621-db4786c77a22 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/ebitengine/purego v0.9.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344 // indirect
@@ -62,6 +63,7 @@ require (
 	github.com/pires/go-proxyproto v0.9.2 // indirect
 	github.com/pjbgf/sha1cd v0.5.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
@@ -70,6 +72,8 @@ require (
 	github.com/samber/lo v1.52.0 // indirect
 	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/skeema/knownhosts v1.3.2 // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/vishvananda/netlink v1.3.1 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/wailsapp/go-webview2 v1.0.23 // indirect
