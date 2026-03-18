@@ -46,6 +46,35 @@ tunnels:
     # disallowed_apps:
     #   - "qbittorrent.exe"
 
+  # Hysteria2 — QUIC-based protocol with Brutal congestion control
+  # - id: hy2
+  #   protocol: hysteria2
+  #   name: "Hysteria2 Server"
+  #   settings:
+  #     server: "example.com:443"
+  #     password: "my-password"
+  #     # obfs_type: salamander         # optional: obfuscation type
+  #     # obfs_password: "obfs-key"     # required if obfs_type is set
+  #     # sni: "cover.example.com"      # optional: TLS SNI override
+  #     # insecure: false               # optional: skip TLS verification
+  #     # up_mbps: 100                  # optional: upload bandwidth hint for Brutal CC
+  #     # down_mbps: 200                # optional: download bandwidth hint
+
+  # SSH Tunnel — TCP forwarding over SSH (any VPS with OpenSSH)
+  # - id: ssh1
+  #   protocol: ssh
+  #   name: "SSH Server"
+  #   settings:
+  #     server: "example.com"
+  #     port: 22
+  #     username: "user"
+  #     password: "pass"                          # auth option 1: password
+  #     # private_key_path: "C:/Users/user/.ssh/id_ed25519"  # auth option 2: key file
+  #     # private_key_passphrase: ""              # passphrase for encrypted key
+  #     host_key: "ssh-ed25519 AAAA..."           # server host key (required by default)
+  #     # insecure_skip_host_key: false           # DANGEROUS: skip host key verification
+  #     # keepalive_interval: 30                  # keepalive interval in seconds
+
 rules:
   # Route Firefox through the German AWG tunnel, block if tunnel is down (kill switch)
 #  - pattern: "firefox.exe"
