@@ -20,6 +20,8 @@ import (
 	"awg-split-tunnel/internal/provider/httpproxy"
 	"awg-split-tunnel/internal/provider/socks5"
 	"awg-split-tunnel/internal/provider/anyconnect"
+	"awg-split-tunnel/internal/provider/hysteria2"
+	sshprov "awg-split-tunnel/internal/provider/ssh"
 	"awg-split-tunnel/internal/provider/vless"
 	"awg-split-tunnel/internal/provider/wireguard"
 	"awg-split-tunnel/internal/proxy"
@@ -678,6 +680,31 @@ func CreateProvider(cfg core.TunnelConfig) (provider.TunnelProvider, error) {
 			DTLS:          getBoolSetting(cfg.Settings, "dtls", false),
 		}
 		return anyconnect.New(cfg.Name, acCfg)
+	case core.ProtocolHysteria2:
+		hy2Cfg := hysteria2.Config{
+			Server:       getStringSetting(cfg.Settings, "server", ""),
+			Password:     getStringSetting(cfg.Settings, "password", ""),
+			ObfsType:     getStringSetting(cfg.Settings, "obfs_type", ""),
+			ObfsPassword: getStringSetting(cfg.Settings, "obfs_password", ""),
+			SNI:          getStringSetting(cfg.Settings, "sni", ""),
+			Insecure:     getBoolSetting(cfg.Settings, "insecure", false),
+			UpMbps:       getIntSetting(cfg.Settings, "up_mbps", 0),
+			DownMbps:     getIntSetting(cfg.Settings, "down_mbps", 0),
+		}
+		return hysteria2.New(cfg.Name, hy2Cfg)
+	case core.ProtocolSSH:
+		sshCfg := sshprov.Config{
+			Server:               getStringSetting(cfg.Settings, "server", ""),
+			Port:                 getIntSetting(cfg.Settings, "port", 22),
+			Username:             getStringSetting(cfg.Settings, "username", ""),
+			Password:             getStringSetting(cfg.Settings, "password", ""),
+			PrivateKeyPath:       getStringSetting(cfg.Settings, "private_key_path", ""),
+			PrivateKeyPassphrase: getStringSetting(cfg.Settings, "private_key_passphrase", ""),
+			HostKey:              getStringSetting(cfg.Settings, "host_key", ""),
+			InsecureSkipHostKey:  getBoolSetting(cfg.Settings, "insecure_skip_host_key", false),
+			KeepaliveInterval:    getIntSetting(cfg.Settings, "keepalive_interval", 30),
+		}
+		return sshprov.New(cfg.Name, sshCfg)
 	default:
 		return nil, fmt.Errorf("unknown protocol %q for tunnel %q", cfg.Protocol, cfg.ID)
 	}

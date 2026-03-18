@@ -5,7 +5,7 @@ go 1.25.7
 require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/amnezia-vpn/amneziawg-go v0.0.0-00010101000000-000000000000
-	github.com/apernet/hysteria/core/v2 v2.7.1
+	github.com/apernet/hysteria/core/v2 v2.7.0
 	github.com/go-toast/toast v0.0.0-20190211030409-01e6764cf0a4
 	github.com/pion/dtls/v3 v3.1.2
 	github.com/tailscale/wf v0.0.0-00010101000000-000000000000
@@ -26,7 +26,7 @@ require (
 	github.com/ProtonMail/go-crypto v1.3.0 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/andybalholm/brotli v1.0.6 // indirect
-	github.com/apernet/quic-go v0.59.1-0.20260217092621-db4786c77a22 // indirect
+	github.com/apernet/quic-go v0.57.2-0.20260111184307-eec823306178 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
