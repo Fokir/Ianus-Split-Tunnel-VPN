@@ -90,6 +90,22 @@ func (dt *DomainTable) Len() int {
 	return n
 }
 
+// ReverseLookup returns the domain name associated with the given IP address.
+// Returns empty string if not found or if the IP is IPv6 (domain table is IPv4-only).
+func (dt *DomainTable) ReverseLookup(ip netip.Addr) string {
+	if !ip.Is4() {
+		return ""
+	}
+	ip4 := ip.As4()
+	dt.mu.RLock()
+	entry, ok := dt.entries[ip4]
+	dt.mu.RUnlock()
+	if ok {
+		return entry.Domain
+	}
+	return ""
+}
+
 // StartCleanup runs a background goroutine that removes expired entries every 60s.
 func (dt *DomainTable) StartCleanup(ctx context.Context) {
 	core.SafeGo("domain-table.cleanup", func() {
