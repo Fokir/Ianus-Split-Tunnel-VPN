@@ -81,9 +81,6 @@ func (re *RuleEngine) Match(exePath string) MatchResult {
 			matched = process.MatchPreprocessed(exeLower, baseLower, rule.Pattern, re.rulesLower[i])
 		}
 		if matched {
-			if rule.TunnelID != "" && rule.TunnelID != "__direct__" && !re.activeTunnels[rule.TunnelID] {
-				continue // skip rule — its tunnel is not connected
-			}
 			return MatchResult{
 				Matched:  true,
 				TunnelID: rule.TunnelID,
@@ -114,9 +111,6 @@ func (re *RuleEngine) MatchPreLowered(exeLower, baseLower string) MatchResult {
 			matched = process.MatchPreprocessed(exeLower, baseLower, rule.Pattern, re.rulesLower[i])
 		}
 		if matched {
-			if rule.TunnelID != "" && rule.TunnelID != "__direct__" && !re.activeTunnels[rule.TunnelID] {
-				continue
-			}
 			return MatchResult{
 				Matched:  true,
 				TunnelID: rule.TunnelID,
@@ -148,9 +142,6 @@ func (re *RuleEngine) MatchPreLoweredFrom(exeLower, baseLower string, startIdx i
 			matched = process.MatchPreprocessed(exeLower, baseLower, re.rules[i].Pattern, re.rulesLower[i])
 		}
 		if matched {
-			if re.rules[i].TunnelID != "" && re.rules[i].TunnelID != "__direct__" && !re.activeTunnels[re.rules[i].TunnelID] {
-				continue
-			}
 			return MatchResult{
 				Matched:  true,
 				TunnelID: re.rules[i].TunnelID,
@@ -242,7 +233,8 @@ func (re *RuleEngine) GetRules() []Rule {
 }
 
 // SetTunnelActive marks a tunnel as connected or disconnected.
-// Rules referencing inactive tunnels are skipped during matching.
+// Used by IsTunnelActive for UI status display. Match methods no longer
+// filter by tunnel state — resolveFlow handles fallback policies instead.
 func (re *RuleEngine) SetTunnelActive(tunnelID string, active bool) {
 	re.mu.Lock()
 	defer re.mu.Unlock()

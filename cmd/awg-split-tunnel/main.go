@@ -85,6 +85,9 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 
 	core.Log.Infof("Core", "AWG Split Tunnel %s starting...", version)
 
+	// Check system clock against NTP (best-effort, non-blocking).
+	core.SafeGo("timecheck", core.CheckSystemTime)
+
 	// Debug pprof server on localhost (for memory profiling).
 	core.SafeGo("debug.pprof", func() {
 		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
