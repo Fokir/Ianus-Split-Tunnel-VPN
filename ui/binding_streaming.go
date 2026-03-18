@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"time"
@@ -213,21 +214,51 @@ func logLevelStr(l vpnapi.LogLevel) string {
 // ─── Connection Monitor streaming ────────────────────────────────────
 
 // StartConnectionMonitorStream starts streaming connection snapshots to the frontend.
-// Safe to call multiple times; only the first call starts the stream.
+// Safe to call multiple times; stops existing stream before starting a new one.
 func (b *BindingService) StartConnectionMonitorStream() {
-	b.connMonOnce.Do(func() {
-		go b.runConnectionMonitorStream()
-	})
+	b.connMonMu.Lock()
+	defer b.connMonMu.Unlock()
+	if b.connMonCancel != nil {
+		return // already running
+	}
+	ctx, cancel := context.WithCancel(b.ctx)
+	b.connMonCancel = cancel
+	go b.runConnectionMonitorStream(ctx)
 }
 
-func (b *BindingService) runConnectionMonitorStream() {
+// StopConnectionMonitorStream stops the connection monitor stream.
+func (b *BindingService) StopConnectionMonitorStream() {
+	b.connMonMu.Lock()
+	defer b.connMonMu.Unlock()
+	if b.connMonCancel != nil {
+		b.connMonCancel()
+		b.connMonCancel = nil
+	}
+}
+
+func (b *BindingService) runConnectionMonitorStream(ctx context.Context) {
+	defer func() {
+		b.connMonMu.Lock()
+		b.connMonCancel = nil
+		b.connMonMu.Unlock()
+	}()
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		if b.client == nil {
 			time.Sleep(time.Second)
 			continue
 		}
-		stream, err := b.client.Service.StreamConnections(b.ctx, &vpnapi.ConnectionMonitorRequest{})
+		stream, err := b.client.Service.StreamConnections(ctx, &vpnapi.ConnectionMonitorRequest{})
 		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			log.Printf("[UI] connection monitor stream error: %v", err)
 			time.Sleep(2 * time.Second)
 			continue
@@ -235,6 +266,11 @@ func (b *BindingService) runConnectionMonitorStream() {
 		for {
 			snap, err := stream.Recv()
 			if err != nil {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
 				log.Printf("[UI] connection monitor stream recv: %v", err)
 				break
 			}

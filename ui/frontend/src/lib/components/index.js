@@ -4,3 +4,4 @@ export { default as ConfirmDialog } from './ConfirmDialog.svelte';
 export { default as EmptyState } from './EmptyState.svelte';
 export { default as DirtyBar } from './DirtyBar.svelte';
 export { default as CollapsibleSection } from './CollapsibleSection.svelte';
+export { default as CountryIcon } from './CountryIcon.svelte';

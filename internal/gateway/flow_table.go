@@ -94,6 +94,8 @@ type RawFlowEntry struct {
 	IsAuto       bool    // true when rule priority was "auto" (per-packet classification)
 	FakeIP       [4]byte // original FakeIP dst (zero if not FakeIP)
 	RealDstIP    [4]byte // real IP destination (for FakeIP rewriting)
+	ExeLower     string  // cached lowercase exe path (for monitoring)
+	BaseLower    string  // cached lowercase base name (for monitoring)
 }
 
 // NATSnapshotEntry is a lightweight copy of a TCP NAT entry for monitoring.
@@ -130,6 +132,8 @@ type RawSnapshotEntry struct {
 	LastActivity int64
 	FakeIP       netip.Addr
 	RealDstIP    netip.Addr
+	ExeLower     string
+	BaseLower    string
 }
 
 // rawFlowKey is a compact key: proto(1) + dstIP(4) + srcPort(2) = 7 bytes.
@@ -894,6 +898,8 @@ func (ft *FlowTable) SnapshotRaw() []RawSnapshotEntry {
 				LastActivity: atomic.LoadInt64(&e.LastActivity),
 				FakeIP:       fakeIP,
 				RealDstIP:    realDstIP,
+				ExeLower:     e.ExeLower,
+				BaseLower:    e.BaseLower,
 			})
 		}
 		s.mu.RUnlock()

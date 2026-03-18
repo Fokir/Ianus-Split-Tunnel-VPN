@@ -369,7 +369,9 @@
     "na": "n/a"
   },
   "monitor": {
+    "filterSearch": "Filter by process, domain, destination...",
     "filterProcess": "Filter by process...",
+    "groups": "groups",
     "allTunnels": "All tunnels",
     "pause": "Pause",
     "resume": "Resume",
@@ -382,7 +384,11 @@
     "country": "Country",
     "state": "State",
     "lastSeen": "Last Seen",
-    "noConnections": "No active connections"
+    "noConnections": "No active connections",
+    "start": "Start",
+    "stop": "Stop",
+    "disabled": "Connection monitor is disabled. Start it to see active connections.",
+    "openFolder": "Open in file explorer"
   },
   "common": {
     "cancel": "Cancel",

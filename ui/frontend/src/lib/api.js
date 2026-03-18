@@ -78,6 +78,12 @@ export function getSSHDir() {
   return BindingService.GetSSHDir();
 }
 
+// ─── File manager ───────────────────────────────────────────────────
+
+export function revealInExplorer(filePath) {
+  return BindingService.RevealInExplorer(filePath);
+}
+
 // ─── Rules ──────────────────────────────────────────────────────────
 
 export function listRules() {

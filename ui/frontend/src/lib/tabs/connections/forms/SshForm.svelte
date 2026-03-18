@@ -8,8 +8,6 @@
   export let password = '';
   export let privateKeyPath = '';
   export let privateKeyPassphrase = '';
-  export let hostKey = '';
-  export let insecureSkipHostKey = false;
   export let keepaliveInterval = '30';
 
   async function browseKey() {

@@ -532,6 +532,16 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 		// tunnelID and proxyPort already set
 	}
 
+	// Backfill process info if resolveFlow returned early (AllowedIPs/FakeIP/Domain/GeoIP path).
+	if fb.exeLower == "" {
+		if pid, err := r.procID.FindPIDByPort(m.srcP, false); err == nil && pid != r.selfPID {
+			if _, exeL, baseL, ok := r.matcher.GetExePathLower(pid); ok {
+				fb.exeLower = exeL
+				fb.baseLower = baseL
+			}
+		}
+	}
+
 	// Resolve FakeIP → real IP for packet rewriting and dial.
 	var fakeIP [4]byte
 	var realDstIP [4]byte
@@ -558,6 +568,8 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 				IsAuto:       isAuto,
 				FakeIP:       fakeIP,
 				RealDstIP:    realDstIP,
+				ExeLower:     fb.exeLower,
+				BaseLower:    fb.baseLower,
 			})
 			// FakeIP: rewrite packet dst from FakeIP to real IP before forwarding.
 			if fakeIP != [4]byte{} {
@@ -794,6 +806,16 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 		// Already set
 	}
 
+	// Backfill process info if resolveFlow returned early (AllowedIPs/FakeIP/Domain/GeoIP path).
+	if fb.exeLower == "" {
+		if pid, err := r.procID.FindPIDByPort(m.srcP, true); err == nil && pid != r.selfPID {
+			if _, exeL, baseL, ok := r.matcher.GetExePathLower(pid); ok {
+				fb.exeLower = exeL
+				fb.baseLower = baseL
+			}
+		}
+	}
+
 	// Resolve FakeIP → real IP for new UDP flows.
 	var fakeIP [4]byte
 	var realDstIP [4]byte
@@ -817,6 +839,8 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 				IsAuto:       isAuto,
 				FakeIP:       fakeIP,
 				RealDstIP:    realDstIP,
+				ExeLower:     fb.exeLower,
+				BaseLower:    fb.baseLower,
 			})
 			// FakeIP: rewrite packet dst from FakeIP to real IP before forwarding.
 			if fakeIP != [4]byte{} {

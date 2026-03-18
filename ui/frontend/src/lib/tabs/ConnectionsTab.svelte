@@ -2,9 +2,9 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { Events } from '@wailsio/runtime';
   import * as api from '../api.js';
-  import { countryFlagUrl, formatSpeed, formatBytes, sortTunnels } from '../utils.js';
+  import { formatSpeed, formatBytes, sortTunnels } from '../utils.js';
   import ErrorAlert from '../ErrorAlert.svelte';
-  import { Spinner, EmptyState } from '../components';
+  import { Spinner, EmptyState, CountryIcon } from '../components';
   import { t } from '../i18n';
   import TunnelFormModal from './connections/TunnelFormModal.svelte';
   import VlessUriModal from './connections/VlessUriModal.svelte';
@@ -493,15 +493,7 @@
               {#if tunnel.externalIp || tunnel.adapterIp}
                 <span class="text-xs text-zinc-500 shrink-0 flex items-center gap-1">
                   {#if tunnel.countryCode}
-                    {@const flagUrl = countryFlagUrl(tunnel.countryCode)}
-                    {#if flagUrl}
-                      <img src={flagUrl} alt={tunnel.countryCode} class="w-5 h-[15px] object-cover rounded-[2px]"
-                           on:error={(e) => { e.target.style.display = 'none'; e.target.nextElementSibling.style.display = ''; }}
-                      />
-                      <span class="text-[0.625rem] text-zinc-600 font-medium" style="display:none">{tunnel.countryCode}</span>
-                    {:else}
-                      <span class="text-[0.625rem] text-zinc-600 font-medium">{tunnel.countryCode}</span>
-                    {/if}
+                    <CountryIcon code={tunnel.countryCode} size={20} />
                   {/if}
                   {#if tunnel.adapterIp && tunnel.externalIp}
                     {tunnel.adapterIp} / {tunnel.externalIp}

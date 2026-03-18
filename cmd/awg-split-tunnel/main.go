@@ -709,7 +709,13 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	tunRouter.SetBytesReporter(statsCollector.AddBytes)
 
 	// === 11e. Connection Monitor ===
-	connMon := service.NewConnectionMonitor(flows, domainTable, nil)
+	var geoResolver *gateway.GeoIPResolver
+	if geoipFilePath != "" {
+		if r, err := gateway.NewGeoIPResolver(geoipFilePath); err == nil {
+			geoResolver = r
+		}
+	}
+	connMon := service.NewConnectionMonitor(flows, domainTable, geoResolver)
 	go connMon.Start(ctx)
 
 	// === 12. Start TUN Router ===

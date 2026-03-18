@@ -31,17 +31,6 @@ export function sortTunnels(tunnels) {
 }
 
 /**
- * Get a flag image URL for a 2-letter country code.
- * Uses flagcdn.com for SVG flag icons (works on Windows where emoji flags don't render).
- * @param {string} code - ISO 3166-1 alpha-2 country code
- * @returns {string} URL to flag image, or empty string
- */
-export function countryFlagUrl(code) {
-  if (!code || code.length !== 2) return '';
-  return `https://flagcdn.com/20x15/${code.toLowerCase()}.png`;
-}
-
-/**
  * Format bytes per second into a human-readable speed string.
  * @param {number} bytesPerSec
  * @returns {string}

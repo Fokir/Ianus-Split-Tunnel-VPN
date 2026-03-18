@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,7 +26,8 @@ type BindingService struct {
 	cancel          context.CancelFunc // cancels all streaming goroutines
 	logStreamOnce   sync.Once
 	statsStreamOnce sync.Once
-	connMonOnce     sync.Once
+	connMonMu       sync.Mutex
+	connMonCancel   context.CancelFunc
 	notifMgr        *NotificationManager
 	seenBanners     map[string]struct{} // deduplicate banner events
 
@@ -68,6 +70,16 @@ func (b *BindingService) Shutdown() {
 // so the frontend can adapt UI hints and examples per platform.
 func (b *BindingService) GetPlatform() string {
 	return runtime.GOOS
+}
+
+// RevealInExplorer opens the system file manager and selects the given file.
+func (b *BindingService) RevealInExplorer(filePath string) error {
+	if filePath == "" {
+		return fmt.Errorf("empty path")
+	}
+	filePath = filepath.Clean(filePath)
+	log.Printf("[UI] RevealInExplorer: %s", filePath)
+	return revealInExplorerOS(filePath)
 }
 
 // GetSSHDir returns the user's ~/.ssh directory path.

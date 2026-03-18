@@ -29,6 +29,7 @@ var assets embed.FS
 
 const serviceBinary = "awg-split-tunnel.exe"
 
+
 // Package-level state for window lifecycle (destroy/recreate pattern).
 // SystemTray keeps the app alive; the window is destroyed on close to free
 // WebView2 memory (~100-200 MB) and recreated on demand from tray.
@@ -118,6 +119,11 @@ func createMainWindow() *application.WebviewWindow {
 		Windows: application.WindowsWindow{
 			Theme: application.SystemDefault,
 		},
+	})
+
+	// Allow opening DevTools with Ctrl+Shift+I (useful for debugging).
+	w.RegisterKeyBinding("ctrl+shift+i", func(_ application.Window) {
+		w.OpenDevTools()
 	})
 
 	// Let the window close naturally — Wails destroys the WebView2 runtime,

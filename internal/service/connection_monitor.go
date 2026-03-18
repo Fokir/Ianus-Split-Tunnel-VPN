@@ -126,7 +126,7 @@ func (cm *ConnectionMonitor) buildSnapshot() *vpnapi.ConnectionSnapshot {
 		entries = append(entries, entry)
 	}
 
-	// Raw flow entries (no process info available).
+	// Raw flow entries.
 	for _, e := range cm.flows.SnapshotRaw() {
 		dstIP := e.DstIP
 		if e.RealDstIP.IsValid() {
@@ -140,6 +140,8 @@ func (cm *ConnectionMonitor) buildSnapshot() *vpnapi.ConnectionSnapshot {
 			protoStr = "UDP"
 		}
 		entry := &vpnapi.ConnectionEntry{
+			ProcessName:  e.BaseLower,
+			ProcessPath:  e.ExeLower,
 			Protocol:     protoStr,
 			DstIp:        dstIP.String(),
 			DstPort:      0,
@@ -147,7 +149,11 @@ func (cm *ConnectionMonitor) buildSnapshot() *vpnapi.ConnectionSnapshot {
 			State:        "active",
 			LastActivity: e.LastActivity,
 		}
-		cm.enrichEntry(entry, e.DstIP, dstIP)
+		lookupIP := e.DstIP
+		if e.FakeIP.IsValid() {
+			lookupIP = e.FakeIP
+		}
+		cm.enrichEntry(entry, lookupIP, dstIP)
 		entries = append(entries, entry)
 	}
 
