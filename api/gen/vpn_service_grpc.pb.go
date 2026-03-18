@@ -45,6 +45,7 @@ const (
 	VPNService_SaveConfig_FullMethodName               = "/awg.vpn.v1.VPNService/SaveConfig"
 	VPNService_StreamLogs_FullMethodName               = "/awg.vpn.v1.VPNService/StreamLogs"
 	VPNService_StreamStats_FullMethodName              = "/awg.vpn.v1.VPNService/StreamStats"
+	VPNService_StreamConnections_FullMethodName        = "/awg.vpn.v1.VPNService/StreamConnections"
 	VPNService_ListProcesses_FullMethodName            = "/awg.vpn.v1.VPNService/ListProcesses"
 	VPNService_GetAutostart_FullMethodName             = "/awg.vpn.v1.VPNService/GetAutostart"
 	VPNService_SetAutostart_FullMethodName             = "/awg.vpn.v1.VPNService/SetAutostart"
@@ -98,6 +99,7 @@ type VPNServiceClient interface {
 	// -- Streaming --
 	StreamLogs(ctx context.Context, in *LogStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEntry], error)
 	StreamStats(ctx context.Context, in *StatsStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StatsSnapshot], error)
+	StreamConnections(ctx context.Context, in *ConnectionMonitorRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConnectionSnapshot], error)
 	// -- Processes --
 	ListProcesses(ctx context.Context, in *ProcessListRequest, opts ...grpc.CallOption) (*ProcessListResponse, error)
 	// -- Autostart --
@@ -398,6 +400,25 @@ func (c *vPNServiceClient) StreamStats(ctx context.Context, in *StatsStreamReque
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type VPNService_StreamStatsClient = grpc.ServerStreamingClient[StatsSnapshot]
 
+func (c *vPNServiceClient) StreamConnections(ctx context.Context, in *ConnectionMonitorRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConnectionSnapshot], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &VPNService_ServiceDesc.Streams[2], VPNService_StreamConnections_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ConnectionMonitorRequest, ConnectionSnapshot]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type VPNService_StreamConnectionsClient = grpc.ServerStreamingClient[ConnectionSnapshot]
+
 func (c *vPNServiceClient) ListProcesses(ctx context.Context, in *ProcessListRequest, opts ...grpc.CallOption) (*ProcessListResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ProcessListResponse)
@@ -520,7 +541,7 @@ func (c *vPNServiceClient) ApplyUpdate(ctx context.Context, in *emptypb.Empty, o
 
 func (c *vPNServiceClient) ApplyUpdateStream(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[UpdateProgress], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &VPNService_ServiceDesc.Streams[2], VPNService_ApplyUpdateStream_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &VPNService_ServiceDesc.Streams[3], VPNService_ApplyUpdateStream_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -593,6 +614,7 @@ type VPNServiceServer interface {
 	// -- Streaming --
 	StreamLogs(*LogStreamRequest, grpc.ServerStreamingServer[LogEntry]) error
 	StreamStats(*StatsStreamRequest, grpc.ServerStreamingServer[StatsSnapshot]) error
+	StreamConnections(*ConnectionMonitorRequest, grpc.ServerStreamingServer[ConnectionSnapshot]) error
 	// -- Processes --
 	ListProcesses(context.Context, *ProcessListRequest) (*ProcessListResponse, error)
 	// -- Autostart --
@@ -699,6 +721,9 @@ func (UnimplementedVPNServiceServer) StreamLogs(*LogStreamRequest, grpc.ServerSt
 }
 func (UnimplementedVPNServiceServer) StreamStats(*StatsStreamRequest, grpc.ServerStreamingServer[StatsSnapshot]) error {
 	return status.Error(codes.Unimplemented, "method StreamStats not implemented")
+}
+func (UnimplementedVPNServiceServer) StreamConnections(*ConnectionMonitorRequest, grpc.ServerStreamingServer[ConnectionSnapshot]) error {
+	return status.Error(codes.Unimplemented, "method StreamConnections not implemented")
 }
 func (UnimplementedVPNServiceServer) ListProcesses(context.Context, *ProcessListRequest) (*ProcessListResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListProcesses not implemented")
@@ -1202,6 +1227,17 @@ func _VPNService_StreamStats_Handler(srv interface{}, stream grpc.ServerStream) 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type VPNService_StreamStatsServer = grpc.ServerStreamingServer[StatsSnapshot]
 
+func _VPNService_StreamConnections_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ConnectionMonitorRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(VPNServiceServer).StreamConnections(m, &grpc.GenericServerStream[ConnectionMonitorRequest, ConnectionSnapshot]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type VPNService_StreamConnectionsServer = grpc.ServerStreamingServer[ConnectionSnapshot]
+
 func _VPNService_ListProcesses_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ProcessListRequest)
 	if err := dec(in); err != nil {
@@ -1630,6 +1666,11 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StreamStats",
 			Handler:       _VPNService_StreamStats_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamConnections",
+			Handler:       _VPNService_StreamConnections_Handler,
 			ServerStreams: true,
 		},
 		{
