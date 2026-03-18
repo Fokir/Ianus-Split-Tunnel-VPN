@@ -6,6 +6,7 @@
     "domains": "Домены",
     "settings": "Настройки",
     "logs": "Логи",
+    "monitor": "Монитор",
     "about": "О программе"
   },
   "titlebar": {
@@ -354,6 +355,22 @@
     "license": "Лицензия",
     "unknown": "неизвестно",
     "na": "н/д"
+  },
+  "monitor": {
+    "filterProcess": "Фильтр по процессу...",
+    "allTunnels": "Все туннели",
+    "pause": "Пауза",
+    "resume": "Продолжить",
+    "connections": "соединений",
+    "process": "Процесс",
+    "proto": "Прото",
+    "destination": "Назначение",
+    "domain": "Домен",
+    "tunnel": "Туннель",
+    "country": "Страна",
+    "state": "Статус",
+    "lastSeen": "Посл. активность",
+    "noConnections": "Нет активных соединений"
   },
   "common": {
     "cancel": "Отмена",

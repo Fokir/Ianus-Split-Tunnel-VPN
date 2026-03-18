@@ -6,6 +6,7 @@
     "domains": "Domains",
     "settings": "Settings",
     "logs": "Logs",
+    "monitor": "Monitor",
     "about": "About"
   },
   "titlebar": {
@@ -354,6 +355,22 @@
     "license": "License",
     "unknown": "unknown",
     "na": "n/a"
+  },
+  "monitor": {
+    "filterProcess": "Filter by process...",
+    "allTunnels": "All tunnels",
+    "pause": "Pause",
+    "resume": "Resume",
+    "connections": "connections",
+    "process": "Process",
+    "proto": "Proto",
+    "destination": "Destination",
+    "domain": "Domain",
+    "tunnel": "Tunnel",
+    "country": "Country",
+    "state": "State",
+    "lastSeen": "Last Seen",
+    "noConnections": "No active connections"
   },
   "common": {
     "cancel": "Cancel",
