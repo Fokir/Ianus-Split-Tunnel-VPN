@@ -43,6 +43,8 @@ const (
 	ProtocolHTTPProxy  = "httpproxy"
 	ProtocolVLESS       = "vless"
 	ProtocolAnyConnect  = "anyconnect"
+	ProtocolHysteria2   = "hysteria2"
+	ProtocolSSH         = "ssh"
 )
 
 // FallbackPolicy defines what happens when a tunnel is unavailable.
@@ -360,6 +362,8 @@ var validProtocols = map[string]bool{
 	ProtocolHTTPProxy:  true,
 	ProtocolVLESS:      true,
 	ProtocolAnyConnect: true,
+	ProtocolHysteria2:  true,
+	ProtocolSSH:        true,
 }
 
 // Validate performs basic sanity checks on the configuration.
