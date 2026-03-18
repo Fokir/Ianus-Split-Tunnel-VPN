@@ -96,6 +96,42 @@ type RawFlowEntry struct {
 	RealDstIP    [4]byte // real IP destination (for FakeIP rewriting)
 }
 
+// NATSnapshotEntry is a lightweight copy of a TCP NAT entry for monitoring.
+type NATSnapshotEntry struct {
+	SrcPort         uint16
+	OriginalDstIP   netip.Addr
+	OriginalDstPort uint16
+	ResolvedDstIP   netip.Addr
+	TunnelID        string
+	ExeLower        string
+	BaseLower       string
+	LastActivity    int64
+	FinSeen         int32
+}
+
+// UDPSnapshotEntry is a lightweight copy of a UDP NAT entry for monitoring.
+type UDPSnapshotEntry struct {
+	SrcPort         uint16
+	OriginalDstIP   netip.Addr
+	OriginalDstPort uint16
+	ResolvedDstIP   netip.Addr
+	TunnelID        string
+	ExeLower        string
+	BaseLower       string
+	LastActivity    int64
+}
+
+// RawSnapshotEntry is a lightweight copy of a raw flow entry for monitoring.
+type RawSnapshotEntry struct {
+	Protocol     uint8
+	DstIP        netip.Addr
+	SrcPort      uint16
+	TunnelID     string
+	LastActivity int64
+	FakeIP       netip.Addr
+	RealDstIP    netip.Addr
+}
+
 // rawFlowKey is a compact key: proto(1) + dstIP(4) + srcPort(2) = 7 bytes.
 type rawFlowKey [7]byte
 
@@ -762,6 +798,107 @@ func (ft *FlowTable) Stats() FlowTableStats {
 		ft.raw[i].mu.RUnlock()
 	}
 	return s
+}
+
+// SnapshotNAT returns a read-only snapshot of all active TCP NAT entries.
+func (ft *FlowTable) SnapshotNAT() []NATSnapshotEntry {
+	var result []NATSnapshotEntry
+	for i := range ft.tcp {
+		s := &ft.tcp[i]
+		s.mu.RLock()
+		for _, idx := range s.index {
+			if idx < 0 || int(idx) >= len(s.store) {
+				continue
+			}
+			e := &s.store[idx]
+			if e.TunnelID == "" {
+				continue
+			}
+			result = append(result, NATSnapshotEntry{
+				SrcPort:         e.ProxyPort,
+				OriginalDstIP:   e.OriginalDstIP,
+				OriginalDstPort: e.OriginalDstPort,
+				ResolvedDstIP:   e.ResolvedDstIP,
+				TunnelID:        e.TunnelID,
+				ExeLower:        e.ExeLower,
+				BaseLower:       e.BaseLower,
+				LastActivity:    atomic.LoadInt64(&e.LastActivity),
+				FinSeen:         atomic.LoadInt32(&e.FinSeen),
+			})
+		}
+		s.mu.RUnlock()
+	}
+	return result
+}
+
+// SnapshotUDP returns a read-only snapshot of all active UDP NAT entries.
+func (ft *FlowTable) SnapshotUDP() []UDPSnapshotEntry {
+	var result []UDPSnapshotEntry
+	for i := range ft.udp {
+		s := &ft.udp[i]
+		s.mu.RLock()
+		for _, idx := range s.index {
+			if idx < 0 || int(idx) >= len(s.store) {
+				continue
+			}
+			e := &s.store[idx]
+			if e.TunnelID == "" {
+				continue
+			}
+			result = append(result, UDPSnapshotEntry{
+				SrcPort:         e.UDPProxyPort,
+				OriginalDstIP:   e.OriginalDstIP,
+				OriginalDstPort: e.OriginalDstPort,
+				ResolvedDstIP:   e.ResolvedDstIP,
+				TunnelID:        e.TunnelID,
+				ExeLower:        e.ExeLower,
+				BaseLower:       e.BaseLower,
+				LastActivity:    atomic.LoadInt64(&e.LastActivity),
+			})
+		}
+		s.mu.RUnlock()
+	}
+	return result
+}
+
+// SnapshotRaw returns a read-only snapshot of all active raw flow entries.
+func (ft *FlowTable) SnapshotRaw() []RawSnapshotEntry {
+	var result []RawSnapshotEntry
+	for i := range ft.raw {
+		s := &ft.raw[i]
+		s.mu.RLock()
+		for k, idx := range s.index {
+			if idx < 0 || int(idx) >= len(s.store) {
+				continue
+			}
+			e := &s.store[idx]
+			if e.TunnelID == "" {
+				continue
+			}
+			proto := k[0]
+			var dstIP4 [4]byte
+			copy(dstIP4[:], k[1:5])
+			srcPort := uint16(k[5])<<8 | uint16(k[6])
+			var fakeIP, realDstIP netip.Addr
+			if e.FakeIP != [4]byte{} {
+				fakeIP = netip.AddrFrom4(e.FakeIP)
+			}
+			if e.RealDstIP != [4]byte{} {
+				realDstIP = netip.AddrFrom4(e.RealDstIP)
+			}
+			result = append(result, RawSnapshotEntry{
+				Protocol:     proto,
+				DstIP:        netip.AddrFrom4(dstIP4),
+				SrcPort:      srcPort,
+				TunnelID:     e.TunnelID,
+				LastActivity: atomic.LoadInt64(&e.LastActivity),
+				FakeIP:       fakeIP,
+				RealDstIP:    realDstIP,
+			})
+		}
+		s.mu.RUnlock()
+	}
+	return result
 }
 
 // ---------------------------------------------------------------------------
