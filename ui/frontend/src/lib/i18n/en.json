@@ -111,7 +111,19 @@
     "bannerTitle": "Server message",
     "sessionResuming": "Resuming session...",
     "sessionTimeout": "Session expired",
-    "idleTimeout": "Disconnected due to inactivity"
+    "idleTimeout": "Disconnected due to inactivity",
+    "hy2ObfsType": "Obfuscation",
+    "hy2ObfsNone": "None",
+    "hy2ObfsPassword": "Obfs password",
+    "hy2SniPlaceholder": "(auto from server)",
+    "hy2UpMbps": "Upload (Mbps)",
+    "hy2DownMbps": "Download (Mbps)",
+    "sshPrivateKey": "Private key path",
+    "sshPrivateKeyPlaceholder": "C:\\Users\\user\\.ssh\\id_ed25519",
+    "sshKeyPassphrase": "Key passphrase",
+    "sshKeepalive": "Keepalive (sec)",
+    "sshNoUdp": "SSH tunnel does not support UDP. Games, VoIP and QUIC will not work.",
+    "browse": "Browse"
   },
   "subscriptions": {
     "title": "Subscriptions",

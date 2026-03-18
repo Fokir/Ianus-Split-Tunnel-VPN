@@ -5,6 +5,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -68,6 +70,15 @@ func (b *BindingService) GetPlatform() string {
 	return runtime.GOOS
 }
 
+// GetSSHDir returns the user's ~/.ssh directory path.
+func (b *BindingService) GetSSHDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".ssh")
+}
+
 // PickFile opens a native file dialog and returns the selected file path.
 // Returns empty string if the user cancels.
 func (b *BindingService) PickFile(title string, filterName string, filterPattern string) (string, error) {
@@ -78,6 +89,23 @@ func (b *BindingService) PickFile(title string, filterName string, filterPattern
 	dlg := app.Dialog.OpenFile().
 		SetTitle(title).
 		AddFilter(filterName, filterPattern).
+		CanChooseFiles(true).
+		CanChooseDirectories(false)
+	return dlg.PromptForSingleSelection()
+}
+
+// PickFileInDir opens a native file dialog starting in the given directory.
+// Shows hidden files (useful for .ssh). Returns empty string if cancelled.
+func (b *BindingService) PickFileInDir(title string, filterName string, filterPattern string, defaultDir string) (string, error) {
+	app := application.Get()
+	if app == nil {
+		return "", fmt.Errorf("application not initialized")
+	}
+	dlg := app.Dialog.OpenFile().
+		SetTitle(title).
+		AddFilter(filterName, filterPattern).
+		SetDirectory(defaultDir).
+		ShowHiddenFiles(true).
 		CanChooseFiles(true).
 		CanChooseDirectories(false)
 	return dlg.PromptForSingleSelection()

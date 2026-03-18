@@ -108,9 +108,9 @@ func main() {
 func createMainWindow() *application.WebviewWindow {
 	w := mainApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "AWG Split Tunnel",
-		Width:            950,
+		Width:            1000,
 		Height:           700,
-		MinWidth:         900,
+		MinWidth:         960,
 		MinHeight:        500,
 		URL:              "/",
 		Frameless:        true,

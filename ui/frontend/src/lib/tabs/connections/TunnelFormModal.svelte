@@ -8,6 +8,8 @@
   import HttpProxyForm from './forms/HttpProxyForm.svelte';
   import VlessForm from './forms/VlessForm.svelte';
   import AnyConnectForm from './forms/AnyConnectForm.svelte';
+  import Hysteria2Form from './forms/Hysteria2Form.svelte';
+  import SshForm from './forms/SshForm.svelte';
 
   export let open = false;
   export let protocol = '';
@@ -34,6 +36,13 @@
   let vlessTlsServerName = '', vlessTlsFingerprint = 'chrome', vlessTlsAllowInsecure = false;
   let vlessWsPath = '', vlessWsHost = '', vlessGrpcServiceName = '';
   let vlessXhttpPath = '', vlessXhttpHost = '', vlessXhttpMode = 'auto';
+  // Hysteria2
+  let hy2Server = '', hy2Password = '', hy2ObfsType = '', hy2ObfsPassword = '';
+  let hy2Sni = '', hy2Insecure = false, hy2UpMbps = '', hy2DownMbps = '';
+  // SSH
+  let sshServer = '', sshPort = '22', sshUsername = '', sshPassword = '';
+  let sshPrivateKeyPath = '', sshPrivateKeyPassphrase = '', sshHostKey = '';
+  let sshInsecureSkipHostKey = false, sshKeepaliveInterval = '30';
 
   $: isEdit = !!editTunnel;
 
@@ -58,6 +67,11 @@
     vlessTlsServerName = ''; vlessTlsFingerprint = 'chrome'; vlessTlsAllowInsecure = false;
     vlessWsPath = ''; vlessWsHost = ''; vlessGrpcServiceName = '';
     vlessXhttpPath = ''; vlessXhttpHost = ''; vlessXhttpMode = 'auto';
+    hy2Server = ''; hy2Password = ''; hy2ObfsType = ''; hy2ObfsPassword = '';
+    hy2Sni = ''; hy2Insecure = false; hy2UpMbps = ''; hy2DownMbps = '';
+    sshServer = ''; sshPort = '22'; sshUsername = ''; sshPassword = '';
+    sshPrivateKeyPath = ''; sshPrivateKeyPassphrase = ''; sshHostKey = '';
+    sshInsecureSkipHostKey = true; sshKeepaliveInterval = '30';
   }
 
   function populateFromTunnel(tunnel) {
@@ -120,6 +134,25 @@
       vlessXhttpPath = s['xhttp.path'] || '';
       vlessXhttpHost = s['xhttp.host'] || '';
       vlessXhttpMode = s['xhttp.mode'] || 'auto';
+    } else if (protocol === 'hysteria2') {
+      hy2Server = s.server || '';
+      hy2Password = s.password || '';
+      hy2ObfsType = s.obfs_type || '';
+      hy2ObfsPassword = s.obfs_password || '';
+      hy2Sni = s.sni || '';
+      hy2Insecure = s.insecure === 'true';
+      hy2UpMbps = s.up_mbps || '';
+      hy2DownMbps = s.down_mbps || '';
+    } else if (protocol === 'ssh') {
+      sshServer = s.server || '';
+      sshPort = s.port || '22';
+      sshUsername = s.username || '';
+      sshPassword = s.password || '';
+      sshPrivateKeyPath = s.private_key_path || '';
+      sshPrivateKeyPassphrase = s.private_key_passphrase || '';
+      sshHostKey = s.host_key || '';
+      sshInsecureSkipHostKey = s.insecure_skip_host_key === 'true';
+      sshKeepaliveInterval = s.keepalive_interval || '30';
     }
   }
 
@@ -131,6 +164,8 @@
       case 'httpproxy': return 'HTTP Proxy';
       case 'vless': return 'VLESS';
       case 'anyconnect': return 'AnyConnect';
+      case 'hysteria2': return 'Hysteria2';
+      case 'ssh': return 'SSH Tunnel';
       default: return proto.toUpperCase();
     }
   }
@@ -213,6 +248,32 @@
           if (vlessXhttpHost) settings['xhttp.host'] = vlessXhttpHost;
           if (vlessXhttpMode) settings['xhttp.mode'] = vlessXhttpMode;
         }
+      } else if (protocol === 'hysteria2') {
+        if (!hy2Server) { modalError = $t('connections.serverRequired'); modalSaving = false; return; }
+        if (!hy2Password) { modalError = $t('connections.passwordRequired'); modalSaving = false; return; }
+        settings = {
+          server: hy2Server, password: hy2Password,
+          sni: hy2Sni,
+          insecure: hy2Insecure ? 'true' : 'false',
+        };
+        if (hy2ObfsType) {
+          settings.obfs_type = hy2ObfsType;
+          settings.obfs_password = hy2ObfsPassword;
+        }
+        if (hy2UpMbps) settings.up_mbps = hy2UpMbps;
+        if (hy2DownMbps) settings.down_mbps = hy2DownMbps;
+      } else if (protocol === 'ssh') {
+        if (!sshServer) { modalError = $t('connections.serverRequired'); modalSaving = false; return; }
+        if (!sshUsername) { modalError = $t('connections.usernameRequired'); modalSaving = false; return; }
+        settings = {
+          server: sshServer, port: sshPort,
+          username: sshUsername, password: sshPassword,
+          private_key_path: sshPrivateKeyPath,
+          private_key_passphrase: sshPrivateKeyPassphrase,
+          host_key: sshHostKey,
+          insecure_skip_host_key: sshInsecureSkipHostKey ? 'true' : 'false',
+          keepalive_interval: sshKeepaliveInterval,
+        };
       }
 
       if (isEdit) {
@@ -264,6 +325,16 @@
         bind:tlsServerName={vlessTlsServerName} bind:tlsFingerprint={vlessTlsFingerprint} bind:tlsAllowInsecure={vlessTlsAllowInsecure}
         bind:wsPath={vlessWsPath} bind:wsHost={vlessWsHost} bind:grpcServiceName={vlessGrpcServiceName}
         bind:xhttpPath={vlessXhttpPath} bind:xhttpHost={vlessXhttpHost} bind:xhttpMode={vlessXhttpMode} />
+    {:else if protocol === 'hysteria2'}
+      <Hysteria2Form bind:server={hy2Server} bind:password={hy2Password}
+        bind:obfsType={hy2ObfsType} bind:obfsPassword={hy2ObfsPassword}
+        bind:sni={hy2Sni} bind:insecure={hy2Insecure}
+        bind:upMbps={hy2UpMbps} bind:downMbps={hy2DownMbps} />
+    {:else if protocol === 'ssh'}
+      <SshForm bind:server={sshServer} bind:port={sshPort}
+        bind:username={sshUsername} bind:password={sshPassword}
+        bind:privateKeyPath={sshPrivateKeyPath} bind:privateKeyPassphrase={sshPrivateKeyPassphrase}
+        bind:keepaliveInterval={sshKeepaliveInterval} />
     {/if}
   </div>
 

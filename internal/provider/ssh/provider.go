@@ -1,7 +1,10 @@
 package ssh
 
 import (
+	"bufio"
 	"context"
+	"crypto/subtle"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/netip"
@@ -49,9 +52,10 @@ type Provider struct {
 	state  core.TunnelState
 	name   string
 
-	serverAddr netip.AddrPort // resolved server endpoint for bypass routes
-	client     *gossh.Client  // active SSH client connection
-	cancelKA   context.CancelFunc
+	serverAddr     netip.AddrPort // resolved server endpoint for bypass routes
+	client         *gossh.Client  // active SSH client connection
+	cancelKA       context.CancelFunc
+	knownHostsPath string // path to ssh_known_hosts file for TOFU
 }
 
 var _ provider.TunnelProvider = (*Provider)(nil)
@@ -81,11 +85,6 @@ func New(name string, cfg Config) (*Provider, error) {
 		return nil, fmt.Errorf("[SSH] at least one of password or private_key_path is required")
 	}
 
-	// Require explicit host key policy.
-	if cfg.HostKey == "" && !cfg.InsecureSkipHostKey {
-		return nil, fmt.Errorf("[SSH] host_key is required for secure connections; set insecure_skip_host_key: true to disable verification (NOT recommended)")
-	}
-
 	// Expand ~ in private key path.
 	if cfg.PrivateKeyPath != "" {
 		expanded, err := expandTilde(cfg.PrivateKeyPath)
@@ -95,10 +94,17 @@ func New(name string, cfg Config) (*Provider, error) {
 		cfg.PrivateKeyPath = expanded
 	}
 
+	// Resolve known_hosts file path (next to executable).
+	knownHostsPath := "ssh_known_hosts"
+	if exe, err := os.Executable(); err == nil {
+		knownHostsPath = filepath.Join(filepath.Dir(exe), "ssh_known_hosts")
+	}
+
 	return &Provider{
-		config: cfg,
-		name:   name,
-		state:  core.TunnelStateDown,
+		config:         cfg,
+		name:           name,
+		state:          core.TunnelStateDown,
+		knownHostsPath: knownHostsPath,
 	}, nil
 }
 
@@ -334,7 +340,9 @@ func (p *Provider) buildAuthMethods() ([]gossh.AuthMethod, error) {
 }
 
 // buildHostKeyCallback constructs the host key verification callback.
+// Priority: explicit HostKey > InsecureSkipHostKey > TOFU (default).
 func (p *Provider) buildHostKeyCallback() (gossh.HostKeyCallback, error) {
+	// 1. Explicit host key pinning — highest security.
 	if p.config.HostKey != "" {
 		pubKey, _, _, _, err := gossh.ParseAuthorizedKey([]byte(p.config.HostKey))
 		if err != nil {
@@ -343,9 +351,98 @@ func (p *Provider) buildHostKeyCallback() (gossh.HostKeyCallback, error) {
 		return gossh.FixedHostKey(pubKey), nil
 	}
 
-	// InsecureSkipHostKey must be true here (validated in New).
-	core.Log.Warnf("SSH", "Host key verification DISABLED for tunnel %q — vulnerable to MITM attacks", p.name)
-	return gossh.InsecureIgnoreHostKey(), nil //nolint:gosec // user explicitly opted in
+	// 2. Insecure mode — no verification at all.
+	if p.config.InsecureSkipHostKey {
+		core.Log.Warnf("SSH", "Host key verification DISABLED for tunnel %q — vulnerable to MITM attacks", p.name)
+		return gossh.InsecureIgnoreHostKey(), nil //nolint:gosec // user explicitly opted in
+	}
+
+	// 3. TOFU (Trust On First Use) — accept on first connection, verify on subsequent.
+	return p.tofuHostKeyCallback(), nil
+}
+
+// tofuHostKeyCallback returns a callback that implements Trust On First Use:
+// - If host is unknown: accept key and persist to ssh_known_hosts.
+// - If host is known and key matches: accept.
+// - If host is known and key changed: reject (possible MITM).
+func (p *Provider) tofuHostKeyCallback() gossh.HostKeyCallback {
+	return func(hostname string, remote net.Addr, key gossh.PublicKey) error {
+		hostPort := hostname
+		if remote != nil {
+			hostPort = remote.String()
+		}
+		keyType := key.Type()
+		keyBytes := key.Marshal()
+
+		// Load known key for this host.
+		knownKey, err := p.loadKnownHostKey(hostPort, keyType)
+		if err != nil {
+			core.Log.Warnf("SSH", "Failed to read known_hosts for %q: %v (treating as unknown)", hostPort, err)
+		}
+
+		if knownKey != nil {
+			// Host is known — verify key matches.
+			if subtle.ConstantTimeCompare(knownKey, keyBytes) == 1 {
+				return nil
+			}
+			return fmt.Errorf("[SSH] HOST KEY CHANGED for %s (type %s) — possible MITM attack! "+
+				"Remove the old entry from %s or set host_key explicitly", hostPort, keyType, p.knownHostsPath)
+		}
+
+		// Host is unknown — trust on first use, persist key.
+		core.Log.Infof("SSH", "TOFU: accepting host key for %s (type %s), saving to %s",
+			hostPort, keyType, p.knownHostsPath)
+		if err := p.saveKnownHostKey(hostPort, keyType, keyBytes); err != nil {
+			core.Log.Warnf("SSH", "Failed to save host key for %s: %v", hostPort, err)
+		}
+		return nil
+	}
+}
+
+// loadKnownHostKey reads the known host key for the given host:port and key type.
+// Returns nil if host is not found. File format: "host keytype base64key".
+func (p *Provider) loadKnownHostKey(hostPort, keyType string) ([]byte, error) {
+	f, err := os.Open(p.knownHostsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.SplitN(line, " ", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		if fields[0] == hostPort && fields[1] == keyType {
+			decoded, err := base64.StdEncoding.DecodeString(fields[2])
+			if err != nil {
+				return nil, fmt.Errorf("decode key for %s: %w", hostPort, err)
+			}
+			return decoded, nil
+		}
+	}
+	return nil, scanner.Err()
+}
+
+// saveKnownHostKey appends a host key entry to the known_hosts file.
+func (p *Provider) saveKnownHostKey(hostPort, keyType string, keyBytes []byte) error {
+	f, err := os.OpenFile(p.knownHostsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	line := fmt.Sprintf("%s %s %s\n", hostPort, keyType, base64.StdEncoding.EncodeToString(keyBytes))
+	_, err = f.WriteString(line)
+	return err
 }
 
 // expandTilde replaces a leading ~ with the user's home directory.

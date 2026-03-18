@@ -70,6 +70,14 @@ export function pickFile(title, filterName, filterPattern) {
   return BindingService.PickFile(title, filterName, filterPattern);
 }
 
+export function pickFileInDir(title, filterName, filterPattern, defaultDir) {
+  return BindingService.PickFileInDir(title, filterName, filterPattern, defaultDir);
+}
+
+export function getSSHDir() {
+  return BindingService.GetSSHDir();
+}
+
 // ─── Rules ──────────────────────────────────────────────────────────
 
 export function listRules() {

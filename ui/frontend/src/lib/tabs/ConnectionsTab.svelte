@@ -233,7 +233,7 @@
   }
 
   // Protocols that use a modal form for configuration
-  const formProtocols = ['socks5', 'httpproxy', 'vless', 'anyconnect'];
+  const formProtocols = ['socks5', 'httpproxy', 'vless', 'anyconnect', 'hysteria2', 'ssh'];
   // Protocols that use a config file
   const fileProtocols = ['amneziawg', 'wireguard'];
 
@@ -306,6 +306,8 @@
       case 'httpproxy': return 'HTTP';
       case 'vless': return 'VLESS';
       case 'anyconnect': return 'AC';
+      case 'hysteria2': return 'HY2';
+      case 'ssh': return 'SSH';
       default: return proto.toUpperCase();
     }
   }
@@ -380,6 +382,14 @@
             <button class="w-full px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-700/50 transition-colors"
               on:click={() => openFormModal('vless')}>
               VLESS (Xray)
+            </button>
+            <button class="w-full px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-700/50 transition-colors"
+              on:click={() => openFormModal('hysteria2')}>
+              Hysteria2
+            </button>
+            <button class="w-full px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-700/50 transition-colors"
+              on:click={() => openFormModal('ssh')}>
+              SSH Tunnel
             </button>
             <button class="w-full px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-700/50 transition-colors flex items-center gap-2"
               on:click={() => openFormModal('anyconnect')}>

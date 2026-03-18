@@ -111,7 +111,19 @@
     "bannerTitle": "Сообщение сервера",
     "sessionResuming": "Восстановление сессии...",
     "sessionTimeout": "Сессия истекла",
-    "idleTimeout": "Отключено из-за неактивности"
+    "idleTimeout": "Отключено из-за неактивности",
+    "hy2ObfsType": "Обфускация",
+    "hy2ObfsNone": "Нет",
+    "hy2ObfsPassword": "Пароль обфускации",
+    "hy2SniPlaceholder": "(авто из адреса сервера)",
+    "hy2UpMbps": "Upload (Мбит/с)",
+    "hy2DownMbps": "Download (Мбит/с)",
+    "sshPrivateKey": "Путь к приватному ключу",
+    "sshPrivateKeyPlaceholder": "C:\\Users\\user\\.ssh\\id_ed25519",
+    "sshKeyPassphrase": "Пароль ключа",
+    "sshKeepalive": "Keepalive (сек)",
+    "sshNoUdp": "SSH-туннель не поддерживает UDP. Игры, VoIP и QUIC работать не будут.",
+    "browse": "Обзор"
   },
   "subscriptions": {
     "title": "Подписки",
