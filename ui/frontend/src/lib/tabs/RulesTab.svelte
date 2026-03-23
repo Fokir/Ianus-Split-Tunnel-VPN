@@ -439,18 +439,6 @@
   </div>
 {/if}
 
-<!-- Auto Bypass -->
-{#if !loading}
-  <AutoBypassSection
-    enabled={autoBypassEnabled}
-    extraPatterns={autoBypassExtraPatterns}
-    extraBypass={autoBypassExtraBypass}
-    neverBypass={autoBypassNeverBypass}
-    {rules}
-    on:change={handleAutoBypassChange}
-  />
-{/if}
-
 <!-- Routing Rules -->
 <RoutingRulesSection
   {rules} {tunnels} {loading} {error} {patternIcons}
@@ -462,6 +450,18 @@
   on:rename={handleRename}
   on:quickWizard={() => showQuickWizard = true}
 />
+
+<!-- Auto Bypass -->
+{#if !loading}
+  <AutoBypassSection
+    enabled={autoBypassEnabled}
+    extraPatterns={autoBypassExtraPatterns}
+    extraBypass={autoBypassExtraBypass}
+    neverBypass={autoBypassNeverBypass}
+    {rules}
+    on:change={handleAutoBypassChange}
+  />
+{/if}
 
 <!-- Disallowed IPs -->
 {#if !loading}
