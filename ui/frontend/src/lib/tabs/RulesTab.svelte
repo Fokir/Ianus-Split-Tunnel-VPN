@@ -8,10 +8,11 @@
   import RoutingRulesSection from './rules/RoutingRulesSection.svelte';
   import DisallowedIpsSection from './rules/DisallowedIpsSection.svelte';
   import DisallowedAppsSection from './rules/DisallowedAppsSection.svelte';
+  import AutoBypassSection from './rules/AutoBypassSection.svelte';
   import RuleEditModal from './rules/RuleEditModal.svelte';
   import QuickRuleWizard from './rules/QuickRuleWizard.svelte';
 
-  $: $tabDirty = dirty || ipsDirty || appsDirty;
+  $: $tabDirty = dirty || ipsDirty || appsDirty || autoBypassDirty;
   onDestroy(() => tabDirty.set(false));
 
   let rules = [];
@@ -30,6 +31,13 @@
   let disallowedApps = [];
   let appsDirty = false;
   let appsError = '';
+
+  // Auto Bypass state
+  let autoBypassEnabled = false;
+  let autoBypassExtraPatterns = [];
+  let autoBypassExtraBypass = [];
+  let autoBypassNeverBypass = [];
+  let autoBypassDirty = false;
 
   // Rule edit modal
   let showModal = false;
@@ -103,6 +111,7 @@
       if (!config.global) config.global = {};
       buildDisallowedIpsList();
       buildDisallowedAppsList();
+      buildAutoBypass();
     } catch (e) {
       error = e.message || $t('rules.failedToLoad');
     } finally {
@@ -330,10 +339,46 @@
   }
 
   function cancelApps() { buildDisallowedAppsList(); }
+
+  // ─── Auto Bypass ──────────────────────────────────────────
+
+  function buildAutoBypass() {
+    const ab = config.auto_bypass || {};
+    autoBypassEnabled = !!ab.enabled;
+    autoBypassExtraPatterns = ab.extra_patterns ? [...ab.extra_patterns] : [];
+    autoBypassExtraBypass = ab.extra_bypass ? [...ab.extra_bypass] : [];
+    autoBypassNeverBypass = ab.never_bypass ? [...ab.never_bypass] : [];
+    autoBypassDirty = false;
+  }
+
+  function handleAutoBypassChange(e) {
+    const { enabled, extraPatterns, extraBypass, neverBypass } = e.detail;
+    autoBypassEnabled = enabled;
+    autoBypassExtraPatterns = extraPatterns;
+    autoBypassExtraBypass = extraBypass;
+    autoBypassNeverBypass = neverBypass;
+    autoBypassDirty = true;
+  }
+
+  async function saveAutoBypass() {
+    try {
+      if (!config.auto_bypass) config.auto_bypass = {};
+      config.auto_bypass.enabled = autoBypassEnabled;
+      config.auto_bypass.extra_patterns = autoBypassExtraPatterns.filter(s => s.trim());
+      config.auto_bypass.extra_bypass = autoBypassExtraBypass.filter(s => s.trim());
+      config.auto_bypass.never_bypass = autoBypassNeverBypass.filter(s => s.trim());
+      await api.saveConfig(config, false);
+      autoBypassDirty = false;
+    } catch (e) {
+      error = e.message || 'Failed to save auto-bypass settings';
+    }
+  }
+
+  function cancelAutoBypass() { buildAutoBypass(); }
 </script>
 
 <!-- Sticky save bar -->
-{#if dirty || ipsDirty || appsDirty}
+{#if dirty || ipsDirty || appsDirty || autoBypassDirty}
   <div class="sticky top-0 z-10 flex justify-end gap-2 py-2 px-4 bg-zinc-900/95 backdrop-blur-sm border-b border-zinc-700/40">
     {#if dirty}
       <button
@@ -377,7 +422,33 @@
         {$t('rules.save')} (Apps)
       </button>
     {/if}
+    {#if autoBypassDirty}
+      <button
+        class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+        on:click={cancelAutoBypass}
+      >
+        {$t('rules.cancel')} (Auto Bypass)
+      </button>
+      <button
+        class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+        on:click={saveAutoBypass}
+      >
+        {$t('rules.save')} (Auto Bypass)
+      </button>
+    {/if}
   </div>
+{/if}
+
+<!-- Auto Bypass -->
+{#if !loading}
+  <AutoBypassSection
+    enabled={autoBypassEnabled}
+    extraPatterns={autoBypassExtraPatterns}
+    extraBypass={autoBypassExtraBypass}
+    neverBypass={autoBypassNeverBypass}
+    {rules}
+    on:change={handleAutoBypassChange}
+  />
 {/if}
 
 <!-- Routing Rules -->
