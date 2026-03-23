@@ -423,6 +423,11 @@ func NewConfigManager(filePath string, bus *EventBus) *ConfigManager {
 	}
 }
 
+// FilePath returns the path to the configuration file on disk.
+func (cm *ConfigManager) FilePath() string {
+	return cm.filePath
+}
+
 // defaultConfig returns an empty but valid configuration.
 func defaultConfig() Config {
 	return Config{}

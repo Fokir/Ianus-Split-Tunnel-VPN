@@ -1,10 +1,18 @@
 package service
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -423,6 +431,200 @@ func (s *Service) SaveConfig(ctx context.Context, req *vpnapi.SaveConfigRequest)
 	}
 
 	return &vpnapi.SaveConfigResponse{Success: true, Restarted: restarted}, nil
+}
+
+func (s *Service) ExportConfig(_ context.Context, _ *emptypb.Empty) (*vpnapi.ExportConfigResponse, error) {
+	configPath := s.cfg.FilePath()
+	baseDir := filepath.Dir(configPath)
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+
+	// Add config.yaml.
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("read config file: %w", err)
+	}
+	if err := zipAddBytes(zw, "config.yaml", configData); err != nil {
+		return nil, err
+	}
+
+	// Add tunnel .conf files referenced by tunnels.
+	cfg := s.cfg.Get()
+	for _, t := range cfg.Tunnels {
+		confVal, ok := t.Settings["config_file"]
+		if !ok {
+			continue
+		}
+		confFile, ok := confVal.(string)
+		if !ok || confFile == "" {
+			continue
+		}
+		absPath := confFile
+		if !filepath.IsAbs(absPath) {
+			absPath = filepath.Join(baseDir, confFile)
+		}
+		data, err := os.ReadFile(absPath)
+		if err != nil {
+			core.Log.Warnf("Core", "Export: skip %s: %v", confFile, err)
+			continue
+		}
+		// Store with original relative path inside the archive.
+		if err := zipAddBytes(zw, confFile, data); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("finalize zip: %w", err)
+	}
+	return &vpnapi.ExportConfigResponse{ZipData: buf.Bytes()}, nil
+}
+
+func (s *Service) ImportConfig(_ context.Context, req *vpnapi.ImportConfigRequest) (resp *vpnapi.ImportConfigResponse, retErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			core.Log.Errorf("Core", "ImportConfig panic: %v", r)
+			resp = &vpnapi.ImportConfigResponse{Success: false, Error: fmt.Sprintf("internal error: %v", r)}
+			retErr = nil
+		}
+	}()
+
+	configPath := s.cfg.FilePath()
+	baseDir := filepath.Dir(configPath)
+
+	core.Log.Infof("Core", "ImportConfig: starting import (%d bytes)", len(req.ZipData))
+
+	// Step 1: Create automatic backup before importing.
+	if backupResp, err := s.ExportConfig(context.Background(), &emptypb.Empty{}); err == nil {
+		backupDir := filepath.Join(baseDir, "backups")
+		_ = os.MkdirAll(backupDir, 0755)
+		backupName := fmt.Sprintf("backup_%s.zip", time.Now().Format("2006-01-02_15-04-05"))
+		if err := os.WriteFile(filepath.Join(backupDir, backupName), backupResp.ZipData, 0600); err != nil {
+			core.Log.Warnf("Core", "Import: failed to save backup: %v", err)
+		} else {
+			core.Log.Infof("Core", "Import: backup saved to backups/%s", backupName)
+		}
+	}
+
+	// Step 2: Open ZIP archive.
+	core.Log.Infof("Core", "ImportConfig: step 2 — open ZIP")
+	zr, err := zip.NewReader(bytes.NewReader(req.ZipData), int64(len(req.ZipData)))
+	if err != nil {
+		return &vpnapi.ImportConfigResponse{Success: false, Error: fmt.Sprintf("invalid zip: %v", err)}, nil
+	}
+
+	// Step 3: Find and read config.yaml from archive.
+	core.Log.Infof("Core", "ImportConfig: step 3 — read ZIP entries")
+	var configData []byte
+	confFiles := make(map[string][]byte) // relative path → content
+	for _, f := range zr.File {
+		name := filepath.ToSlash(f.Name)
+		// Prevent path traversal.
+		if filepath.IsAbs(name) || containsDotDot(name) {
+			continue
+		}
+		data, err := zipReadFile(f)
+		if err != nil {
+			return &vpnapi.ImportConfigResponse{Success: false, Error: fmt.Sprintf("read %s: %v", name, err)}, nil
+		}
+		if name == "config.yaml" {
+			configData = data
+		} else {
+			confFiles[name] = data
+		}
+	}
+	if configData == nil {
+		return &vpnapi.ImportConfigResponse{Success: false, Error: "config.yaml not found in archive"}, nil
+	}
+
+	// Step 4: Parse, migrate, validate config.
+	core.Log.Infof("Core", "ImportConfig: step 4 — parse/migrate/validate")
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(configData, &raw); err != nil {
+		return &vpnapi.ImportConfigResponse{Success: false, Error: fmt.Sprintf("invalid YAML: %v", err)}, nil
+	}
+	if _, _, err := core.MigrateConfig(raw); err != nil {
+		return &vpnapi.ImportConfigResponse{Success: false, Error: fmt.Sprintf("migration failed: %v", err)}, nil
+	}
+	migratedData, err := yaml.Marshal(raw)
+	if err != nil {
+		return &vpnapi.ImportConfigResponse{Success: false, Error: fmt.Sprintf("marshal config: %v", err)}, nil
+	}
+	var cfg core.Config
+	if err := yaml.Unmarshal(migratedData, &cfg); err != nil {
+		return &vpnapi.ImportConfigResponse{Success: false, Error: fmt.Sprintf("parse config: %v", err)}, nil
+	}
+	if err := cfg.Validate(); err != nil {
+		return &vpnapi.ImportConfigResponse{Success: false, Error: fmt.Sprintf("validation: %v", err)}, nil
+	}
+
+	// Step 5: Disconnect all active tunnels.
+	core.Log.Infof("Core", "ImportConfig: step 5 — disconnect all tunnels")
+	_ = s.ctrl.DisconnectAll()
+
+	// Step 6: Write .conf files to disk.
+	core.Log.Infof("Core", "ImportConfig: step 6 — write %d .conf files", len(confFiles))
+	for relPath, data := range confFiles {
+		absPath := filepath.Join(baseDir, filepath.FromSlash(relPath))
+		dir := filepath.Dir(absPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			core.Log.Warnf("Core", "Import: mkdir %s: %v", dir, err)
+			continue
+		}
+		if err := os.WriteFile(absPath, data, 0600); err != nil {
+			core.Log.Warnf("Core", "Import: write %s: %v", relPath, err)
+		}
+	}
+
+	// Step 7: Replace config and save.
+	core.Log.Infof("Core", "ImportConfig: step 7 — replace config and save")
+	cfg.Version = core.CurrentConfigVersion
+	s.cfg.SetQuiet(cfg)
+	if err := s.cfg.Save(); err != nil {
+		return &vpnapi.ImportConfigResponse{Success: false, Error: fmt.Sprintf("save config: %v", err)}, nil
+	}
+
+	// Step 8: Notify listeners to reload.
+	core.Log.Infof("Core", "ImportConfig: step 8 — publish reload event")
+	s.bus.Publish(core.Event{Type: core.EventConfigReloaded})
+	if s.reconnectMgr != nil {
+		s.reconnectMgr.SetEnabled(cfg.GUI.Reconnect.Enabled)
+	}
+	core.Log.Infof("Core", "ImportConfig: done")
+
+	return &vpnapi.ImportConfigResponse{Success: true}, nil
+}
+
+// ─── ZIP helpers ─────────────────────────────────────────────────────
+
+func zipAddBytes(zw *zip.Writer, name string, data []byte) error {
+	w, err := zw.Create(name)
+	if err != nil {
+		return fmt.Errorf("zip create %s: %w", name, err)
+	}
+	if _, err := w.Write(data); err != nil {
+		return fmt.Errorf("zip write %s: %w", name, err)
+	}
+	return nil
+}
+
+func zipReadFile(f *zip.File) ([]byte, error) {
+	rc, err := f.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
+}
+
+func containsDotDot(path string) bool {
+	for _, seg := range strings.Split(filepath.ToSlash(path), "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // ─── Streaming ──────────────────────────────────────────────────────

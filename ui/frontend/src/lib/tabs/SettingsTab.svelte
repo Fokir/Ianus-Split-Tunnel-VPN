@@ -138,6 +138,42 @@
     return true;
   }
 
+  let exporting = false;
+  let exportSuccess = false;
+  let importing = false;
+  let importSuccess = false;
+
+  async function doExport() {
+    exporting = true;
+    exportSuccess = false;
+    try {
+      await api.exportConfig();
+      exportSuccess = true;
+      setTimeout(() => exportSuccess = false, 3000);
+    } catch (e) {
+      error = (e && e.message) ? e.message : String(e || 'Export failed');
+    } finally {
+      exporting = false;
+    }
+  }
+
+  async function doImport() {
+    if (!confirm($t('settings.importConfirm'))) return;
+    importing = true;
+    importSuccess = false;
+    try {
+      await api.importConfig();
+      importSuccess = true;
+      setTimeout(() => importSuccess = false, 3000);
+      // Reload settings after import.
+      await loadData();
+    } catch (e) {
+      error = (e && e.message) ? e.message : String(e || 'Import failed');
+    } finally {
+      importing = false;
+    }
+  }
+
   let flushing = false;
   let flushSuccess = false;
 
@@ -517,6 +553,64 @@
             <option value="WARN">WARN</option>
             <option value="ERROR">ERROR</option>
           </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- Backup -->
+    <section class="space-y-3">
+      <h3 class="text-sm font-medium text-zinc-400 uppercase tracking-wider">{$t('settings.backup')}</h3>
+      <div class="bg-zinc-800/40 border border-zinc-700/40 rounded-lg p-4">
+        <div class="flex gap-3">
+          <button
+            class="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors {exportSuccess ? 'bg-green-600/20 text-green-400 border border-green-500/30' : 'bg-zinc-700/50 text-zinc-200 hover:bg-zinc-700 hover:text-zinc-100 border border-zinc-600/40'}"
+            on:click={doExport}
+            disabled={exporting}
+            title={$t('settings.exportConfigHint')}
+          >
+            {#if exporting}
+              <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+              {$t('settings.exporting')}
+            {:else if exportSuccess}
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+              {$t('settings.exportSuccess')}
+            {:else}
+              <!-- Arrow up icon -->
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 19V5"/>
+                <path d="M5 12l7-7 7 7"/>
+              </svg>
+              {$t('settings.exportConfig')}
+            {/if}
+          </button>
+
+          <button
+            class="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors {importSuccess ? 'bg-green-600/20 text-green-400 border border-green-500/30' : 'bg-zinc-700/50 text-zinc-200 hover:bg-zinc-700 hover:text-zinc-100 border border-zinc-600/40'}"
+            on:click={doImport}
+            disabled={importing}
+            title={$t('settings.importConfigHint')}
+          >
+            {#if importing}
+              <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+              {$t('settings.importing')}
+            {:else if importSuccess}
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+              {$t('settings.importSuccess')}
+            {:else}
+              <!-- Arrow down icon -->
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 5v14"/>
+                <path d="M19 12l-7 7-7-7"/>
+              </svg>
+              {$t('settings.importConfig')}
+            {/if}
+          </button>
         </div>
       </div>
     </section>

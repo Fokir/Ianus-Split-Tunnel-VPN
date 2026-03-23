@@ -35,6 +35,10 @@ func DialWithTimeout(ctx context.Context, timeout time.Duration) (*Client, error
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 			return ipcDial(timeout)
 		}),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxMsgSize),
+			grpc.MaxCallSendMsgSize(maxMsgSize),
+		),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("ipc: dial: %w", err)

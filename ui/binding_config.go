@@ -12,6 +12,7 @@ import (
 
 	vpnapi "awg-split-tunnel/api/gen"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -122,6 +123,86 @@ func (b *BindingService) RestoreConnections() error {
 	resp, err := b.client.Service.RestoreConnections(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
+// ─── Backup (Export / Import) ────────────────────────────────────────
+
+// ExportConfig opens a save-file dialog and writes the current config ZIP archive to the chosen path.
+func (b *BindingService) ExportConfig() error {
+	app := application.Get()
+	if app == nil {
+		return fmt.Errorf("application not initialized")
+	}
+
+	// Get ZIP archive from service.
+	resp, err := b.client.Service.ExportConfig(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return fmt.Errorf("export config: %w", err)
+	}
+
+	// Open save dialog.
+	path, err := app.Dialog.SaveFile().
+		SetMessage("Export configuration").
+		SetFilename("awg-config.zip").
+		AddFilter("ZIP archives", "*.zip").
+		PromptForSingleSelection()
+	if err != nil {
+		return fmt.Errorf("save dialog: %w", err)
+	}
+	if path == "" {
+		return nil // user cancelled
+	}
+
+	// Ensure .zip extension.
+	if filepath.Ext(path) != ".zip" {
+		path += ".zip"
+	}
+
+	if err := os.WriteFile(path, resp.ZipData, 0600); err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+	return nil
+}
+
+// ImportConfig opens an open-file dialog, reads the selected ZIP archive,
+// sends it to the service for validation/migration, and replaces the current config.
+// A backup is automatically created in the backups/ folder before import.
+// Active tunnels are disconnected before replacement.
+func (b *BindingService) ImportConfig() error {
+	app := application.Get()
+	if app == nil {
+		return fmt.Errorf("application not initialized")
+	}
+
+	// Open file dialog.
+	path, err := app.Dialog.OpenFile().
+		SetTitle("Import configuration").
+		AddFilter("ZIP archives", "*.zip").
+		CanChooseFiles(true).
+		CanChooseDirectories(false).
+		PromptForSingleSelection()
+	if err != nil {
+		return fmt.Errorf("open dialog: %w", err)
+	}
+	if path == "" {
+		return nil // user cancelled
+	}
+
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return fmt.Errorf("read file: %w", err)
+	}
+
+	resp, err := b.client.Service.ImportConfig(context.Background(), &vpnapi.ImportConfigRequest{
+		ZipData: data,
+	})
+	if err != nil {
+		return fmt.Errorf("import config: %w", err)
 	}
 	if !resp.Success {
 		return errors.New(resp.Error)

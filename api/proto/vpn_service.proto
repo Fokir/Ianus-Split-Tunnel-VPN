@@ -322,6 +322,19 @@ message SaveConfigResponse {
   bool restarted = 3;         // true if VPN was restarted
 }
 
+message ExportConfigResponse {
+  bytes zip_data = 1;         // ZIP archive: config.yaml + tunnel .conf files
+}
+
+message ImportConfigRequest {
+  bytes zip_data = 1;         // ZIP archive to import
+}
+
+message ImportConfigResponse {
+  bool success = 1;
+  string error = 2;
+}
+
 // -- Logs --
 
 message LogStreamRequest {
@@ -555,6 +568,8 @@ service VPNService {
   // -- Config --
   rpc GetConfig(google.protobuf.Empty) returns (AppConfig);
   rpc SaveConfig(SaveConfigRequest) returns (SaveConfigResponse);
+  rpc ExportConfig(google.protobuf.Empty) returns (ExportConfigResponse);
+  rpc ImportConfig(ImportConfigRequest) returns (ImportConfigResponse);
 
   // -- Streaming --
   rpc StreamLogs(LogStreamRequest) returns (stream LogEntry);

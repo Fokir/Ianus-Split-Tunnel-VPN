@@ -3,6 +3,7 @@
  * Wails v3 generates JS bindings from Go BindingService methods.
  */
 import { BindingService } from '../../bindings/awg-split-tunnel/ui';
+import { Call } from '@wailsio/runtime';
 
 // ─── Service status ─────────────────────────────────────────────────
 
@@ -148,6 +149,16 @@ export function getConfig() {
 
 export function saveConfig(config, restartIfConnected) {
   return BindingService.SaveConfig(config, restartIfConnected);
+}
+
+// ─── Backup (Export / Import) ────────────────────────────────────────
+
+export function exportConfig() {
+  return Call.ByName('main.BindingService.ExportConfig');
+}
+
+export function importConfig() {
+  return Call.ByName('main.BindingService.ImportConfig');
 }
 
 // ─── Autostart ──────────────────────────────────────────────────────

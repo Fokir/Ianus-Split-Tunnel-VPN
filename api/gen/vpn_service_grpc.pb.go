@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v6.33.5
-// source: vpn_service.proto
+// source: api/proto/vpn_service.proto
 
 package vpnapi
 
@@ -43,6 +43,8 @@ const (
 	VPNService_UpdateGeosite_FullMethodName            = "/awg.vpn.v1.VPNService/UpdateGeosite"
 	VPNService_GetConfig_FullMethodName                = "/awg.vpn.v1.VPNService/GetConfig"
 	VPNService_SaveConfig_FullMethodName               = "/awg.vpn.v1.VPNService/SaveConfig"
+	VPNService_ExportConfig_FullMethodName             = "/awg.vpn.v1.VPNService/ExportConfig"
+	VPNService_ImportConfig_FullMethodName             = "/awg.vpn.v1.VPNService/ImportConfig"
 	VPNService_StreamLogs_FullMethodName               = "/awg.vpn.v1.VPNService/StreamLogs"
 	VPNService_StreamStats_FullMethodName              = "/awg.vpn.v1.VPNService/StreamStats"
 	VPNService_StreamConnections_FullMethodName        = "/awg.vpn.v1.VPNService/StreamConnections"
@@ -96,6 +98,8 @@ type VPNServiceClient interface {
 	// -- Config --
 	GetConfig(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*AppConfig, error)
 	SaveConfig(ctx context.Context, in *SaveConfigRequest, opts ...grpc.CallOption) (*SaveConfigResponse, error)
+	ExportConfig(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ExportConfigResponse, error)
+	ImportConfig(ctx context.Context, in *ImportConfigRequest, opts ...grpc.CallOption) (*ImportConfigResponse, error)
 	// -- Streaming --
 	StreamLogs(ctx context.Context, in *LogStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEntry], error)
 	StreamStats(ctx context.Context, in *StatsStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StatsSnapshot], error)
@@ -362,6 +366,26 @@ func (c *vPNServiceClient) SaveConfig(ctx context.Context, in *SaveConfigRequest
 	return out, nil
 }
 
+func (c *vPNServiceClient) ExportConfig(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ExportConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExportConfigResponse)
+	err := c.cc.Invoke(ctx, VPNService_ExportConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vPNServiceClient) ImportConfig(ctx context.Context, in *ImportConfigRequest, opts ...grpc.CallOption) (*ImportConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ImportConfigResponse)
+	err := c.cc.Invoke(ctx, VPNService_ImportConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *vPNServiceClient) StreamLogs(ctx context.Context, in *LogStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEntry], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &VPNService_ServiceDesc.Streams[0], VPNService_StreamLogs_FullMethodName, cOpts...)
@@ -611,6 +635,8 @@ type VPNServiceServer interface {
 	// -- Config --
 	GetConfig(context.Context, *emptypb.Empty) (*AppConfig, error)
 	SaveConfig(context.Context, *SaveConfigRequest) (*SaveConfigResponse, error)
+	ExportConfig(context.Context, *emptypb.Empty) (*ExportConfigResponse, error)
+	ImportConfig(context.Context, *ImportConfigRequest) (*ImportConfigResponse, error)
 	// -- Streaming --
 	StreamLogs(*LogStreamRequest, grpc.ServerStreamingServer[LogEntry]) error
 	StreamStats(*StatsStreamRequest, grpc.ServerStreamingServer[StatsSnapshot]) error
@@ -715,6 +741,12 @@ func (UnimplementedVPNServiceServer) GetConfig(context.Context, *emptypb.Empty) 
 }
 func (UnimplementedVPNServiceServer) SaveConfig(context.Context, *SaveConfigRequest) (*SaveConfigResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SaveConfig not implemented")
+}
+func (UnimplementedVPNServiceServer) ExportConfig(context.Context, *emptypb.Empty) (*ExportConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExportConfig not implemented")
+}
+func (UnimplementedVPNServiceServer) ImportConfig(context.Context, *ImportConfigRequest) (*ImportConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ImportConfig not implemented")
 }
 func (UnimplementedVPNServiceServer) StreamLogs(*LogStreamRequest, grpc.ServerStreamingServer[LogEntry]) error {
 	return status.Error(codes.Unimplemented, "method StreamLogs not implemented")
@@ -1205,6 +1237,42 @@ func _VPNService_SaveConfig_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VPNService_ExportConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).ExportConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_ExportConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).ExportConfig(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VPNService_ImportConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ImportConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VPNServiceServer).ImportConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VPNService_ImportConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VPNServiceServer).ImportConfig(ctx, req.(*ImportConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _VPNService_StreamLogs_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(LogStreamRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -1601,6 +1669,14 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _VPNService_SaveConfig_Handler,
 		},
 		{
+			MethodName: "ExportConfig",
+			Handler:    _VPNService_ExportConfig_Handler,
+		},
+		{
+			MethodName: "ImportConfig",
+			Handler:    _VPNService_ImportConfig_Handler,
+		},
+		{
 			MethodName: "ListProcesses",
 			Handler:    _VPNService_ListProcesses_Handler,
 		},
@@ -1679,5 +1755,5 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "vpn_service.proto",
+	Metadata: "api/proto/vpn_service.proto",
 }

@@ -333,7 +333,17 @@
     "language": "Language",
     "langLabel": "Interface language",
     "langHint": "Select display language",
-    "experimental": "Experimental"
+    "experimental": "Experimental",
+    "backup": "Backup",
+    "exportConfig": "Export",
+    "exportConfigHint": "Save configuration and tunnel files to ZIP archive",
+    "importConfig": "Import",
+    "importConfigHint": "Load configuration from ZIP archive",
+    "exporting": "Exporting...",
+    "importing": "Importing...",
+    "exportSuccess": "Configuration exported",
+    "importSuccess": "Configuration imported",
+    "importConfirm": "Import will replace the current configuration and disconnect all active tunnels. A backup will be saved automatically. Continue?"
   },
   "logs": {
     "filterPlaceholder": "Search logs...",

@@ -16,9 +16,17 @@ type Server struct {
 	listener net.Listener
 }
 
+// maxMsgSize is the maximum gRPC message size for IPC (32 MiB).
+// Needed for config backup ZIP archives containing tunnel .conf files.
+const maxMsgSize = 32 << 20
+
 // NewServer creates a new IPC server with the given VPNService implementation.
 func NewServer(svc vpnapi.VPNServiceServer, opts ...grpc.ServerOption) *Server {
-	gs := grpc.NewServer(opts...)
+	defaults := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(maxMsgSize),
+		grpc.MaxSendMsgSize(maxMsgSize),
+	}
+	gs := grpc.NewServer(append(defaults, opts...)...)
 	vpnapi.RegisterVPNServiceServer(gs, svc)
 	return &Server{grpc: gs}
 }
