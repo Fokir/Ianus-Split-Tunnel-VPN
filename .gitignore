@@ -4,7 +4,8 @@
 *.syso
 /awg-split-tunnel
 
-build
+/build
+ui/frontend/dist
 .idea
 .serena
 logs
