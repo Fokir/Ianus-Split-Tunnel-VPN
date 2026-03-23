@@ -253,6 +253,12 @@ func configToProto(c core.Config) *vpnapi.AppConfig {
 			Interval:   c.GUI.Reconnect.Interval,
 			MaxRetries: int32(c.GUI.Reconnect.MaxRetries),
 		},
+		AutoBypass: &vpnapi.AutoBypassConfig{
+			Enabled:       c.AutoBypass.Enabled,
+			ExtraPatterns: c.AutoBypass.ExtraPatterns,
+			ExtraBypass:   c.AutoBypass.ExtraBypass,
+			NeverBypass:   c.AutoBypass.NeverBypass,
+		},
 	}
 }
 
@@ -320,6 +326,15 @@ func configFromProto(pc *vpnapi.AppConfig) core.Config {
 			Enabled:    pc.Reconnect.Enabled,
 			Interval:   pc.Reconnect.Interval,
 			MaxRetries: int(pc.Reconnect.MaxRetries),
+		}
+	}
+
+	if pc.AutoBypass != nil {
+		cfg.AutoBypass = core.AutoBypassConfig{
+			Enabled:       pc.AutoBypass.Enabled,
+			ExtraPatterns: pc.AutoBypass.ExtraPatterns,
+			ExtraBypass:   pc.AutoBypass.ExtraBypass,
+			NeverBypass:   pc.AutoBypass.NeverBypass,
 		}
 	}
 
