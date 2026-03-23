@@ -361,6 +361,107 @@ func (w *WFPManager) BlockProcessOnRealNIC(exePath string) error {
 	return nil
 }
 
+// AddBypassPermit adds WFP PERMIT rules for an exe path, allowing it to
+// bypass the TUN adapter entirely. Used by auto-bypass for game processes.
+// Weight 1400 overrides BLOCK rules (1000) but is below PermitVirtualAdapters (1500).
+func (w *WFPManager) AddBypassPermit(exePath string) error {
+	key := "bypass:" + strings.ToLower(exePath)
+
+	appID, err := wf.AppID(exePath)
+	if err != nil {
+		return fmt.Errorf("[WFP] AppID(%s): %w", exePath, err)
+	}
+
+	w.mu.Lock()
+	if _, exists := w.rules[key]; exists {
+		w.mu.Unlock()
+		return nil
+	}
+	w.mu.Unlock()
+
+	var ruleIDs []wf.RuleID
+
+	for _, ds := range dualStackLayers {
+		conditions := []*wf.Match{
+			{
+				Field: wf.FieldALEAppID,
+				Op:    wf.MatchTypeEqual,
+				Value: appID,
+			},
+			{
+				Field: wf.FieldIPLocalInterface,
+				Op:    wf.MatchTypeNotEqual,
+				Value: uint64(w.tunLUID),
+			},
+		}
+
+		connectRuleID := w.nextRuleID()
+		if err := w.addRuleWithRetry(&wf.Rule{
+			ID:         connectRuleID,
+			Name:       fmt.Sprintf("AWG bypass connect%s: %s", ds.tag, key),
+			Layer:      ds.connect,
+			Sublayer:   awgSublayerID,
+			Weight:     1400,
+			Conditions: conditions,
+			Action:     wf.ActionPermit,
+		}); err != nil {
+			for _, id := range ruleIDs {
+				w.session.DeleteRule(id)
+			}
+			return fmt.Errorf("[WFP] add bypass connect%s rule: %w", ds.tag, err)
+		}
+		ruleIDs = append(ruleIDs, connectRuleID)
+
+		recvRuleID := w.nextRuleID()
+		if err := w.addRuleWithRetry(&wf.Rule{
+			ID:         recvRuleID,
+			Name:       fmt.Sprintf("AWG bypass recv%s: %s", ds.tag, key),
+			Layer:      ds.recv,
+			Sublayer:   awgSublayerID,
+			Weight:     1400,
+			Conditions: conditions,
+			Action:     wf.ActionPermit,
+		}); err != nil {
+			for _, id := range ruleIDs {
+				w.session.DeleteRule(id)
+			}
+			return fmt.Errorf("[WFP] add bypass recv%s rule: %w", ds.tag, err)
+		}
+		ruleIDs = append(ruleIDs, recvRuleID)
+	}
+
+	w.mu.Lock()
+	if _, exists := w.rules[key]; exists {
+		w.mu.Unlock()
+		for _, id := range ruleIDs {
+			w.session.DeleteRule(id)
+		}
+		return nil
+	}
+	w.rules[key] = ruleIDs
+	w.mu.Unlock()
+
+	core.Log.Debugf("WFP", "Bypass permit added for %s (%d rules, dual-stack)", strings.ToLower(exePath), len(ruleIDs))
+	return nil
+}
+
+// RevokeBypassPermits removes all auto-bypass WFP permits.
+func (w *WFPManager) RevokeBypassPermits() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	for key, ids := range w.rules {
+		if !strings.HasPrefix(key, "bypass:") {
+			continue
+		}
+		for _, id := range ids {
+			w.session.DeleteRule(id)
+		}
+		delete(w.rules, key)
+	}
+	core.Log.Infof("WFP", "All auto-bypass permits revoked")
+}
+
 // UnblockProcess removes WFP rules for the given process.
 func (w *WFPManager) UnblockProcess(exePath string) {
 	key := strings.ToLower(exePath)

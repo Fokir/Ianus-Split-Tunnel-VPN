@@ -48,6 +48,7 @@ type TUNRouter struct {
 	dnsResolver  *DNSResolver // for in-band DNS hijack (macOS: utun packets to tunIP:53)
 	dnsHijackSem chan struct{} // limits concurrent hijack goroutines
 	ipFilter     atomic.Pointer[IPFilter]
+	autoBypass   *core.AutoBypass
 
 	tunIP   [4]byte       // 10.255.0.1 in network byte order
 	selfPID uint32        // current process PID (loop prevention)
@@ -1129,9 +1130,10 @@ func (r *TUNRouter) resolveICMPFlow(dstIP [4]byte) (tunnelID string, action flow
 type flowAction int
 
 const (
-	flowRoute flowAction = iota // route through matched tunnel
-	flowPass                    // route through direct provider
-	flowDrop                    // drop the packet
+	flowRoute  flowAction = iota // route through matched tunnel
+	flowPass                     // route through direct provider
+	flowDrop                     // drop the packet
+	flowBypass                   // full bypass — drop packet, WFP permit added
 )
 
 // flowFallbackInfo carries context needed for connection-level fallback
