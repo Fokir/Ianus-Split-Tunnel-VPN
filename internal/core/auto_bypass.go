@@ -1,6 +1,7 @@
 package core
 
 import (
+	"slices"
 	"strings"
 	"sync"
 )
@@ -69,15 +70,11 @@ func (ab *AutoBypass) ShouldBypass(exePathLower, baseNameLower string) bool {
 }
 
 func (ab *AutoBypass) evaluate(exePathLower, baseNameLower string) bool {
-	for _, n := range ab.neverBypass {
-		if baseNameLower == n {
-			return false
-		}
+	if slices.Contains(ab.neverBypass, baseNameLower) {
+		return false
 	}
-	for _, e := range ab.extraBypass {
-		if baseNameLower == e {
-			return true
-		}
+	if slices.Contains(ab.extraBypass, baseNameLower) {
+		return true
 	}
 	for _, p := range ab.patterns {
 		if strings.Contains(exePathLower, p) {
