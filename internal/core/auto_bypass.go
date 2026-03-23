@@ -84,8 +84,16 @@ func (ab *AutoBypass) evaluate(exePathLower, baseNameLower string) bool {
 	return false
 }
 
+// TrackPermit records that a process has been auto-bypassed.
 func (ab *AutoBypass) TrackPermit(exePathLower string) {
 	ab.permits.Store(exePathLower, struct{}{})
+}
+
+// TrackPermitOnce records the exe path and returns true only on first call
+// for this path. Used to log once per detected game process.
+func (ab *AutoBypass) TrackPermitOnce(exePathLower string) bool {
+	_, loaded := ab.permits.LoadOrStore(exePathLower, struct{}{})
+	return !loaded
 }
 
 func (ab *AutoBypass) PermittedPaths() []string {
