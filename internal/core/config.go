@@ -352,6 +352,7 @@ type Config struct {
 	Logging       LogConfig                     `yaml:"logging,omitempty"`
 	GUI           GUIConfig                     `yaml:"gui,omitempty"`
 	Update        UpdateConfig                  `yaml:"update,omitempty"`
+	AutoBypass    AutoBypassConfig              `yaml:"auto_bypass,omitempty"`
 }
 
 // validProtocols is the set of recognized tunnel protocol identifiers.

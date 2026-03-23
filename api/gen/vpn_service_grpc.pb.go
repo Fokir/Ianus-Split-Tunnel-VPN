@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v6.33.5
-// source: api/proto/vpn_service.proto
+// source: vpn_service.proto
 
 package vpnapi
 
@@ -1755,5 +1755,5 @@ var VPNService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "api/proto/vpn_service.proto",
+	Metadata: "vpn_service.proto",
 }

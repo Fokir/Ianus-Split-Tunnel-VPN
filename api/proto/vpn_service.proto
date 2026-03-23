@@ -153,6 +153,13 @@ message ReconnectConfig {
   int32 max_retries = 3;    // 0 = unlimited
 }
 
+message AutoBypassConfig {
+  bool enabled = 1;
+  repeated string extra_patterns = 2;   // additional directory patterns
+  repeated string extra_bypass = 3;     // additional exe names to bypass
+  repeated string never_bypass = 4;     // exclusions from bypass
+}
+
 message AppConfig {
   GlobalFilterConfig global = 1;
   repeated TunnelConfig tunnels = 2;
@@ -162,6 +169,7 @@ message AppConfig {
   repeated DomainRule domain_rules = 6;
   repeated SubscriptionConfig subscriptions = 7;
   ReconnectConfig reconnect = 8;
+  AutoBypassConfig auto_bypass = 9;
 }
 
 // ─── Stats messages ─────────────────────────────────────────────────
