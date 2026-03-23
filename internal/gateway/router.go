@@ -521,6 +521,8 @@ func (r *TUNRouter) handleTCPSYN(pkt []byte, m pktMeta) {
 	switch action {
 	case flowDrop:
 		return // drop packet (don't write to TUN)
+	case flowBypass:
+		return // full bypass — WFP permit added, drop from TUN
 	case flowPass:
 		// Route through direct provider.
 		tunnelID = DirectTunnelID
@@ -796,6 +798,8 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	switch action {
 	case flowDrop:
 		return
+	case flowBypass:
+		return // full bypass — WFP permit added, drop from TUN
 	case flowPass:
 		tunnelID = DirectTunnelID
 		if port, ok := r.registry.GetUDPProxyPort(DirectTunnelID); ok {
@@ -1008,6 +1012,8 @@ func (r *TUNRouter) handleICMP(pkt []byte, m pktMeta) {
 	switch action {
 	case flowDrop:
 		return
+	case flowBypass:
+		return // full bypass — WFP permit added, drop from TUN
 	case flowPass:
 		return // let OS handle via real NIC
 	case flowRoute:
@@ -1311,6 +1317,20 @@ func (r *TUNRouter) resolveFlow(srcPort uint16, isUDP bool, dstIP [4]byte) (tunn
 	// connection-level fallback in the proxy layer.
 	result, currentRuleIdx := r.rules.MatchPreLoweredFrom(exeLower, baseLower, 0)
 	if !result.Matched {
+		// Auto-bypass: check if this is a game/latency-sensitive process.
+		if r.autoBypass != nil && r.autoBypass.ShouldBypass(exeLower, baseLower) {
+			if r.wfp != nil {
+				if wfpMgr, ok := r.wfp.(*WFPManager); ok {
+					if err := wfpMgr.AddBypassPermit(exePath); err != nil {
+						core.Log.Warnf("AutoBypass", "WFP permit failed for %s: %v", baseLower, err)
+					} else {
+						r.autoBypass.TrackPermit(exeLower)
+						core.Log.Infof("AutoBypass", "%s → full bypass (WFP permit added)", baseLower)
+					}
+				}
+			}
+			return "", 0, flowBypass, 0, fb
+		}
 		core.Log.Debugf("Router", "no rule match for %s (base=%s, PID=%d, dst=%d.%d.%d.%d) → pass",
 			exeLower, baseLower, pid, dstIP[0], dstIP[1], dstIP[2], dstIP[3])
 		return "", 0, flowPass, 0, fb
