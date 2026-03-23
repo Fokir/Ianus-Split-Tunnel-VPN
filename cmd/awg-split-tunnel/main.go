@@ -204,6 +204,9 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	// === 7a. IP/App Filter ===
 	ipFilter := gateway.NewIPFilter(cfg.Global, cfg.Tunnels)
 	tunRouter.SetIPFilter(ipFilter)
+
+	// === 7a-bis. Auto-Bypass (game detection) ===
+	tunRouter.SetAutoBypass(core.NewAutoBypass(cfg.AutoBypass))
 	if ipFilter.HasFilters() {
 		core.Log.Infof("Gateway", "IP/App filter active: global disallowed_ips=%d, global allowed_ips=%d, global disallowed_apps=%d",
 			len(cfg.Global.DisallowedIPs), len(cfg.Global.AllowedIPs), len(cfg.Global.DisallowedApps))
@@ -860,6 +863,8 @@ mainLoop:
 			ipFilter = gateway.NewIPFilter(newCfg.Global, newCfg.Tunnels)
 			tunRouter.SetIPFilter(ipFilter)
 			ruleEngine.SetRules(newCfg.Rules)
+			// Reload auto-bypass (revokes old WFP permits, rebuilds with new config).
+			tunRouter.SetAutoBypass(core.NewAutoBypass(newCfg.AutoBypass))
 			// Rebuild domain matcher if rules changed
 			if dnsResolver != nil {
 				domainReloader(newCfg.DomainRules)

@@ -126,6 +126,18 @@ func (r *TUNRouter) SetIPFilter(filter *IPFilter) {
 	r.ipFilter.Store(filter)
 }
 
+// SetAutoBypass replaces the auto-bypass configuration.
+// Revokes all existing bypass WFP permits and rebuilds with new config.
+func (r *TUNRouter) SetAutoBypass(ab *core.AutoBypass) {
+	// Revoke old permits before swapping.
+	if r.autoBypass != nil {
+		if wfpMgr, ok := r.wfp.(*WFPManager); ok {
+			wfpMgr.RevokeBypassPermits()
+		}
+	}
+	r.autoBypass = ab
+}
+
 // AddServerEndpoint registers a VPN server IP → tunnel mapping.
 // Traffic to this IP will be routed through the owning tunnel, allowing
 // access to server admin panels and services via the VPN tunnel.
