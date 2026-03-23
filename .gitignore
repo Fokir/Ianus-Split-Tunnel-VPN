@@ -9,3 +9,5 @@ build
 .serena
 logs
 BINDINGS_GENERATED.md
+.claude
+CLAUDE.md
