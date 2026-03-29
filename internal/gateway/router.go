@@ -632,13 +632,10 @@ case flowPass:
 
 func (r *TUNRouter) handleTCPProxyResponse(pkt []byte, m pktMeta) {
 	dstIP := netip.AddrFrom4(m.dstIP)
-	entry, ok := r.flows.GetTCP(dstIP, m.dstP)
+	entry, ok := r.flows.GetAndTouchTCP(dstIP, m.dstP)
 	if !ok {
 		return
 	}
-
-	// Update activity timestamp.
-	r.flows.TouchTCP(dstIP, m.dstP)
 
 	// RST: connection aborted, clean up NAT entry.
 	if m.flags&tcpRST != 0 {
@@ -675,8 +672,7 @@ func (r *TUNRouter) handleTCPExisting(pkt []byte, m pktMeta) {
 	}
 
 	// Check raw flow table first.
-	if rawEntry, ok := r.flows.GetRawFlow(protoTCP, effectiveDstIP, m.srcP); ok {
-		r.flows.TouchRawFlow(protoTCP, effectiveDstIP, m.srcP)
+	if rawEntry, ok := r.flows.GetAndTouchRawFlow(protoTCP, effectiveDstIP, m.srcP); ok {
 
 		// RST: clean up raw flow.
 		if m.flags&tcpRST != 0 {
@@ -699,15 +695,12 @@ func (r *TUNRouter) handleTCPExisting(pkt []byte, m pktMeta) {
 
 	// Check proxy NAT table.
 	dstIP := netip.AddrFrom4(m.dstIP)
-	entry, ok := r.flows.GetTCP(dstIP, m.srcP)
+	entry, ok := r.flows.GetAndTouchTCP(dstIP, m.srcP)
 	if !ok {
 		// No NAT entry — try to create one (might be a retransmit or late SYN).
 		r.handleTCPSYN(pkt, m)
 		return
 	}
-
-	// Update activity timestamp.
-	r.flows.TouchTCP(dstIP, m.srcP)
 
 	// RST: clean up.
 	if m.flags&tcpRST != 0 {
@@ -762,8 +755,7 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	}
 
 	// Fast path: existing raw flow.
-	if rawEntry, ok := r.flows.GetRawFlow(protoUDP, effectiveDstIP, m.srcP); ok {
-		r.flows.TouchRawFlow(protoUDP, effectiveDstIP, m.srcP)
+	if rawEntry, ok := r.flows.GetAndTouchRawFlow(protoUDP, effectiveDstIP, m.srcP); ok {
 		if rf, vpnIP, ok := r.getRawForwarder(rawEntry.TunnelID); ok {
 			// FakeIP: rewrite dst from FakeIP to real IP for existing flows.
 			if rawEntry.FakeIP != [4]byte{} {
@@ -777,10 +769,8 @@ func (r *TUNRouter) handleUDP(pkt []byte, m pktMeta) {
 	}
 
 	// Fast path: existing proxy NAT entry.
-	entry, exists := r.flows.GetUDP(dstIP, m.srcP)
+	entry, exists := r.flows.GetAndTouchUDP(dstIP, m.srcP)
 	if exists {
-		r.flows.TouchUDP(dstIP, m.srcP)
-
 		tunSwapIPs(pkt)
 		tunSetUDPPort(pkt, m.tpOff+2, entry.UDPProxyPort, m.tpOff+6)
 
@@ -999,8 +989,7 @@ func (r *TUNRouter) handleICMP(pkt []byte, m pktMeta) {
 	}
 
 	// Fast path: existing raw flow (keyed by effective/real IP).
-	if rawEntry, ok := r.flows.GetRawFlow(protoICMP, effectiveDstIP, icmpID); ok {
-		r.flows.TouchRawFlow(protoICMP, effectiveDstIP, icmpID)
+	if rawEntry, ok := r.flows.GetAndTouchRawFlow(protoICMP, effectiveDstIP, icmpID); ok {
 		if rf, vpnIP, ok := r.getRawForwarder(rawEntry.TunnelID); ok {
 			// FakeIP: rewrite dst from FakeIP to real IP before forwarding.
 			if rawEntry.FakeIP != [4]byte{} {
@@ -1590,14 +1579,10 @@ func (r *TUNRouter) handleInboundRaw(pkt []byte) bool {
 	// Check if this response matches a raw flow entry.
 	// For inbound: srcIP = original destination, dstPort = original source port.
 	inboundStart := time.Now()
-	rawEntry, ok := r.flows.GetRawFlow(proto, srcIP, dstPort)
+	rawEntry, ok := r.flows.GetAndTouchRawFlow(proto, srcIP, dstPort)
 	if !ok {
 		return false // no raw flow — let gVisor handle (proxy/DNS resolver traffic)
 	}
-
-	// Update activity timestamp so inbound-heavy flows (e.g. video streaming)
-	// are not evicted by the cleanup goroutine.
-	r.flows.TouchRawFlow(proto, srcIP, dstPort)
 
 	// Clamp TCP MSS on inbound SYN-ACK to prevent client sending oversized segments.
 	if proto == protoTCP {
