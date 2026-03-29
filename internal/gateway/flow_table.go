@@ -723,67 +723,32 @@ func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context, initialDelay time.
 		}
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-		// Preallocate candidates slice — reused across ticks to avoid GC churn.
-		candidates := make([]rawFlowKey, 0, 128)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				cleanupStart := time.Now()
-				now := ft.NowSec()
-				const timeout int64 = 300 // 5 minutes
-				totalRemoved := 0
+				now := ft.nowSec.Load()
+				const timeout int64 = 300
+				var marked int
 
 				for i := range ft.raw {
 					shard := &ft.raw[i]
-					// Phase 1: collect candidates under read lock.
-					candidates = candidates[:0]
 					shard.mu.RLock()
-					for key, idx := range shard.index {
+					for _, idx := range shard.index {
+						if atomic.LoadInt32(&shard.store[idx].Dead) != 0 {
+							continue
+						}
 						if now-atomic.LoadInt64(&shard.store[idx].LastActivity) > timeout {
-							candidates = append(candidates, key)
+							atomic.StoreInt32(&shard.store[idx].Dead, 1)
+							marked++
 						}
 					}
 					shard.mu.RUnlock()
-
-					if len(candidates) == 0 {
-						continue
-					}
-					// Phase 2: delete under write lock with re-check (TOCTOU fix).
-					shard.mu.Lock()
-					hookPtr := ft.rawFlowCleanupHook.Load()
-					for _, key := range candidates {
-						if idx, ok := shard.index[key]; ok {
-							if now-atomic.LoadInt64(&shard.store[idx].LastActivity) > timeout {
-								if hookPtr != nil {
-									(*hookPtr)(&shard.store[idx])
-								}
-								shard.store[idx] = RawFlowEntry{}
-								shard.free = append(shard.free, idx)
-								delete(shard.index, key)
-								totalRemoved++
-							}
-						}
-					}
-					remaining := len(shard.index)
-					shard.mu.Unlock()
-
-					if totalRemoved > 0 && remaining < maxEntriesPerShard/4 && remaining > 0 {
-						shard.mu.Lock()
-						if len(shard.index) < maxEntriesPerShard/4 {
-							newIndex := make(map[rawFlowKey]int32, len(shard.index)*2)
-							maps.Copy(newIndex, shard.index)
-							shard.index = newIndex
-						}
-						shard.mu.Unlock()
-					}
 				}
 
-				if elapsed := time.Since(cleanupStart); elapsed > 5*time.Millisecond {
-					core.Log.Warnf("Perf", "Raw flow cleanup took %s (removed %d)", elapsed, totalRemoved)
-				} else if totalRemoved > 0 {
-					core.Log.Debugf("Gateway", "Raw flow cleanup: removed %d stale entries", totalRemoved)
+				if marked > 0 {
+					core.Log.Debugf("Gateway", "Raw flow cleanup: marked %d entries dead", marked)
 				}
 			}
 		}
@@ -1011,71 +976,67 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context, initialDelay time.Dura
 		}
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-		// Preallocate candidates slice — reused across ticks to avoid GC churn.
-		candidates := make([]natKey, 0, 128)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				cleanupStart := time.Now()
-				now := ft.NowSec()
-				const timeout int64 = 300 // 5 minutes
-				totalRemoved := 0
+				now := ft.nowSec.Load()
+				const timeout int64 = 300
+				var marked int
 
 				for i := range ft.tcp {
 					shard := &ft.tcp[i]
-					// Phase 1: collect candidates under read lock.
-					candidates = candidates[:0]
 					shard.mu.RLock()
-					for key, idx := range shard.index {
+					for _, idx := range shard.index {
+						if atomic.LoadInt32(&shard.store[idx].Dead) != 0 {
+							continue
+						}
 						if now-atomic.LoadInt64(&shard.store[idx].LastActivity) > timeout {
-							candidates = append(candidates, key)
+							atomic.StoreInt32(&shard.store[idx].Dead, 1)
+							marked++
 						}
 					}
 					shard.mu.RUnlock()
-
-					if len(candidates) == 0 {
-						continue
-					}
-					// Phase 2: delete under write lock with re-check (TOCTOU fix).
-					shard.mu.Lock()
-					for _, key := range candidates {
-						if idx, ok := shard.index[key]; ok {
-							if now-atomic.LoadInt64(&shard.store[idx].LastActivity) > timeout {
-								shard.store[idx] = NATEntry{}
-								shard.free = append(shard.free, idx)
-								delete(shard.index, key)
-								totalRemoved++
-							}
-						}
-					}
-					remaining := len(shard.index)
-					shard.mu.Unlock()
-
-					if totalRemoved > 0 && remaining < maxEntriesPerShard/4 && remaining > 0 {
-						shard.mu.Lock()
-						if len(shard.index) < maxEntriesPerShard/4 {
-							newIndex := make(map[natKey]int32, len(shard.index)*2)
-							maps.Copy(newIndex, shard.index)
-							shard.index = newIndex
-						}
-						shard.mu.Unlock()
-					}
 				}
 
-				if elapsed := time.Since(cleanupStart); elapsed > 5*time.Millisecond {
-					core.Log.Warnf("Perf", "TCP NAT cleanup took %s (removed %d)", elapsed, totalRemoved)
-				} else if totalRemoved > 0 {
-					core.Log.Debugf("Gateway", "TCP NAT cleanup: removed %d stale entries", totalRemoved)
+				if marked > 0 {
+					core.Log.Debugf("Gateway", "TCP NAT cleanup: marked %d entries dead", marked)
 				}
 			}
 		}
 	})
 }
 
-// StartUDPCleanup periodically removes stale UDP NAT entries
-// (>2 min for normal, >10 sec for DNS port 53).
+// udpFlowTimeout returns the idle timeout in seconds for a UDP flow based on
+// its destination port. Gaming and media ports get longer timeouts; DNS gets
+// a short 10-second timeout.
+func udpFlowTimeout(dstPort uint16) int64 {
+	switch {
+	case dstPort == 53:
+		return 10
+	case dstPort >= 27015 && dstPort <= 27050:
+		return 600
+	case dstPort >= 3478 && dstPort <= 3479:
+		return 600
+	case dstPort >= 7000 && dstPort <= 9000:
+		return 600
+	case dstPort == 443:
+		return 300
+	case dstPort >= 3480 && dstPort <= 3497:
+		return 300
+	case dstPort >= 5004 && dstPort <= 5005:
+		return 300
+	case dstPort >= 16384 && dstPort <= 32767:
+		return 300
+	default:
+		return 300
+	}
+}
+
+// StartUDPCleanup periodically marks stale UDP NAT entries as dead using
+// adaptive per-port timeouts. Actual removal is performed by the compaction
+// goroutine (StartCompaction).
 func (ft *FlowTable) StartUDPCleanup(ctx context.Context, initialDelay time.Duration) {
 	ft.wg.Add(1)
 	core.SuperviseWG(ctx, &ft.wg, core.SupervisorConfig{Name: "flow.udp-cleanup"}, func(ctx context.Context) {
@@ -1089,69 +1050,32 @@ func (ft *FlowTable) StartUDPCleanup(ctx context.Context, initialDelay time.Dura
 		}
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-		// Preallocate candidates slice — reused across ticks to avoid GC churn.
-		type udpCandidate struct {
-			key     natKey
-			timeout int64
-		}
-		candidates := make([]udpCandidate, 0, 128)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				cleanupStart := time.Now()
-				now := ft.NowSec()
-				totalRemoved := 0
+				now := ft.nowSec.Load()
+				var marked int
 
 				for i := range ft.udp {
 					shard := &ft.udp[i]
-					// Phase 1: collect candidates under read lock.
-					candidates = candidates[:0]
 					shard.mu.RLock()
-					for key, idx := range shard.index {
-						entry := &shard.store[idx]
-						var timeout int64 = 120
-						if entry.OriginalDstPort == 53 {
-							timeout = 10
+					for _, idx := range shard.index {
+						if atomic.LoadInt32(&shard.store[idx].Dead) != 0 {
+							continue
 						}
-						if now-atomic.LoadInt64(&entry.LastActivity) > timeout {
-							candidates = append(candidates, udpCandidate{key, timeout})
+						timeout := udpFlowTimeout(shard.store[idx].OriginalDstPort)
+						if now-atomic.LoadInt64(&shard.store[idx].LastActivity) > timeout {
+							atomic.StoreInt32(&shard.store[idx].Dead, 1)
+							marked++
 						}
 					}
 					shard.mu.RUnlock()
-
-					if len(candidates) == 0 {
-						continue
-					}
-					// Phase 2: delete under write lock with re-check (TOCTOU fix).
-					shard.mu.Lock()
-					for _, c := range candidates {
-						if idx, ok := shard.index[c.key]; ok {
-							if now-atomic.LoadInt64(&shard.store[idx].LastActivity) > c.timeout {
-								shard.store[idx] = UDPNATEntry{}
-								shard.free = append(shard.free, idx)
-								delete(shard.index, c.key)
-								totalRemoved++
-							}
-						}
-					}
-					remaining := len(shard.index)
-					shard.mu.Unlock()
-
-					if totalRemoved > 0 && remaining < maxEntriesPerShard/4 && remaining > 0 {
-						shard.mu.Lock()
-						if len(shard.index) < maxEntriesPerShard/4 {
-							newIndex := make(map[natKey]int32, len(shard.index)*2)
-							maps.Copy(newIndex, shard.index)
-							shard.index = newIndex
-						}
-						shard.mu.Unlock()
-					}
 				}
 
-				if elapsed := time.Since(cleanupStart); elapsed > 5*time.Millisecond {
-					core.Log.Warnf("Perf", "UDP NAT cleanup took %s (removed %d)", elapsed, totalRemoved)
+				if marked > 0 {
+					core.Log.Debugf("Gateway", "UDP NAT cleanup: marked %d entries dead", marked)
 				}
 			}
 		}
