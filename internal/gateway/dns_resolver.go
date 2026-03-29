@@ -226,6 +226,9 @@ type DNSResolver struct {
 	// latencyTracker tracks per-tunnel DNS resolution latency using EWMA.
 	latencyTracker *DNSLatencyTracker
 
+	// dnsFanoutSem limits total concurrent fan-out goroutines across all queries.
+	dnsFanoutSem chan struct{}
+
 	started atomic.Bool
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
@@ -249,6 +252,7 @@ func NewDNSResolver(
 		tcpSem:         make(chan struct{}, 100),
 		udpConnCache:   newDNSUDPConnCache(),
 		latencyTracker: newDNSLatencyTracker(),
+		dnsFanoutSem:  make(chan struct{}, 32),
 	}
 
 	return r
@@ -557,6 +561,9 @@ func (r *DNSResolver) forwardUDPAll(ctx context.Context, tunnelIDs []string, que
 		return resp, server, tunnelIDs[0], err
 	}
 
+	// Staged fan-out: send to 2 best tunnels first, escalate if no response.
+	ranked := r.latencyTracker.RankTunnels(tunnelIDs)
+
 	type result struct {
 		resp     []byte
 		server   netip.Addr
@@ -567,32 +574,98 @@ func (r *DNSResolver) forwardUDPAll(ctx context.Context, tunnelIDs []string, que
 	fanCtx, fanCancel := context.WithCancel(ctx)
 	defer fanCancel()
 
-	ch := make(chan result, len(tunnelIDs))
-	for _, tid := range tunnelIDs {
-		go func(tunnelID string) {
-			defer func() {
-				if v := recover(); v != nil {
-					core.Log.Errorf("DNS", "panic in forwardUDP for tunnel %s: %v", tunnelID, v)
-					ch <- result{err: fmt.Errorf("panic: %v", v)}
-				}
-			}()
-			resp, server, err := r.forwardUDP(fanCtx, tunnelID, query)
-			ch <- result{resp, server, tunnelID, err}
-		}(tid)
+	ch := make(chan result, len(ranked))
+	var launched int
+
+	// Launch a batch of goroutines, each acquiring a fan-out semaphore slot.
+	launchBatch := func(batch []string) {
+		for _, tid := range batch {
+			select {
+			case r.dnsFanoutSem <- struct{}{}:
+			case <-fanCtx.Done():
+				return
+			}
+			launched++
+			core.SafeGo("dns-fanout-udp-"+tid, func() {
+				defer func() { <-r.dnsFanoutSem }()
+				resp, srv, err := r.forwardUDP(fanCtx, tid, query)
+				ch <- result{resp: resp, server: srv, tunnelID: tid, err: err}
+			})
+		}
+	}
+
+	// Compute escalation timeout: 2× max EWMA of batch, clamped [50ms, 2s].
+	batchTimeout := func(batch []string) time.Duration {
+		var maxEWMA int64
+		for _, tid := range batch {
+			if ewma := r.latencyTracker.GetEWMA(tid); ewma > maxEWMA {
+				maxEWMA = ewma
+			}
+		}
+		d := time.Duration(maxEWMA*2) * time.Microsecond
+		d = max(d, 50*time.Millisecond)
+		d = min(d, 2*time.Second)
+		return d
+	}
+
+	drain := func(received int) {
+		for received < launched {
+			<-ch
+			received++
+		}
 	}
 
 	var lastErr error
-	for range tunnelIDs {
-		res := <-ch
-		if res.err != nil {
-			lastErr = res.err
-			continue
+	received := 0
+
+	for batchStart := 0; batchStart < len(ranked); batchStart += 2 {
+		batchEnd := min(batchStart+2, len(ranked))
+		batch := ranked[batchStart:batchEnd]
+		launchBatch(batch)
+
+		timeout := batchTimeout(batch)
+		timer := time.NewTimer(timeout)
+
+	batchWait:
+		for {
+			select {
+			case res := <-ch:
+				received++
+				if res.err == nil && res.resp != nil {
+					fanCancel()
+					timer.Stop()
+					drain(received)
+					return res.resp, res.server, res.tunnelID, nil
+				}
+				lastErr = res.err
+				if received >= launched {
+					timer.Stop()
+					break batchWait
+				}
+			case <-timer.C:
+				break batchWait
+			case <-fanCtx.Done():
+				timer.Stop()
+				drain(received)
+				return nil, netip.Addr{}, "", ctx.Err()
+			}
 		}
-		fanCancel() // cancel remaining tunnel goroutines
-		return res.resp, res.server, res.tunnelID, nil
+		timer.Stop()
 	}
 
-	return nil, netip.Addr{}, "", fmt.Errorf("all %d tunnels failed: %w", len(tunnelIDs), lastErr)
+	// Drain remaining goroutines from earlier batches that may still be running.
+	for received < launched {
+		res := <-ch
+		received++
+		if res.err == nil && res.resp != nil {
+			fanCancel()
+			drain(received)
+			return res.resp, res.server, res.tunnelID, nil
+		}
+		lastErr = res.err
+	}
+
+	return nil, netip.Addr{}, "", fmt.Errorf("all %d tunnels failed: %w", len(ranked), lastErr)
 }
 
 // forwardUDPSingle sends a DNS query to a single server via the given provider.
@@ -904,6 +977,9 @@ func (r *DNSResolver) forwardTCPAll(ctx context.Context, tunnelIDs []string, que
 		return resp, server, tunnelIDs[0], err
 	}
 
+	// Staged fan-out: send to 2 best tunnels first, escalate if no response.
+	ranked := r.latencyTracker.RankTunnels(tunnelIDs)
+
 	type result struct {
 		resp     []byte
 		server   netip.Addr
@@ -914,32 +990,98 @@ func (r *DNSResolver) forwardTCPAll(ctx context.Context, tunnelIDs []string, que
 	fanCtx, fanCancel := context.WithCancel(ctx)
 	defer fanCancel()
 
-	ch := make(chan result, len(tunnelIDs))
-	for _, tid := range tunnelIDs {
-		go func(tunnelID string) {
-			defer func() {
-				if v := recover(); v != nil {
-					core.Log.Errorf("DNS", "panic in forwardTCP for tunnel %s: %v", tunnelID, v)
-					ch <- result{err: fmt.Errorf("panic: %v", v)}
-				}
-			}()
-			resp, server, err := r.forwardTCP(fanCtx, tunnelID, query)
-			ch <- result{resp, server, tunnelID, err}
-		}(tid)
+	ch := make(chan result, len(ranked))
+	var launched int
+
+	// Launch a batch of goroutines, each acquiring a fan-out semaphore slot.
+	launchBatch := func(batch []string) {
+		for _, tid := range batch {
+			select {
+			case r.dnsFanoutSem <- struct{}{}:
+			case <-fanCtx.Done():
+				return
+			}
+			launched++
+			core.SafeGo("dns-fanout-tcp-"+tid, func() {
+				defer func() { <-r.dnsFanoutSem }()
+				resp, srv, err := r.forwardTCP(fanCtx, tid, query)
+				ch <- result{resp: resp, server: srv, tunnelID: tid, err: err}
+			})
+		}
+	}
+
+	// Compute escalation timeout: 2× max EWMA of batch, clamped [50ms, 2s].
+	batchTimeout := func(batch []string) time.Duration {
+		var maxEWMA int64
+		for _, tid := range batch {
+			if ewma := r.latencyTracker.GetEWMA(tid); ewma > maxEWMA {
+				maxEWMA = ewma
+			}
+		}
+		d := time.Duration(maxEWMA*2) * time.Microsecond
+		d = max(d, 50*time.Millisecond)
+		d = min(d, 2*time.Second)
+		return d
+	}
+
+	drain := func(received int) {
+		for received < launched {
+			<-ch
+			received++
+		}
 	}
 
 	var lastErr error
-	for range tunnelIDs {
-		res := <-ch
-		if res.err != nil {
-			lastErr = res.err
-			continue
+	received := 0
+
+	for batchStart := 0; batchStart < len(ranked); batchStart += 2 {
+		batchEnd := min(batchStart+2, len(ranked))
+		batch := ranked[batchStart:batchEnd]
+		launchBatch(batch)
+
+		timeout := batchTimeout(batch)
+		timer := time.NewTimer(timeout)
+
+	batchWait:
+		for {
+			select {
+			case res := <-ch:
+				received++
+				if res.err == nil && res.resp != nil {
+					fanCancel()
+					timer.Stop()
+					drain(received)
+					return res.resp, res.server, res.tunnelID, nil
+				}
+				lastErr = res.err
+				if received >= launched {
+					timer.Stop()
+					break batchWait
+				}
+			case <-timer.C:
+				break batchWait
+			case <-fanCtx.Done():
+				timer.Stop()
+				drain(received)
+				return nil, netip.Addr{}, "", ctx.Err()
+			}
 		}
-		fanCancel() // cancel remaining tunnel goroutines
-		return res.resp, res.server, res.tunnelID, nil
+		timer.Stop()
 	}
 
-	return nil, netip.Addr{}, "", fmt.Errorf("all %d tunnels failed (TCP): %w", len(tunnelIDs), lastErr)
+	// Drain remaining goroutines from earlier batches that may still be running.
+	for received < launched {
+		res := <-ch
+		received++
+		if res.err == nil && res.resp != nil {
+			fanCancel()
+			drain(received)
+			return res.resp, res.server, res.tunnelID, nil
+		}
+		lastErr = res.err
+	}
+
+	return nil, netip.Addr{}, "", fmt.Errorf("all %d tunnels failed (TCP): %w", len(ranked), lastErr)
 }
 
 // forwardTCPSingle sends a DNS query to a single server via TCP through the given provider.
