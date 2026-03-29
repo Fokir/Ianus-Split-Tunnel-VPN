@@ -59,6 +59,9 @@ type TUNRouter struct {
 	inboundCount    atomic.Int64 // total inbound raw packets
 	inboundSlow     atomic.Int64 // inbound raw packets > 500µs
 
+	// ICMP unreachable callback for UDP proxy session cleanup.
+	onICMPUnreachable atomic.Pointer[func(dstIP [4]byte, srcPort, dstPort uint16)]
+
 	// Raw IP forwarding state.
 	rawMu    sync.RWMutex
 	rawFwders map[string]provider.RawForwarder // tunnelID → forwarder
@@ -169,6 +172,12 @@ func (r *TUNRouter) getServerEndpointTunnel(dstIP [4]byte) (string, bool) {
 // per-tunnel TX/RX byte counts. Must be called before Start.
 func (r *TUNRouter) SetBytesReporter(fn func(tunnelID string, tx, rx int64)) {
 	r.bytesReporter = fn
+}
+
+// SetICMPUnreachableCallback registers a callback invoked when an ICMP
+// Destination Unreachable packet arrives. Used to kill matching UDP sessions.
+func (r *TUNRouter) SetICMPUnreachableCallback(cb func(dstIP [4]byte, srcPort, dstPort uint16)) {
+	r.onICMPUnreachable.Store(&cb)
 }
 
 // SetDomainTable sets the domain table for IP→tunnel routing based on DNS matches.
@@ -965,9 +974,60 @@ func (r *TUNRouter) handleUDPProxyResponse(pkt []byte, m pktMeta) {
 // ICMP handling
 // ---------------------------------------------------------------------------
 
+// handleICMPUnreachable processes ICMP Destination Unreachable (Type 3).
+// Extracts the original IP header from the ICMP payload to identify and kill
+// the corresponding UDP flow/session immediately.
+func (r *TUNRouter) handleICMPUnreachable(pkt []byte, m pktMeta) {
+	// ICMP header is 8 bytes; embedded original IP header starts at offset 8.
+	embeddedIPOff := m.tpOff + 8
+	if embeddedIPOff+20 > len(pkt) {
+		return
+	}
+
+	embeddedProto := pkt[embeddedIPOff+9]
+	if embeddedProto != 17 { // only UDP
+		return
+	}
+
+	var origDstIP [4]byte
+	copy(origDstIP[:], pkt[embeddedIPOff+16:embeddedIPOff+20])
+
+	ihl := int(pkt[embeddedIPOff]&0x0f) * 4
+	embeddedTPOff := embeddedIPOff + ihl
+	if embeddedTPOff+4 > len(pkt) {
+		return
+	}
+
+	origSrcPort := binary.BigEndian.Uint16(pkt[embeddedTPOff:])
+	origDstPort := binary.BigEndian.Uint16(pkt[embeddedTPOff+2:])
+
+	// Mark UDP NAT entry as dead.
+	dstIP := netip.AddrFrom4(origDstIP)
+	if r.flows.MarkDeadUDP(dstIP, origSrcPort) {
+		core.Log.Debugf("Gateway", "ICMP unreachable: marked UDP flow dead (dst=%s:%d)", dstIP, origDstPort)
+	}
+
+	// Mark raw flow as dead too.
+	r.flows.MarkDeadRawFlow(protoUDP, origDstIP, origSrcPort)
+
+	// Notify UDP proxy.
+	if cb := r.onICMPUnreachable.Load(); cb != nil {
+		(*cb)(origDstIP, origSrcPort, origDstPort)
+	}
+}
+
 func (r *TUNRouter) handleICMP(pkt []byte, m pktMeta) {
+	icmpType := pkt[m.tpOff]
+
+	// ICMP Destination Unreachable (Type 3): extract the original packet
+	// and kill the corresponding UDP flow immediately.
+	if icmpType == icmpDestUnreach {
+		r.handleICMPUnreachable(pkt, m)
+		return
+	}
+
 	// Only handle Echo Request (type 8). Other ICMP types are ignored.
-	if pkt[m.tpOff] != icmpEchoRequest {
+	if icmpType != icmpEchoRequest {
 		return
 	}
 
