@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,7 +21,7 @@ const maxUDPSessions = 4096
 // udpTunnelReadTimeout is the read deadline for tunnel connections.
 // If no data arrives within this duration, readFromTunnel exits to prevent
 // goroutine leaks from broken tunnel connections.
-const udpTunnelReadTimeout = 2*time.Minute + 30*time.Second
+const udpTunnelReadTimeout = 10 * time.Minute
 
 // udpBufPool reuses 65535-byte buffers for tunnel read goroutines.
 var udpBufPool = sync.Pool{
@@ -45,6 +46,7 @@ type UDPSession struct {
 	lastActive int64 // atomic; Unix seconds
 	tunnelConn net.Conn
 	clientAddr *net.UDPAddr
+	dstPort    uint16             // original destination port (for adaptive timeout)
 	cancel     context.CancelFunc
 	closeOnce  sync.Once // prevents double-close of tunnelConn
 }
@@ -214,11 +216,20 @@ func (up *UDPProxy) handleDatagram(ctx context.Context, data []byte, clientAddr 
 		return
 	}
 
+	// Parse the original destination port for adaptive timeout.
+	var dstPort uint16
+	if _, portStr, err := net.SplitHostPort(info.OriginalDst); err == nil {
+		if p, err := strconv.ParseUint(portStr, 10, 16); err == nil {
+			dstPort = uint16(p)
+		}
+	}
+
 	sessCtx, sessCancel := context.WithCancel(ctx)
 	sess = &UDPSession{
 		lastActive: up.nowSec.Load(),
 		tunnelConn: tunnelConn,
 		clientAddr: clientAddr,
+		dstPort:    dstPort,
 		cancel:     sessCancel,
 	}
 
@@ -285,6 +296,27 @@ func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, sk net
 	}
 }
 
+// HandleICMPUnreachable is called by the router when ICMP Destination
+// Unreachable is received. Finds and kills the matching UDP session.
+func (up *UDPProxy) HandleICMPUnreachable(dstIP [4]byte, srcPort, dstPort uint16) {
+	up.sessionsMu.RLock()
+	var target netip.AddrPort
+	var found bool
+	for sk, sess := range up.sessions {
+		if sess.dstPort == dstPort {
+			target = sk
+			found = true
+			break
+		}
+	}
+	up.sessionsMu.RUnlock()
+
+	if found {
+		up.removeSession(target)
+		core.Log.Debugf("Proxy", "ICMP unreachable: closing UDP session to port %d", dstPort)
+	}
+}
+
 // removeSession closes and removes a session by key.
 // Lock is released before Close() to avoid blocking other UDP goroutines.
 func (up *UDPProxy) removeSession(sk netip.AddrPort) {
@@ -315,6 +347,31 @@ func (up *UDPProxy) timestampUpdater(ctx context.Context) {
 	}
 }
 
+// udpSessionTimeout returns the idle timeout in seconds for a UDP session
+// based on the destination port. Gaming ports and media ports get longer timeouts.
+func udpSessionTimeout(dstPort uint16) int64 {
+	switch {
+	case dstPort == 53:
+		return 10
+	case dstPort >= 27015 && dstPort <= 27050:
+		return 600
+	case dstPort >= 3478 && dstPort <= 3479:
+		return 600
+	case dstPort >= 7000 && dstPort <= 9000:
+		return 600
+	case dstPort == 443:
+		return 300
+	case dstPort >= 3480 && dstPort <= 3497:
+		return 300
+	case dstPort >= 5004 && dstPort <= 5005:
+		return 300
+	case dstPort >= 16384 && dstPort <= 32767:
+		return 300
+	default:
+		return 300
+	}
+}
+
 // cleanupLoop periodically removes idle UDP sessions (>2min inactive).
 func (up *UDPProxy) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
@@ -329,12 +386,12 @@ func (up *UDPProxy) cleanupLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			now := up.nowSec.Load()
-			const timeout int64 = 120 // 2 minutes
 			stale = stale[:0]
 
 			up.sessionsMu.RLock()
 			for sk, sess := range up.sessions {
 				last := atomic.LoadInt64(&sess.lastActive)
+				timeout := udpSessionTimeout(sess.dstPort)
 				if now-last > timeout {
 					stale = append(stale, sk)
 				}
