@@ -1437,6 +1437,28 @@ func (r *TUNRouter) RegisterRawForwarder(tunnelID string, rf provider.RawForward
 		tunnelID, vpnIP[0], vpnIP[1], vpnIP[2], vpnIP[3])
 }
 
+// UnregisterRawForwarder removes a raw forwarder for the given tunnel and marks
+// all associated raw flows as dead. Must be called before provider.Disconnect().
+func (r *TUNRouter) UnregisterRawForwarder(tunnelID string) {
+	r.rawMu.Lock()
+	rf, rfOK := r.rawFwders[tunnelID]
+	vpnIP := r.vpnIPs[tunnelID]
+	delete(r.rawFwders, tunnelID)
+	delete(r.vpnIPs, tunnelID)
+	r.rawMu.Unlock()
+
+	if rfOK {
+		rf.SetInboundHandler(nil)
+	}
+
+	if vpnIP != [4]byte{} {
+		r.flows.UnregisterVpnIP(vpnIP)
+	}
+
+	marked := r.flows.MarkDeadByTunnelID(tunnelID)
+	core.Log.Infof("Gateway", "Raw forwarder unregistered for tunnel %q (marked %d flows dead)", tunnelID, marked)
+}
+
 // getRawForwarder returns the raw forwarder and VPN IP for a tunnel (lock-free fast path).
 func (r *TUNRouter) getRawForwarder(tunnelID string) (provider.RawForwarder, [4]byte, bool) {
 	r.rawMu.RLock()

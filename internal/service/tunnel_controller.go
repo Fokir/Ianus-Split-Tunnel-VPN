@@ -292,6 +292,11 @@ func (tc *TunnelControllerImpl) DisconnectTunnel(tunnelID string) error {
 	inst.opMu.Lock()
 	defer inst.opMu.Unlock()
 
+	// Unregister raw forwarder before disconnect to prevent stale packet delivery.
+	if tc.deps.TUNRouter != nil {
+		tc.deps.TUNRouter.UnregisterRawForwarder(tunnelID)
+	}
+
 	if err := inst.provider.Disconnect(); err != nil {
 		return fmt.Errorf("disconnect tunnel %q: %w", tunnelID, err)
 	}

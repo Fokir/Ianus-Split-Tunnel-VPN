@@ -1232,3 +1232,47 @@ func (ft *FlowTable) compactRawShard(shard *rawFlowShard, hookPtr *func(*RawFlow
 	}
 	return removed
 }
+
+// MarkDeadByTunnelID marks all raw flow entries with the given tunnel ID as dead.
+// Called during tunnel disconnect to invalidate stale flows without write-lock.
+func (ft *FlowTable) MarkDeadByTunnelID(tunnelID string) int {
+	var marked int
+	for i := range ft.raw {
+		shard := &ft.raw[i]
+		shard.mu.RLock()
+		for _, idx := range shard.index {
+			if shard.store[idx].TunnelID == tunnelID && atomic.LoadInt32(&shard.store[idx].Dead) == 0 {
+				atomic.StoreInt32(&shard.store[idx].Dead, 1)
+				marked++
+			}
+		}
+		shard.mu.RUnlock()
+	}
+	return marked
+}
+
+// MarkDeadUDP marks a specific UDP NAT entry as dead.
+func (ft *FlowTable) MarkDeadUDP(dstIP netip.Addr, srcPort uint16) bool {
+	nk := makeNATKey(dstIP, srcPort)
+	shard := &ft.udp[natShardIndex(nk)]
+	shard.mu.RLock()
+	idx, ok := shard.index[nk]
+	if ok {
+		atomic.StoreInt32(&shard.store[idx].Dead, 1)
+	}
+	shard.mu.RUnlock()
+	return ok
+}
+
+// MarkDeadRawFlow marks a specific raw flow entry as dead.
+func (ft *FlowTable) MarkDeadRawFlow(proto byte, dstIP [4]byte, srcPort uint16) bool {
+	k := makeRawFlowKey(proto, dstIP, srcPort)
+	shard := &ft.raw[rawFlowShardIndex(k)]
+	shard.mu.RLock()
+	idx, ok := shard.index[k]
+	if ok {
+		atomic.StoreInt32(&shard.store[idx].Dead, 1)
+	}
+	shard.mu.RUnlock()
+	return ok
+}
