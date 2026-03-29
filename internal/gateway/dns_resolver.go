@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,78 @@ import (
 	"awg-split-tunnel/internal/core"
 	"awg-split-tunnel/internal/provider"
 )
+
+// dnsLatencyRecord stores EWMA latency for a single tunnel's DNS resolution.
+type dnsLatencyRecord struct {
+	ewma  int64 // atomic; microseconds
+	count int64 // atomic; number of measurements
+}
+
+// DNSLatencyTracker tracks per-tunnel DNS resolution latency using EWMA.
+type DNSLatencyTracker struct {
+	mu      sync.RWMutex
+	records map[string]*dnsLatencyRecord
+}
+
+const dnsInitialLatencyUs = 100_000 // 100ms initial EWMA for new tunnels
+
+func newDNSLatencyTracker() *DNSLatencyTracker {
+	return &DNSLatencyTracker{
+		records: make(map[string]*dnsLatencyRecord),
+	}
+}
+
+// Record updates the EWMA for a tunnel after a successful DNS response.
+// Formula: new = 0.3 * measured + 0.7 * previous (integer arithmetic).
+func (t *DNSLatencyTracker) Record(tunnelID string, latencyUs int64) {
+	t.mu.RLock()
+	rec, ok := t.records[tunnelID]
+	t.mu.RUnlock()
+
+	if !ok {
+		t.mu.Lock()
+		rec, ok = t.records[tunnelID]
+		if !ok {
+			rec = &dnsLatencyRecord{ewma: dnsInitialLatencyUs}
+			t.records[tunnelID] = rec
+		}
+		t.mu.Unlock()
+	}
+
+	atomic.AddInt64(&rec.count, 1)
+
+	for {
+		old := atomic.LoadInt64(&rec.ewma)
+		updated := (3*latencyUs + 7*old) / 10
+		if atomic.CompareAndSwapInt64(&rec.ewma, old, updated) {
+			break
+		}
+	}
+}
+
+// GetEWMA returns the current EWMA latency in microseconds for a tunnel.
+func (t *DNSLatencyTracker) GetEWMA(tunnelID string) int64 {
+	t.mu.RLock()
+	rec, ok := t.records[tunnelID]
+	t.mu.RUnlock()
+	if !ok {
+		return dnsInitialLatencyUs
+	}
+	return atomic.LoadInt64(&rec.ewma)
+}
+
+// RankTunnels returns tunnel IDs sorted by EWMA latency (ascending).
+func (t *DNSLatencyTracker) RankTunnels(tunnelIDs []string) []string {
+	if len(tunnelIDs) <= 1 {
+		return tunnelIDs
+	}
+	ranked := make([]string, len(tunnelIDs))
+	copy(ranked, tunnelIDs)
+	sort.Slice(ranked, func(i, j int) bool {
+		return t.GetEWMA(ranked[i]) < t.GetEWMA(ranked[j])
+	})
+	return ranked
+}
 
 // dnsRespPool is a pool of 4KB buffers for DNS UDP response reads.
 // Used in forwardUDPSingle to avoid allocating 4KB per DNS query.
@@ -150,6 +223,9 @@ type DNSResolver struct {
 	// new SOCKS5 UDP ASSOCIATE per DNS query (major xray-core memory saver).
 	udpConnCache *dnsUDPConnCache
 
+	// latencyTracker tracks per-tunnel DNS resolution latency using EWMA.
+	latencyTracker *DNSLatencyTracker
+
 	started atomic.Bool
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
@@ -166,12 +242,13 @@ func NewDNSResolver(
 	}
 
 	r := &DNSResolver{
-		config:       config,
-		registry:     registry,
-		providers:    providers,
-		udpSem:       make(chan struct{}, 200),
-		tcpSem:       make(chan struct{}, 100),
-		udpConnCache: newDNSUDPConnCache(),
+		config:         config,
+		registry:       registry,
+		providers:      providers,
+		udpSem:         make(chan struct{}, 200),
+		tcpSem:         make(chan struct{}, 100),
+		udpConnCache:   newDNSUDPConnCache(),
+		latencyTracker: newDNSLatencyTracker(),
 	}
 
 	return r
@@ -520,6 +597,7 @@ func (r *DNSResolver) forwardUDPAll(ctx context.Context, tunnelIDs []string, que
 
 // forwardUDPSingle sends a DNS query to a single server via the given provider.
 func (r *DNSResolver) forwardUDPSingle(ctx context.Context, prov provider.TunnelProvider, tunnelID string, server netip.Addr, query []byte) ([]byte, netip.Addr, error) {
+	start := time.Now()
 	addr := net.JoinHostPort(server.String(), "53")
 
 	// Try cached connection first, then fresh connection. Retry once on stale cached conn.
@@ -536,7 +614,7 @@ func (r *DNSResolver) forwardUDPSingle(ctx context.Context, prov provider.Tunnel
 			if errors.Is(err, provider.ErrUDPNotSupported) {
 				// Provider doesn't support UDP — use DNS-over-TCP (RFC 1035 §4.2.2).
 				core.Log.Debugf("DNS", "UDP not supported by provider, falling back to TCP for %s", server)
-				return r.forwardTCPSingle(ctx, prov, server, query)
+				return r.forwardTCPSingle(ctx, prov, tunnelID, server, query)
 			}
 			if err != nil {
 				return nil, server, err
@@ -593,6 +671,7 @@ func (r *DNSResolver) forwardUDPSingle(ctx context.Context, prov provider.Tunnel
 		conn.SetDeadline(time.Time{})
 		r.udpConnCache.Put(tunnelID, server, conn)
 
+		r.latencyTracker.Record(tunnelID, time.Since(start).Microseconds())
 		return result, server, nil
 	}
 
@@ -770,7 +849,7 @@ func (r *DNSResolver) forwardTCP(ctx context.Context, tunnelID string, query []b
 
 	// Single server — no parallelism overhead.
 	if len(servers) == 1 {
-		return r.forwardTCPSingle(ctx, prov, servers[0], query)
+		return r.forwardTCPSingle(ctx, prov, tunnelID, servers[0], query)
 	}
 
 	// Fan-out to all servers in parallel, return first success.
@@ -792,7 +871,7 @@ func (r *DNSResolver) forwardTCP(ctx context.Context, tunnelID string, query []b
 					ch <- result{err: fmt.Errorf("panic: %v", v)}
 				}
 			}()
-			resp, _, err := r.forwardTCPSingle(fanCtx, prov, server, query)
+			resp, _, err := r.forwardTCPSingle(fanCtx, prov, tunnelID, server, query)
 			ch <- result{resp: resp, server: server, err: err}
 		}(srv)
 	}
@@ -864,7 +943,8 @@ func (r *DNSResolver) forwardTCPAll(ctx context.Context, tunnelIDs []string, que
 }
 
 // forwardTCPSingle sends a DNS query to a single server via TCP through the given provider.
-func (r *DNSResolver) forwardTCPSingle(ctx context.Context, prov provider.TunnelProvider, server netip.Addr, query []byte) ([]byte, netip.Addr, error) {
+func (r *DNSResolver) forwardTCPSingle(ctx context.Context, prov provider.TunnelProvider, tunnelID string, server netip.Addr, query []byte) ([]byte, netip.Addr, error) {
+	start := time.Now()
 	addr := net.JoinHostPort(server.String(), "53")
 
 	conn, err := prov.DialTCP(ctx, addr)
@@ -904,6 +984,7 @@ func (r *DNSResolver) forwardTCPSingle(ctx context.Context, prov provider.Tunnel
 		return nil, server, err
 	}
 
+	r.latencyTracker.Record(tunnelID, time.Since(start).Microseconds())
 	return resp, server, nil
 }
 
