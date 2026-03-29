@@ -388,6 +388,11 @@ func (fd *FallbackDialer) DetectEarlyEOF(
 		return EarlyEOFResult{RemoteConn: remoteConn, ActualTunnel: info.TunnelID}
 	}
 
+	// Skip early EOF detection if context deadline is too close.
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < 2*time.Second {
+		return EarlyEOFResult{RemoteConn: remoteConn, ActualTunnel: info.TunnelID}
+	}
+
 	// Step 1: Read initial data from client.
 	// For TLS, this is the ClientHello (~200-500 bytes). For HTTP, the request line.
 	// Use a short deadline since the client should send immediately after TCP handshake.
