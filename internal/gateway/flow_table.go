@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"maps"
+	"math"
 	"net/netip"
 	"runtime"
 	"sync"
@@ -305,12 +306,21 @@ func (ft *FlowTable) InsertTCP(dstIP netip.Addr, srcPort uint16, entry NATEntry)
 	shard := &ft.tcp[natShardIndex(nk)]
 	shard.mu.Lock()
 	if len(shard.index) >= maxEntriesPerShard {
+		// LRU eviction: find entry with oldest LastActivity.
+		var oldestKey natKey
+		var oldestIdx int32
+		var oldestTime int64 = math.MaxInt64
 		for k, idx := range shard.index {
-			shard.store[idx] = NATEntry{} // zero to release strings
-			shard.free = append(shard.free, idx)
-			delete(shard.index, k)
-			break
+			la := atomic.LoadInt64(&shard.store[idx].LastActivity)
+			if la < oldestTime {
+				oldestTime = la
+				oldestKey = k
+				oldestIdx = idx
+			}
 		}
+		shard.store[oldestIdx] = NATEntry{}
+		shard.free = append(shard.free, oldestIdx)
+		delete(shard.index, oldestKey)
 	}
 	idx := tcpAllocSlot(shard, entry)
 	shard.index[nk] = idx
@@ -461,12 +471,20 @@ func (ft *FlowTable) InsertUDP(dstIP netip.Addr, srcPort uint16, entry UDPNATEnt
 	shard := &ft.udp[natShardIndex(nk)]
 	shard.mu.Lock()
 	if len(shard.index) >= maxEntriesPerShard {
+		var oldestKey natKey
+		var oldestIdx int32
+		var oldestTime int64 = math.MaxInt64
 		for k, idx := range shard.index {
-			shard.store[idx] = UDPNATEntry{}
-			shard.free = append(shard.free, idx)
-			delete(shard.index, k)
-			break
+			la := atomic.LoadInt64(&shard.store[idx].LastActivity)
+			if la < oldestTime {
+				oldestTime = la
+				oldestKey = k
+				oldestIdx = idx
+			}
 		}
+		shard.store[oldestIdx] = UDPNATEntry{}
+		shard.free = append(shard.free, oldestIdx)
+		delete(shard.index, oldestKey)
 	}
 	idx := udpAllocSlot(shard, entry)
 	shard.index[nk] = idx
@@ -586,12 +604,20 @@ func (ft *FlowTable) InsertRawFlow(proto byte, dstIP [4]byte, srcPort uint16, en
 	shard := &ft.raw[rawFlowShardIndex(k)]
 	shard.mu.Lock()
 	if len(shard.index) >= maxEntriesPerShard {
-		for fk, idx := range shard.index {
-			shard.store[idx] = RawFlowEntry{}
-			shard.free = append(shard.free, idx)
-			delete(shard.index, fk)
-			break
+		var oldestKey rawFlowKey
+		var oldestIdx int32
+		var oldestTime int64 = math.MaxInt64
+		for k, idx := range shard.index {
+			la := atomic.LoadInt64(&shard.store[idx].LastActivity)
+			if la < oldestTime {
+				oldestTime = la
+				oldestKey = k
+				oldestIdx = idx
+			}
 		}
+		shard.store[oldestIdx] = RawFlowEntry{}
+		shard.free = append(shard.free, oldestIdx)
+		delete(shard.index, oldestKey)
 	}
 	idx := rawAllocSlot(shard, entry)
 	shard.index[k] = idx
