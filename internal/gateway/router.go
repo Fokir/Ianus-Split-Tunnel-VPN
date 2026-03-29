@@ -208,9 +208,15 @@ func (r *TUNRouter) Start(ctx context.Context) error {
 	ctx, r.cancel = context.WithCancel(ctx)
 
 	r.flows.StartTimestampUpdater(ctx)
-	r.flows.StartTCPCleanup(ctx)
-	r.flows.StartUDPCleanup(ctx)
-	r.flows.StartRawFlowCleanup(ctx)
+
+	// Stagger cleanup tickers to avoid simultaneous lock contention + GC pressure
+	// that causes periodic lag spikes every 30s.
+	r.flows.StartTCPCleanup(ctx, 0)
+	r.flows.StartUDPCleanup(ctx, 10*time.Second)
+	r.flows.StartRawFlowCleanup(ctx, 20*time.Second)
+	// Background compaction: removes dead entries from maps every 2 min.
+	// Uses write-lock on one shard at a time with Gosched() between shards.
+	r.flows.StartCompaction(ctx)
 
 	go r.packetLoop(ctx)
 	go r.gcPauseMonitor(ctx)

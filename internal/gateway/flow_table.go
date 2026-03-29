@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"net/netip"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1080,4 +1081,128 @@ func (ft *FlowTable) StartUDPCleanup(ctx context.Context, initialDelay time.Dura
 			}
 		}
 	})
+}
+
+// StartCompaction periodically removes dead entries from shard maps and returns
+// their slots to the free list. Runs every 2 minutes with write-lock on one
+// shard at a time, yielding between shards to minimize hot-path interference.
+func (ft *FlowTable) StartCompaction(ctx context.Context) {
+	ft.wg.Add(1)
+	core.SuperviseWG(ctx, &ft.wg, core.SupervisorConfig{Name: "flow.compaction"}, func(ctx context.Context) {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+
+			var totalTCP, totalUDP, totalRaw int
+
+			for i := range ft.tcp {
+				if ctx.Err() != nil {
+					return
+				}
+				totalTCP += ft.compactTCPShard(&ft.tcp[i])
+				runtime.Gosched()
+			}
+
+			for i := range ft.udp {
+				if ctx.Err() != nil {
+					return
+				}
+				totalUDP += ft.compactUDPShard(&ft.udp[i])
+				runtime.Gosched()
+			}
+
+			hookPtr := ft.rawFlowCleanupHook.Load()
+			for i := range ft.raw {
+				if ctx.Err() != nil {
+					return
+				}
+				totalRaw += ft.compactRawShard(&ft.raw[i], hookPtr)
+				runtime.Gosched()
+			}
+
+			total := totalTCP + totalUDP + totalRaw
+			if total > 0 {
+				core.Log.Debugf("Gateway", "Compaction: removed %d entries (tcp=%d udp=%d raw=%d)",
+					total, totalTCP, totalUDP, totalRaw)
+			}
+		}
+	})
+}
+
+func (ft *FlowTable) compactTCPShard(shard *tcpNATShard) int {
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	var removed int
+	for k, idx := range shard.index {
+		if atomic.LoadInt32(&shard.store[idx].Dead) != 0 {
+			shard.store[idx] = NATEntry{}
+			shard.free = append(shard.free, idx)
+			delete(shard.index, k)
+			removed++
+		}
+	}
+
+	remaining := len(shard.index)
+	if removed > 0 && remaining < maxEntriesPerShard/4 && remaining > 0 {
+		newIndex := make(map[natKey]int32, remaining*2)
+		maps.Copy(newIndex, shard.index)
+		shard.index = newIndex
+	}
+	return removed
+}
+
+func (ft *FlowTable) compactUDPShard(shard *udpNATShard) int {
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	var removed int
+	for k, idx := range shard.index {
+		if atomic.LoadInt32(&shard.store[idx].Dead) != 0 {
+			shard.store[idx] = UDPNATEntry{}
+			shard.free = append(shard.free, idx)
+			delete(shard.index, k)
+			removed++
+		}
+	}
+
+	remaining := len(shard.index)
+	if removed > 0 && remaining < maxEntriesPerShard/4 && remaining > 0 {
+		newIndex := make(map[natKey]int32, remaining*2)
+		maps.Copy(newIndex, shard.index)
+		shard.index = newIndex
+	}
+	return removed
+}
+
+func (ft *FlowTable) compactRawShard(shard *rawFlowShard, hookPtr *func(*RawFlowEntry)) int {
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	var removed int
+	for k, idx := range shard.index {
+		if atomic.LoadInt32(&shard.store[idx].Dead) != 0 {
+			if hookPtr != nil {
+				(*hookPtr)(&shard.store[idx])
+			}
+			shard.store[idx] = RawFlowEntry{}
+			shard.free = append(shard.free, idx)
+			delete(shard.index, k)
+			removed++
+		}
+	}
+
+	remaining := len(shard.index)
+	if removed > 0 && remaining < maxEntriesPerShard/4 && remaining > 0 {
+		newIndex := make(map[rawFlowKey]int32, remaining*2)
+		maps.Copy(newIndex, shard.index)
+		shard.index = newIndex
+	}
+	return removed
 }
