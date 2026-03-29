@@ -46,6 +46,7 @@ func makeNATKey(ip netip.Addr, port uint16) natKey {
 
 // NATEntry maps a redirected TCP connection back to its original destination.
 type NATEntry struct {
+	Dead            int32  // atomic; 1 = marked for compaction, invisible to hot path
 	LastActivity    int64  // atomic; Unix seconds
 	OriginalDstIP   netip.Addr
 	OriginalDstPort uint16
@@ -65,6 +66,7 @@ type NATEntry struct {
 
 // UDPNATEntry maps a redirected UDP flow back to its original destination.
 type UDPNATEntry struct {
+	Dead            int32 // atomic; 1 = marked for compaction, invisible to hot path
 	LastActivity    int64 // atomic; Unix seconds
 	OriginalDstIP   netip.Addr
 	OriginalDstPort uint16
@@ -87,6 +89,7 @@ type UDPNATEntry struct {
 
 // RawFlowEntry tracks a raw-forwarded flow (TCP or UDP) through a VPN tunnel.
 type RawFlowEntry struct {
+	Dead         int32   // atomic; 1 = marked for compaction, invisible to hot path
 	LastActivity int64   // atomic; Unix seconds
 	TunnelID     string
 	VpnIP        [4]byte // cached VPN IP for fast src IP rewrite
@@ -337,6 +340,9 @@ func (ft *FlowTable) GetTCP(dstIP netip.Addr, srcPort uint16) (NATEntry, bool) {
 	}
 	entry := shard.store[idx] // copy
 	shard.mu.RUnlock()
+	if atomic.LoadInt32(&entry.Dead) != 0 {
+		return NATEntry{}, false
+	}
 	return entry, ok
 }
 
@@ -349,6 +355,28 @@ func (ft *FlowTable) TouchTCP(dstIP netip.Addr, srcPort uint16) {
 		atomic.StoreInt64(&shard.store[idx].LastActivity, ft.nowSec.Load())
 	}
 	shard.mu.RUnlock()
+}
+
+// GetAndTouchTCP returns a copy of a TCP NAT entry and updates its LastActivity
+// timestamp in a single RLock acquisition, eliminating the double-lock overhead
+// of a separate Get + Touch call pair on the hot path.
+func (ft *FlowTable) GetAndTouchTCP(dstIP netip.Addr, srcPort uint16) (NATEntry, bool) {
+	nk := makeNATKey(dstIP, srcPort)
+	shard := &ft.tcp[natShardIndex(nk)]
+	shard.mu.RLock()
+	idx, ok := shard.index[nk]
+	if !ok {
+		shard.mu.RUnlock()
+		return NATEntry{}, false
+	}
+	if atomic.LoadInt32(&shard.store[idx].Dead) != 0 {
+		shard.mu.RUnlock()
+		return NATEntry{}, false
+	}
+	atomic.StoreInt64(&shard.store[idx].LastActivity, ft.nowSec.Load())
+	entry := shard.store[idx]
+	shard.mu.RUnlock()
+	return entry, true
 }
 
 // SetFinTCP atomically ORs a FIN bit on a TCP entry and accelerates cleanup
@@ -468,6 +496,9 @@ func (ft *FlowTable) GetUDP(dstIP netip.Addr, srcPort uint16) (UDPNATEntry, bool
 	}
 	entry := shard.store[idx] // copy
 	shard.mu.RUnlock()
+	if atomic.LoadInt32(&entry.Dead) != 0 {
+		return UDPNATEntry{}, false
+	}
 	return entry, ok
 }
 
@@ -480,6 +511,28 @@ func (ft *FlowTable) TouchUDP(dstIP netip.Addr, srcPort uint16) {
 		atomic.StoreInt64(&shard.store[idx].LastActivity, ft.nowSec.Load())
 	}
 	shard.mu.RUnlock()
+}
+
+// GetAndTouchUDP returns a copy of a UDP NAT entry and updates its LastActivity
+// timestamp in a single RLock acquisition, eliminating the double-lock overhead
+// of a separate Get + Touch call pair on the hot path.
+func (ft *FlowTable) GetAndTouchUDP(dstIP netip.Addr, srcPort uint16) (UDPNATEntry, bool) {
+	nk := makeNATKey(dstIP, srcPort)
+	shard := &ft.udp[natShardIndex(nk)]
+	shard.mu.RLock()
+	idx, ok := shard.index[nk]
+	if !ok {
+		shard.mu.RUnlock()
+		return UDPNATEntry{}, false
+	}
+	if atomic.LoadInt32(&shard.store[idx].Dead) != 0 {
+		shard.mu.RUnlock()
+		return UDPNATEntry{}, false
+	}
+	atomic.StoreInt64(&shard.store[idx].LastActivity, ft.nowSec.Load())
+	entry := shard.store[idx]
+	shard.mu.RUnlock()
+	return entry, true
 }
 
 // LookupUDPNAT returns the original destination and fallback context for a NAT'd UDP flow.
@@ -568,6 +621,9 @@ func (ft *FlowTable) GetRawFlow(proto byte, dstIP [4]byte, srcPort uint16) (RawF
 	}
 	entry := shard.store[idx] // copy
 	shard.mu.RUnlock()
+	if atomic.LoadInt32(&entry.Dead) != 0 {
+		return RawFlowEntry{}, false
+	}
 	return entry, ok
 }
 
@@ -580,6 +636,28 @@ func (ft *FlowTable) TouchRawFlow(proto byte, dstIP [4]byte, srcPort uint16) {
 		atomic.StoreInt64(&shard.store[idx].LastActivity, ft.nowSec.Load())
 	}
 	shard.mu.RUnlock()
+}
+
+// GetAndTouchRawFlow returns a copy of a raw flow entry and updates its
+// LastActivity timestamp in a single RLock acquisition, eliminating the
+// double-lock overhead of a separate Get + Touch call pair on the hot path.
+func (ft *FlowTable) GetAndTouchRawFlow(proto byte, dstIP [4]byte, srcPort uint16) (RawFlowEntry, bool) {
+	k := makeRawFlowKey(proto, dstIP, srcPort)
+	shard := &ft.raw[rawFlowShardIndex(k)]
+	shard.mu.RLock()
+	idx, ok := shard.index[k]
+	if !ok {
+		shard.mu.RUnlock()
+		return RawFlowEntry{}, false
+	}
+	if atomic.LoadInt32(&shard.store[idx].Dead) != 0 {
+		shard.mu.RUnlock()
+		return RawFlowEntry{}, false
+	}
+	atomic.StoreInt64(&shard.store[idx].LastActivity, ft.nowSec.Load())
+	entry := shard.store[idx]
+	shard.mu.RUnlock()
+	return entry, true
 }
 
 // DeleteRawFlow removes a raw flow entry.
@@ -632,9 +710,17 @@ func (ft *FlowTable) LookupVpnIP(ip [4]byte) (string, bool) {
 }
 
 // StartRawFlowCleanup periodically removes stale raw flow entries (>5 min idle).
-func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context) {
+func (ft *FlowTable) StartRawFlowCleanup(ctx context.Context, initialDelay time.Duration) {
 	ft.wg.Add(1)
 	core.SuperviseWG(ctx, &ft.wg, core.SupervisorConfig{Name: "flow.raw-cleanup"}, func(ctx context.Context) {
+		// Stagger start to avoid simultaneous cleanup with other flow tables.
+		if initialDelay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(initialDelay):
+			}
+		}
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		// Preallocate candidates slice — reused across ticks to avoid GC churn.
@@ -912,9 +998,17 @@ func (ft *FlowTable) SnapshotRaw() []RawSnapshotEntry {
 // ---------------------------------------------------------------------------
 
 // StartTCPCleanup periodically removes stale TCP NAT entries (>5 min idle).
-func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
+func (ft *FlowTable) StartTCPCleanup(ctx context.Context, initialDelay time.Duration) {
 	ft.wg.Add(1)
 	core.SuperviseWG(ctx, &ft.wg, core.SupervisorConfig{Name: "flow.tcp-cleanup"}, func(ctx context.Context) {
+		// Stagger start to avoid simultaneous cleanup with other flow tables.
+		if initialDelay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(initialDelay):
+			}
+		}
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		// Preallocate candidates slice — reused across ticks to avoid GC churn.
@@ -982,9 +1076,17 @@ func (ft *FlowTable) StartTCPCleanup(ctx context.Context) {
 
 // StartUDPCleanup periodically removes stale UDP NAT entries
 // (>2 min for normal, >10 sec for DNS port 53).
-func (ft *FlowTable) StartUDPCleanup(ctx context.Context) {
+func (ft *FlowTable) StartUDPCleanup(ctx context.Context, initialDelay time.Duration) {
 	ft.wg.Add(1)
 	core.SuperviseWG(ctx, &ft.wg, core.SupervisorConfig{Name: "flow.udp-cleanup"}, func(ctx context.Context) {
+		// Stagger start to avoid simultaneous cleanup with other flow tables.
+		if initialDelay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(initialDelay):
+			}
+		}
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		// Preallocate candidates slice — reused across ticks to avoid GC churn.
