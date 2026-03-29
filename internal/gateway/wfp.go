@@ -88,6 +88,11 @@ type WFPManager struct {
 
 	// directIPs tracks WFP PERMIT rules for direct-routed IPs (bypass TUN).
 	directIPs map[[4]byte][]wf.RuleID
+
+	// lastVirtualLUIDs caches the set of virtual adapter LUIDs from the most
+	// recent PermitVirtualAdapters call. Used to skip re-adding rules when the
+	// set of virtual adapters has not changed since the last call.
+	lastVirtualLUIDs map[uint64]bool
 }
 
 // CleanupOrphanedOwnFilters removes WFP rules, sublayers, and provider left
@@ -208,11 +213,12 @@ func NewWFPManager(tunLUID uint64) (*WFPManager, error) {
 	core.Log.Infof("WFP", "Session opened (Dynamic=true, TUN LUID=0x%x, build=%d)", tunLUID, buildNum)
 
 	return &WFPManager{
-		session:      sess,
-		tunLUID:      tunLUID,
-		skipUDPBlock: skipUDP,
-		rules:        make(map[string][]wf.RuleID),
-		directIPs:    make(map[[4]byte][]wf.RuleID),
+		session:          sess,
+		tunLUID:          tunLUID,
+		skipUDPBlock:     skipUDP,
+		rules:            make(map[string][]wf.RuleID),
+		directIPs:        make(map[[4]byte][]wf.RuleID),
+		lastVirtualLUIDs: make(map[uint64]bool),
 	}, nil
 }
 
@@ -486,12 +492,31 @@ func (w *WFPManager) UnblockProcess(exePath string) {
 // This is needed because connected subnet routes (e.g. 192.168.1.0/24) are
 // more specific than TUN's /1 split routes, so local traffic goes through
 // the real NIC where per-process BLOCK rules would drop it.
+//
+// Phase 1: rules are added to the WFP session WITHOUT holding the mutex
+// (session.AddRule is thread-safe). Phase 2: the mutex is held briefly to
+// store the rule IDs in w.rules.
 func (w *WFPManager) AddBypassPrefixes(prefixes []netip.Prefix) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	// Phase 1: add all WFP rules without holding the lock.
+	// Collect per-prefix rule IDs in a local slice so we can store them later.
+	type prefixRules struct {
+		key     string
+		ruleIDs []wf.RuleID
+	}
+	var collected []prefixRules
 
 	for _, prefix := range prefixes {
 		if !prefix.Addr().Is4() {
+			continue
+		}
+
+		key := "bypass:" + prefix.String()
+
+		// Skip prefixes that already have rules (check under lock).
+		w.mu.Lock()
+		_, exists := w.rules[key]
+		w.mu.Unlock()
+		if exists {
 			continue
 		}
 
@@ -512,6 +537,12 @@ func (w *WFPManager) AddBypassPrefixes(prefixes []netip.Prefix) error {
 			},
 			Action: wf.ActionPermit,
 		}); err != nil {
+			// Clean up any rules already added in this call.
+			for _, pr := range collected {
+				for _, id := range pr.ruleIDs {
+					w.session.DeleteRule(id)
+				}
+			}
 			return fmt.Errorf("[WFP] add bypass permit connect %s: %w", prefix, err)
 		}
 
@@ -532,8 +563,34 @@ func (w *WFPManager) AddBypassPrefixes(prefixes []netip.Prefix) error {
 			},
 			Action: wf.ActionPermit,
 		}); err != nil {
+			// Clean up the connect rule we just added and any earlier rules.
+			w.session.DeleteRule(connectID)
+			for _, pr := range collected {
+				for _, id := range pr.ruleIDs {
+					w.session.DeleteRule(id)
+				}
+			}
 			return fmt.Errorf("[WFP] add bypass permit recv %s: %w", prefix, err)
 		}
+
+		collected = append(collected, prefixRules{key: key, ruleIDs: []wf.RuleID{connectID, recvID}})
+	}
+
+	// Phase 2: store rule IDs under the lock.
+	if len(collected) > 0 {
+		w.mu.Lock()
+		for _, pr := range collected {
+			// Another goroutine may have raced and added the same prefix.
+			// If so, remove the duplicate rules we just created.
+			if _, exists := w.rules[pr.key]; exists {
+				for _, id := range pr.ruleIDs {
+					w.session.DeleteRule(id)
+				}
+			} else {
+				w.rules[pr.key] = pr.ruleIDs
+			}
+		}
+		w.mu.Unlock()
 	}
 
 	core.Log.Infof("WFP", "Added bypass permits for %d prefixes", len(prefixes))
@@ -1094,14 +1151,45 @@ func (w *WFPManager) DisableDefaultBlock() {
 // breaking containerized networking.
 //
 // Call after EnableDefaultBlock and on network changes (NetworkMonitor callback).
+// Uses diff-based logic: if the set of virtual adapter LUIDs has not changed
+// since the last call, this is a no-op (avoids rule churn on network callbacks).
 func (w *WFPManager) PermitVirtualAdapters() error {
 	luids, names := discoverVirtualAdapters(w.tunLUID)
-	if len(luids) == 0 {
-		return nil
+
+	// Build a set of current LUIDs for O(1) comparison.
+	currentLUIDs := make(map[uint64]bool, len(luids))
+	for _, luid := range luids {
+		currentLUIDs[luid] = true
 	}
+
+	// Compare with cached state. If identical, return early (no-op).
+	w.mu.Lock()
+	if len(currentLUIDs) == len(w.lastVirtualLUIDs) {
+		same := true
+		for luid := range currentLUIDs {
+			if !w.lastVirtualLUIDs[luid] {
+				same = false
+				break
+			}
+		}
+		if same {
+			w.mu.Unlock()
+			return nil
+		}
+	}
+	w.mu.Unlock()
+
+	// Set has changed: update cached state, remove old rules, add new ones.
+	w.mu.Lock()
+	w.lastVirtualLUIDs = currentLUIDs
+	w.mu.Unlock()
 
 	// Remove stale rules before re-adding.
 	w.removeRulesByKey(wfpVirtualAdapterKey)
+
+	if len(luids) == 0 {
+		return nil
+	}
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
