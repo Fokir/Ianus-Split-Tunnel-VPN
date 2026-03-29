@@ -24,10 +24,10 @@ const sockBufSize = 256 * 1024
 const proxyIdleTimeout = 5 * time.Minute
 
 // fwdBufPool reuses 128KB buffers for bidirectional TCP forwarding.
-// 128KB balances syscall overhead reduction with memory efficiency.
+// 64KB balances syscall overhead reduction with memory efficiency.
 var fwdBufPool = sync.Pool{
 	New: func() any {
-		b := make([]byte, 128*1024)
+		b := make([]byte, 64*1024)
 		return &b
 	},
 }
@@ -199,7 +199,7 @@ func (tp *TunnelProxy) handleConnection(ctx context.Context, clientConn net.Conn
 		defer sniBufPool.Put(bp)
 		buf := *bp
 
-		clientConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		clientConn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
 		n, _ := clientConn.Read(buf)
 		clientConn.SetReadDeadline(time.Time{})
 		if n > 0 {

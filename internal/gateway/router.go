@@ -209,7 +209,7 @@ func (r *TUNRouter) SetFakeIPPool(pool *FakeIPPool) {
 // those packets and resolve them directly.
 func (r *TUNRouter) SetDNSResolver(resolver *DNSResolver) {
 	r.dnsResolver = resolver
-	r.dnsHijackSem = make(chan struct{}, 64) // max 64 concurrent DNS hijacks
+	r.dnsHijackSem = make(chan struct{}, 256) // max 256 concurrent DNS hijacks
 }
 
 // Start begins the packet processing loop.
@@ -926,7 +926,7 @@ func (r *TUNRouter) hijackDNS(pkt []byte, m pktMeta) {
 			defer func() { <-r.dnsHijackSem }()
 			defer packetPool.Put(qBufPtr)
 
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 
 			resp := r.dnsResolver.Resolve(ctx, query)
