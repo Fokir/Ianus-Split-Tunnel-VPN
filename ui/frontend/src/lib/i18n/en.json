@@ -356,7 +356,11 @@
     "noEntries": "No log entries",
     "copied": "Copied",
     "clickToCopy": "Click to copy",
-    "maxEntriesTitle": "Max number of entries"
+    "maxEntriesTitle": "Max number of entries",
+    "allLevels": "All levels",
+    "noLevels": "No levels",
+    "allTags": "All components",
+    "noTags": "No components"
   },
   "about": {
     "subtitle": "Multi-tunnel VPN client with per-process split tunneling",

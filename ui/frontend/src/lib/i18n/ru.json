@@ -356,7 +356,11 @@
     "noEntries": "Нет записей логов",
     "copied": "Скопировано",
     "clickToCopy": "Нажмите чтобы скопировать",
-    "maxEntriesTitle": "Макс. количество записей"
+    "maxEntriesTitle": "Макс. количество записей",
+    "allLevels": "Все уровни",
+    "noLevels": "Нет уровней",
+    "allTags": "Все компоненты",
+    "noTags": "Нет компонентов"
   },
   "about": {
     "subtitle": "Многотуннельный VPN-клиент с per-process split tunneling",

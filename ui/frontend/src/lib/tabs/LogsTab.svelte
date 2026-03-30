@@ -6,13 +6,62 @@
 
   let autoScroll = true;
   let logsContainer;
-  let levelFilter = 'DEBUG';
   let searchFilter = '';
   let searchInput = '';   // raw input, debounced → searchFilter
   let copiedIndex = -1;
   let maxLogs = $maxLogsStore;
 
   const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+
+  // ─── Multi-select level filter ────────────────────────────────
+  let enabledLevels = { DEBUG: true, INFO: true, WARN: true, ERROR: true };
+  let levelDropdownOpen = false;
+  let levelDropdownEl;
+
+  function toggleLevel(level) {
+    enabledLevels[level] = !enabledLevels[level];
+    enabledLevels = enabledLevels; // trigger reactivity
+  }
+
+  // ─── Multi-select tag filter ─────────────────────────────────
+  let disabledTags = {};     // tags explicitly turned off
+  let tagDropdownOpen = false;
+  let tagDropdownEl;
+
+  // Collect unique tags from all logs (reactive)
+  $: knownTags = [...new Set($logStore.map(e => e.tag).filter(Boolean))].sort();
+
+  function toggleTag(tag) {
+    if (disabledTags[tag]) {
+      delete disabledTags[tag];
+    } else {
+      disabledTags[tag] = true;
+    }
+    disabledTags = disabledTags; // trigger reactivity
+  }
+
+  $: disabledTagCount = Object.keys(disabledTags).length;
+  $: tagLabel = disabledTagCount === 0
+    ? $t('logs.allTags')
+    : knownTags.length > 0 && disabledTagCount >= knownTags.length
+      ? $t('logs.noTags')
+      : knownTags.filter(t => !disabledTags[t]).join(', ');
+
+  function handleClickOutside(e) {
+    if (levelDropdownEl && !levelDropdownEl.contains(e.target)) {
+      levelDropdownOpen = false;
+    }
+    if (tagDropdownEl && !tagDropdownEl.contains(e.target)) {
+      tagDropdownOpen = false;
+    }
+  }
+
+  $: enabledCount = levels.filter(l => enabledLevels[l]).length;
+  $: levelLabel = enabledCount === levels.length
+    ? $t('logs.allLevels')
+    : enabledCount === 0
+      ? $t('logs.noLevels')
+      : levels.filter(l => enabledLevels[l]).join(', ');
 
   // ─── Debounce search input ────────────────────────────────────
   let debounceTimer = null;
@@ -37,18 +86,18 @@
 
   // ─── Filtering ────────────────────────────────────────────────
   // Direct field checks instead of formatEntry() + toLowerCase()
-  $: filteredLogs = filterLogs($logStore, levelFilter, searchFilter);
+  $: filteredLogs = filterLogs($logStore, enabledLevels, disabledTags, searchFilter);
 
-  function filterLogs(logs, lvl, query) {
-    const filterIdx = levels.indexOf(lvl);
+  function filterLogs(logs, enabledLvl, offTags, query) {
+    const allLevels = levels.every(l => enabledLvl[l]);
+    const noTagFilter = Object.keys(offTags).length === 0;
     const q = query ? query.toLowerCase() : '';
-    if (!q && filterIdx === 0) return logs; // no filter — pass through
+    if (!q && allLevels && noTagFilter) return logs; // no filter — pass through
 
     return logs.filter(entry => {
-      const levelIdx = levels.indexOf(entry.level);
-      if (levelIdx < filterIdx) return false;
+      if (!enabledLvl[entry.level]) return false;
+      if (entry.tag && offTags[entry.tag]) return false;
       if (q) {
-        // Check fields directly — avoid expensive Date formatting
         if (entry.message && entry.message.toLowerCase().includes(q)) return true;
         if (entry.tag && entry.tag.toLowerCase().includes(q)) return true;
         if (entry.level && entry.level.toLowerCase().includes(q)) return true;
@@ -125,12 +174,14 @@
       });
       resizeObserver.observe(logsContainer);
     }
+    document.addEventListener('click', handleClickOutside, true);
   });
 
   onDestroy(() => {
     if (resizeObserver) resizeObserver.disconnect();
     clearTimeout(debounceTimer);
     if (scrollRafId !== null) cancelAnimationFrame(scrollRafId);
+    document.removeEventListener('click', handleClickOutside, true);
   });
 
   // ─── Formatting & actions ─────────────────────────────────────
@@ -193,14 +244,65 @@
 <div class="flex flex-col h-full">
   <!-- Toolbar -->
   <div class="flex items-center gap-3 p-3 border-b border-zinc-700/40 shrink-0 flex-wrap">
-    <select
-      bind:value={levelFilter}
-      class="px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-300 focus:outline-none"
-    >
-      {#each levels as level}
-        <option value={level}>{level}+</option>
-      {/each}
-    </select>
+    <div class="relative" bind:this={levelDropdownEl}>
+      <button
+        class="px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-300 focus:outline-none flex items-center gap-1 min-w-[120px] max-w-[200px]"
+        on:click={() => { levelDropdownOpen = !levelDropdownOpen; }}
+      >
+        <span class="truncate">{levelLabel}</span>
+        <svg class="w-3 h-3 shrink-0 ml-auto transition-transform" class:rotate-180={levelDropdownOpen} viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M3 4.5L6 7.5L9 4.5"/>
+        </svg>
+      </button>
+      {#if levelDropdownOpen}
+        <div class="absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded shadow-lg z-50 min-w-[140px]">
+          {#each levels as level}
+            <label
+              class="flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-700/50 cursor-pointer text-xs"
+            >
+              <input
+                type="checkbox"
+                checked={enabledLevels[level]}
+                on:change={() => toggleLevel(level)}
+                class="accent-blue-500 w-3.5 h-3.5"
+              />
+              <span class="{levelColor(level)} font-semibold">{level}</span>
+            </label>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    {#if knownTags.length > 0}
+      <div class="relative" bind:this={tagDropdownEl}>
+        <button
+          class="px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-300 focus:outline-none flex items-center gap-1 min-w-[120px] max-w-[220px]"
+          on:click={() => { tagDropdownOpen = !tagDropdownOpen; }}
+        >
+          <span class="truncate">{tagLabel}</span>
+          <svg class="w-3 h-3 shrink-0 ml-auto transition-transform" class:rotate-180={tagDropdownOpen} viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M3 4.5L6 7.5L9 4.5"/>
+          </svg>
+        </button>
+        {#if tagDropdownOpen}
+          <div class="absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded shadow-lg z-50 min-w-[160px] max-h-[280px] overflow-y-auto">
+            {#each knownTags as tag}
+              <label
+                class="flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-700/50 cursor-pointer text-xs"
+              >
+                <input
+                  type="checkbox"
+                  checked={!disabledTags[tag]}
+                  on:change={() => toggleTag(tag)}
+                  class="accent-blue-500 w-3.5 h-3.5"
+                />
+                <span class="{tagColor(tag)}">{tag}</span>
+              </label>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <input
       type="text"
