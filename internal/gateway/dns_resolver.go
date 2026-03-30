@@ -432,6 +432,9 @@ func (r *DNSResolver) Resolve(ctx context.Context, query []byte) []byte {
 				return makeNXDomain(query)
 			case core.DomainDirect:
 				routeTunnelID = DirectTunnelID
+				// Route DNS through direct path to prevent DNS/IP mismatch detection:
+				// if traffic goes direct, DNS must also go direct.
+				tunnelIDs = []string{DirectTunnelID}
 			case core.DomainRoute:
 				routeTunnelID = domainResult.TunnelID
 				// If the target tunnel has its own DNS servers, route DNS through it.
@@ -847,6 +850,9 @@ func (r *DNSResolver) handleTCPQuery(ctx context.Context, clientConn net.Conn) {
 				return
 			case core.DomainDirect:
 				routeTunnelID = DirectTunnelID
+				// Route DNS through direct path to prevent DNS/IP mismatch detection:
+				// if traffic goes direct, DNS must also go direct.
+				tunnelIDs = []string{DirectTunnelID}
 			case core.DomainRoute:
 				routeTunnelID = domainResult.TunnelID
 				// If the target tunnel has its own DNS servers, route DNS through it.
