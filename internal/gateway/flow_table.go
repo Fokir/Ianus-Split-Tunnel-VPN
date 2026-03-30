@@ -171,13 +171,14 @@ type rawFlowShard struct {
 }
 
 // ---------------------------------------------------------------------------
-// Sharded NAT tables — 64 shards reduce RWMutex contention
+// Sharded NAT tables — 256 shards reduce RWMutex contention and minimize
+// the chance that compaction write-locks block unrelated active flows.
 // ---------------------------------------------------------------------------
 
-const numNATShards = 64
+const numNATShards = 256
 
 // maxEntriesPerShard limits each shard to prevent unbounded growth under
-// connection floods (port scans, torrents). Total max: 64 * 8192 = 524,288.
+// connection floods (port scans, torrents). Total max: 256 * 8192 = 2,097,152.
 const maxEntriesPerShard = 8192
 
 type tcpNATShard struct {
