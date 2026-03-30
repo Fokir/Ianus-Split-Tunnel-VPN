@@ -27,8 +27,9 @@ type ParsedConfig struct {
 // peerAccumulator buffers UAPI lines for a single [Peer] section
 // so that public_key is always emitted first (required by UAPI protocol).
 type peerAccumulator struct {
-	publicKey string
-	lines     []string
+	publicKey    string
+	lines        []string
+	hasKeepalive bool
 }
 
 func (pa *peerAccumulator) flush(uapi *strings.Builder) error {
@@ -41,6 +42,12 @@ func (pa *peerAccumulator) flush(uapi *strings.Builder) error {
 	fmt.Fprintf(uapi, "public_key=%s\n", pa.publicKey)
 	for _, line := range pa.lines {
 		fmt.Fprint(uapi, line)
+	}
+	// Default PersistentKeepalive to 25s if not specified or zero.
+	// Without keepalive, peers behind NAT become stale and trigger
+	// unnecessary health-check reconnects.
+	if !pa.hasKeepalive {
+		fmt.Fprint(uapi, "persistent_keepalive_interval=25\n")
 	}
 	return nil
 }
@@ -202,7 +209,10 @@ func parsePeerKey(key, value string, cfg *ParsedConfig, peer *peerAccumulator) e
 			peer.lines = append(peer.lines, fmt.Sprintf("allowed_ip=%s\n", cidr))
 		}
 	case "persistentkeepalive":
-		peer.lines = append(peer.lines, fmt.Sprintf("persistent_keepalive_interval=%s\n", value))
+		if value != "" && value != "0" {
+			peer.lines = append(peer.lines, fmt.Sprintf("persistent_keepalive_interval=%s\n", value))
+			peer.hasKeepalive = true
+		}
 	}
 	return nil
 }

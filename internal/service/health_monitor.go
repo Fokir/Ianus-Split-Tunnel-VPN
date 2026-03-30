@@ -134,6 +134,7 @@ func checkPeerHealth(ipcData string, now time.Time, threshold time.Duration) (bo
 	lines := strings.Split(ipcData, "\n")
 	inPeer := false
 	var lastHandshakeSec int64
+	var keepaliveInterval int64
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -145,20 +146,28 @@ func checkPeerHealth(ipcData string, now time.Time, threshold time.Duration) (bo
 			// Flush previous peer.
 			if inPeer {
 				peerCount++
-				if isPeerStale(lastHandshakeSec, now, threshold) {
+				if keepaliveInterval > 0 && isPeerStale(lastHandshakeSec, now, threshold) {
 					staleCount++
 				}
 			}
 			// Start new peer.
 			inPeer = true
 			lastHandshakeSec = 0
+			keepaliveInterval = 0
 			continue
 		}
 
-		if inPeer && strings.HasPrefix(line, "last_handshake_time_sec=") {
-			val := strings.TrimPrefix(line, "last_handshake_time_sec=")
-			if n, err := strconv.ParseInt(val, 10, 64); err == nil {
-				lastHandshakeSec = n
+		if inPeer {
+			if strings.HasPrefix(line, "last_handshake_time_sec=") {
+				val := strings.TrimPrefix(line, "last_handshake_time_sec=")
+				if n, err := strconv.ParseInt(val, 10, 64); err == nil {
+					lastHandshakeSec = n
+				}
+			} else if strings.HasPrefix(line, "persistent_keepalive_interval=") {
+				val := strings.TrimPrefix(line, "persistent_keepalive_interval=")
+				if n, err := strconv.ParseInt(val, 10, 64); err == nil {
+					keepaliveInterval = n
+				}
 			}
 		}
 	}
@@ -166,7 +175,7 @@ func checkPeerHealth(ipcData string, now time.Time, threshold time.Duration) (bo
 	// Flush last peer.
 	if inPeer {
 		peerCount++
-		if isPeerStale(lastHandshakeSec, now, threshold) {
+		if keepaliveInterval > 0 && isPeerStale(lastHandshakeSec, now, threshold) {
 			staleCount++
 		}
 	}
