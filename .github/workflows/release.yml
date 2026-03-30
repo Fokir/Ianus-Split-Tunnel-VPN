@@ -44,7 +44,7 @@ jobs:
         run: |
           go install github.com/akavel/rsrc@latest
           go install github.com/wailsapp/wails/v3/cmd/wails3@latest
-          choco install nsis -y --no-progress
+          for i in 1 2 3; do choco install nsis -y --no-progress && break || sleep 15; done
 
       - name: Install frontend dependencies
         working-directory: ui/frontend
