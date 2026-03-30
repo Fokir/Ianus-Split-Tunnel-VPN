@@ -1162,6 +1162,20 @@ func (ft *FlowTable) StartCompaction(ctx context.Context) {
 }
 
 func (ft *FlowTable) compactTCPShard(shard *tcpNATShard) int {
+	// Quick RLock scan: skip shard entirely if no dead entries.
+	shard.mu.RLock()
+	hasDead := false
+	for _, idx := range shard.index {
+		if atomic.LoadInt32(&shard.store[idx].Dead) != 0 {
+			hasDead = true
+			break
+		}
+	}
+	shard.mu.RUnlock()
+	if !hasDead {
+		return 0
+	}
+
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 
@@ -1185,6 +1199,19 @@ func (ft *FlowTable) compactTCPShard(shard *tcpNATShard) int {
 }
 
 func (ft *FlowTable) compactUDPShard(shard *udpNATShard) int {
+	shard.mu.RLock()
+	hasDead := false
+	for _, idx := range shard.index {
+		if atomic.LoadInt32(&shard.store[idx].Dead) != 0 {
+			hasDead = true
+			break
+		}
+	}
+	shard.mu.RUnlock()
+	if !hasDead {
+		return 0
+	}
+
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 
@@ -1208,6 +1235,19 @@ func (ft *FlowTable) compactUDPShard(shard *udpNATShard) int {
 }
 
 func (ft *FlowTable) compactRawShard(shard *rawFlowShard, hookPtr *func(*RawFlowEntry)) int {
+	shard.mu.RLock()
+	hasDead := false
+	for _, idx := range shard.index {
+		if atomic.LoadInt32(&shard.store[idx].Dead) != 0 {
+			hasDead = true
+			break
+		}
+	}
+	shard.mu.RUnlock()
+	if !hasDead {
+		return 0
+	}
+
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 
