@@ -8,20 +8,20 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Init build-required submodules
         run: git submodule update --init --depth 1 refs/amneziawg-go refs/tailscale-wf
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: ui/frontend/package-lock.json
 
@@ -118,7 +118,7 @@ jobs:
             config.example.yaml `
             -DestinationPath "build/awg-split-tunnel-v${{ env.VERSION }}-windows-amd64.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-artifacts
           path: |
@@ -129,14 +129,14 @@ jobs:
   build-macos:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Init build-required submodules
         run: git submodule update --init --depth 1 refs/amneziawg-go refs/tailscale-wf
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -185,7 +185,7 @@ jobs:
           tar czf "awg-split-tunnel-v${VERSION}-darwin-universal.tar.gz" \
             -C stage awg-split-tunnel install-daemon.sh uninstall-daemon.sh config.example.yaml
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-daemon-artifacts
           path: build/awg-split-tunnel-v*-darwin-*.tar.gz
@@ -194,20 +194,20 @@ jobs:
   build-macos-gui:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Init build-required submodules
         run: git submodule update --init --depth 1 refs/amneziawg-go refs/tailscale-wf
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: ui/frontend/package-lock.json
 
@@ -299,7 +299,7 @@ jobs:
             -ov -format UDZO \
             "bin/AWG-Split-Tunnel-v${VERSION}-darwin-universal.dmg"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-gui-artifacts
           path: ui/bin/AWG-Split-Tunnel-v*-darwin-*.dmg
@@ -311,11 +311,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
