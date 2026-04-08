@@ -264,6 +264,10 @@ func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, sk net
 	defer udpBufPool.Put(bp)
 	buf := *bp
 
+	consecutiveErrors := 0
+	const maxConsecutiveErrors = 3
+	const errorBackoff = 2 * time.Second
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -278,16 +282,37 @@ func (up *UDPProxy) readFromTunnel(ctx context.Context, sess *UDPSession, sk net
 		if err != nil {
 			select {
 			case <-ctx.Done():
+				return
 			default:
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					core.Log.Debugf("Proxy", "UDP tunnel read timeout for %s, closing session", sess.clientAddr)
-				} else {
-					core.Log.Errorf("Proxy", "UDP tunnel read error for %s: %v", sess.clientAddr, err)
-				}
 			}
-			return
+
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				core.Log.Debugf("Proxy", "UDP tunnel read timeout for %s, closing session", sess.clientAddr)
+				return
+			}
+
+			// Non-timeout error (e.g. "use of closed network connection").
+			// Don't kill the session immediately — back off and retry a few times.
+			// This prevents mass session kills when a tunnel briefly reconnects.
+			consecutiveErrors++
+			if consecutiveErrors >= maxConsecutiveErrors {
+				core.Log.Errorf("Proxy", "UDP tunnel read error for %s (giving up after %d errors): %v",
+					sess.clientAddr, consecutiveErrors, err)
+				return
+			}
+
+			core.Log.Warnf("Proxy", "UDP tunnel read error for %s (attempt %d/%d): %v",
+				sess.clientAddr, consecutiveErrors, maxConsecutiveErrors, err)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(errorBackoff):
+				continue
+			}
 		}
 
+		consecutiveErrors = 0
 		atomic.StoreInt64(&sess.lastActive, up.nowSec.Load())
 		if _, err := up.conn.WriteToUDP(buf[:n], sess.clientAddr); err != nil {
 			core.Log.Errorf("Proxy", "UDP write to client %s failed: %v", sess.clientAddr, err)
@@ -353,7 +378,8 @@ func udpSessionTimeout(dstPort uint16) int64 {
 	switch {
 	case dstPort == 53:
 		return 10
-	case dstPort >= 27015 && dstPort <= 27050:
+	case dstPort >= 27015 && dstPort <= 27200:
+		// Steam: game servers (27015-27050) + P2P relay (27051-27200)
 		return 600
 	case dstPort >= 3478 && dstPort <= 3479:
 		return 600
