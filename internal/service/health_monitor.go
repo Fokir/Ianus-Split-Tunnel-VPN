@@ -79,15 +79,19 @@ func (hm *HealthMonitor) loop() {
 		case <-hm.ctx.Done():
 			return
 		case <-ticker.C:
-			hm.checkAll()
+			hm.checkStaggered()
 		}
 	}
 }
 
-func (hm *HealthMonitor) checkAll() {
+// checkStaggered spreads tunnel health checks across the interval period
+// to prevent all tunnels from triggering reconnect simultaneously during
+// brief network outages.
+func (hm *HealthMonitor) checkStaggered() {
 	entries := hm.registry.All()
 	now := time.Now()
 
+	var vpnEntries []*core.TunnelEntry
 	for _, entry := range entries {
 		if entry.State != core.TunnelStateUp {
 			continue
@@ -95,31 +99,59 @@ func (hm *HealthMonitor) checkAll() {
 		if entry.ID == gateway.DirectTunnelID {
 			continue
 		}
-
-		prov, ok := hm.providerLookup(entry.ID)
-		if !ok {
-			continue
-		}
-
-		hc, ok := prov.(provider.HealthCheckable)
-		if !ok {
-			continue
-		}
-
-		ipcData, err := hc.IpcGet()
-		if err != nil {
-			core.Log.Warnf("Core", "Health check: IpcGet for %q failed: %v", entry.ID, err)
-			continue
-		}
-
-		stale, reason := checkPeerHealth(ipcData, now, hm.staleThreshold)
-		if !stale {
-			continue
-		}
-
-		core.Log.Warnf("Core", "Health check: tunnel %q has stale peers (%s), triggering reconnect", entry.ID, reason)
-		hm.markUnhealthy(entry.ID, fmt.Errorf("stale peers: %s", reason))
+		vpnEntries = append(vpnEntries, entry)
 	}
+
+	if len(vpnEntries) == 0 {
+		return
+	}
+
+	// Spread checks across the interval period.
+	// E.g. 3 tunnels with 30s interval → check at 0s, 10s, 20s.
+	staggerDelay := hm.interval / time.Duration(len(vpnEntries))
+	if staggerDelay < 2*time.Second {
+		staggerDelay = 2 * time.Second
+	}
+
+	for i, entry := range vpnEntries {
+		if i > 0 {
+			select {
+			case <-hm.ctx.Done():
+				return
+			case <-time.After(staggerDelay):
+			}
+			now = time.Now() // refresh timestamp for accurate stale check
+		}
+
+		hm.checkOne(entry, now)
+	}
+}
+
+// checkOne checks a single tunnel's peer health.
+func (hm *HealthMonitor) checkOne(entry *core.TunnelEntry, now time.Time) {
+	prov, ok := hm.providerLookup(entry.ID)
+	if !ok {
+		return
+	}
+
+	hc, ok := prov.(provider.HealthCheckable)
+	if !ok {
+		return
+	}
+
+	ipcData, err := hc.IpcGet()
+	if err != nil {
+		core.Log.Warnf("Core", "Health check: IpcGet for %q failed: %v", entry.ID, err)
+		return
+	}
+
+	stale, reason := checkPeerHealth(ipcData, now, hm.staleThreshold)
+	if !stale {
+		return
+	}
+
+	core.Log.Warnf("Core", "Health check: tunnel %q has stale peers (%s), triggering reconnect", entry.ID, reason)
+	hm.markUnhealthy(entry.ID, fmt.Errorf("stale peers: %s", reason))
 }
 
 // checkPeerHealth parses WireGuard IPC output and determines if all peers are stale.
