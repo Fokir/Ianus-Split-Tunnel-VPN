@@ -40,10 +40,11 @@ var (
 func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, opts ...daemon.RunConfig) error {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
-	// Limit heap to 256MB so Go returns memory to the OS more aggressively.
-	// Without this, the runtime keeps freed pages mapped (MADV_FREE) and RSS
-	// appears much higher than actual usage.
-	debug.SetMemoryLimit(256 * 1024 * 1024)
+	// Tune GC to reduce pause frequency during packet processing.
+	// With GOGC=200, GC runs less often — the 40MB heap spikes from large
+	// proxy transfers no longer trigger aggressive collection cycles.
+	debug.SetGCPercent(200)
+	debug.SetMemoryLimit(256 * 1024 * 1024) // 256 MB (preserve original limit)
 
 	// === 1. Core components ===
 	bus := core.NewEventBus()
