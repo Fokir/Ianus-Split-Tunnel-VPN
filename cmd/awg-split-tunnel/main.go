@@ -414,6 +414,10 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	var netMonTimer *time.Timer
 	var netMonTimerMu sync.Mutex
 
+	// Timer for delayed gateway deactivation — allows reconnect to cancel teardown.
+	var gwDeactivateTimer *time.Timer
+	var gwDeactivateTimerMu sync.Mutex
+
 	// Subscribe to tunnel state changes — activate/deactivate gateway dynamically.
 	bus.Subscribe(core.EventTunnelStateChanged, func(e core.Event) {
 		payload, ok := e.Payload.(core.TunnelStatePayload)
@@ -438,6 +442,14 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		gwMu.Unlock()
 
 		if vpnUp > 0 && !wasActive {
+			// Cancel any pending deactivation from grace period.
+			gwDeactivateTimerMu.Lock()
+			if gwDeactivateTimer != nil {
+				gwDeactivateTimer.Stop()
+				gwDeactivateTimer = nil
+				core.Log.Infof("Core", "Gateway deactivation cancelled: tunnel reconnected during grace period")
+			}
+			gwDeactivateTimerMu.Unlock()
 			// Suppress network monitor during activation to prevent feedback loop
 			// from our own route modifications generating PF_ROUTE events.
 			if netMon != nil {
@@ -470,35 +482,67 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 				netMonTimerMu.Unlock()
 			}
 		} else if vpnUp == 0 && wasActive {
-			if netMon != nil {
-				netMon.Suppress()
+			// Grace period: delay gateway deactivation to allow reconnect to complete
+			// without tearing down WFP rules, routes, and DNS.
+			gwDeactivateTimerMu.Lock()
+			if gwDeactivateTimer != nil {
+				gwDeactivateTimer.Stop()
 			}
-			deactivateGateway()
-			if netMon != nil {
-				netMonTimerMu.Lock()
-				if netMonTimer != nil {
-					netMonTimer.Stop()
-				}
-				netMonTimer = time.AfterFunc(3*time.Second, func() {
-					if netMon != nil {
-						netMon.Resume()
+			gwDeactivateTimer = time.AfterFunc(30*time.Second, func() {
+				// Re-check: if a tunnel came back up during grace period, skip deactivation.
+				vpnNow := 0
+				for _, entry := range registry.All() {
+					if entry.ID != gateway.DirectTunnelID && entry.State == core.TunnelStateUp {
+						vpnNow++
 					}
-				})
-				netMonTimerMu.Unlock()
-			}
-		} else if vpnUp > 0 && wasActive && cfgManager.Get().Global.KillSwitch {
-			// VPN endpoint list may have changed — refresh kill switch rules.
-			var vpnEndpoints []netip.Addr
-			for _, entry := range registry.All() {
-				if entry.ID == gateway.DirectTunnelID || entry.State != core.TunnelStateUp {
-					continue
 				}
-				for _, ep := range tunnelCtrl.GetServerEndpoints(entry.ID) {
-					vpnEndpoints = append(vpnEndpoints, ep.Addr())
+				if vpnNow > 0 {
+					core.Log.Infof("Core", "Gateway deactivation cancelled: %d VPN tunnel(s) reconnected during grace period", vpnNow)
+					return
 				}
+				if netMon != nil {
+					netMon.Suppress()
+				}
+				deactivateGateway()
+				if netMon != nil {
+					netMonTimerMu.Lock()
+					if netMonTimer != nil {
+						netMonTimer.Stop()
+					}
+					netMonTimer = time.AfterFunc(3*time.Second, func() {
+						if netMon != nil {
+							netMon.Resume()
+						}
+					})
+					netMonTimerMu.Unlock()
+				}
+			})
+			gwDeactivateTimerMu.Unlock()
+			core.Log.Infof("Core", "All VPN tunnels down — gateway deactivation deferred (30s grace period)")
+		} else if vpnUp > 0 && wasActive {
+			// Cancel any pending deactivation timer (tunnel reconnected during grace period).
+			gwDeactivateTimerMu.Lock()
+			if gwDeactivateTimer != nil {
+				gwDeactivateTimer.Stop()
+				gwDeactivateTimer = nil
+				core.Log.Infof("Core", "Gateway deactivation cancelled: tunnel reconnected during grace period")
 			}
-			if err := procFilter.EnableKillSwitch(adapter.Name(), vpnEndpoints); err != nil {
-				core.Log.Warnf("Core", "Failed to refresh kill switch: %v", err)
+			gwDeactivateTimerMu.Unlock()
+
+			if cfgManager.Get().Global.KillSwitch {
+				// VPN endpoint list may have changed — refresh kill switch rules.
+				var vpnEndpoints []netip.Addr
+				for _, entry := range registry.All() {
+					if entry.ID == gateway.DirectTunnelID || entry.State != core.TunnelStateUp {
+						continue
+					}
+					for _, ep := range tunnelCtrl.GetServerEndpoints(entry.ID) {
+						vpnEndpoints = append(vpnEndpoints, ep.Addr())
+					}
+				}
+				if err := procFilter.EnableKillSwitch(adapter.Name(), vpnEndpoints); err != nil {
+					core.Log.Warnf("Core", "Failed to refresh kill switch: %v", err)
+				}
 			}
 		}
 	})
