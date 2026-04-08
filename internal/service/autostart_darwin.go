@@ -99,3 +99,8 @@ func setAutostartEnabled(enabled bool, guiExePath string) error {
 
 	return nil
 }
+
+// TriggerGUILaunch is a no-op on macOS (GUI launch is handled by LaunchAgent).
+func TriggerGUILaunch() bool {
+	return false
+}

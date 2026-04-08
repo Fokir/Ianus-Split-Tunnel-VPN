@@ -4,6 +4,7 @@ package service
 
 import (
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 	"unsafe"
@@ -202,4 +203,33 @@ func setGUIAutostart(enabled bool, guiExePath string) error {
 func isGUIAutostartEnabled() bool {
 	err := exec.Command("schtasks", "/Query", "/TN", guiTaskName).Run()
 	return err == nil
+}
+
+const guiProcessName = "awg-split-tunnel-ui.exe"
+
+// isGUIRunning checks if the GUI process is currently running.
+func isGUIRunning() bool {
+	out, err := exec.Command("tasklist", "/FI", fmt.Sprintf("IMAGENAME eq %s", guiProcessName), "/NH").Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), guiProcessName)
+}
+
+// TriggerGUILaunch runs the GUI scheduled task if autostart is enabled
+// but the GUI process is not running. Returns true if launch was triggered.
+func TriggerGUILaunch() bool {
+	if !isGUIAutostartEnabled() {
+		return false
+	}
+	if isGUIRunning() {
+		return false
+	}
+	out, err := exec.Command("schtasks", "/Run", "/TN", guiTaskName).CombinedOutput()
+	if err != nil {
+		log.Printf("[Core] Failed to trigger GUI launch: %s: %v", strings.TrimSpace(string(out)), err)
+		return false
+	}
+	log.Printf("[Core] GUI not running, triggered scheduled task %q", guiTaskName)
+	return true
 }

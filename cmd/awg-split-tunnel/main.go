@@ -871,6 +871,19 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 				core.Log.Errorf("Core", "IPC server error: %v", err)
 			}
 		})
+
+		// GUI watchdog: if the GUI process hasn't started within 60 seconds,
+		// trigger the scheduled task to launch it (Windows only).
+		core.SafeGo("gui-watchdog", func() {
+			select {
+			case <-stopCh:
+				return
+			case <-time.After(60 * time.Second):
+			}
+			if service.TriggerGUILaunch() {
+				core.Log.Infof("Core", "GUI watchdog: triggered GUI launch via scheduled task")
+			}
+		})
 	}
 
 	// --- Wait for shutdown signal ---
