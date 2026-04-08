@@ -196,6 +196,9 @@ func (rm *ReconnectManager) reconnectLoop(ctx context.Context, tunnelID string) 
 		// Check network connectivity.
 		if !rm.hasNetworkConnectivity() {
 			core.Log.Debugf("Core", "Reconnect: no network connectivity, skipping attempt for %q", tunnelID)
+			// Reset interval — don't penalize with backoff for skipped attempts.
+			currentInterval = baseInterval
+			attempt-- // don't count skipped attempts
 			continue
 		}
 

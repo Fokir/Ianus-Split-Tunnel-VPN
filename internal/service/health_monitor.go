@@ -108,8 +108,9 @@ func (hm *HealthMonitor) checkStaggered() {
 
 	// Spread checks across the interval period.
 	// E.g. 3 tunnels with 30s interval → check at 0s, 10s, 20s.
-	staggerDelay := hm.interval / time.Duration(len(vpnEntries))
-	if staggerDelay < 2*time.Second {
+	n := time.Duration(len(vpnEntries))
+	staggerDelay := hm.interval / n
+	if staggerDelay < 2*time.Second && 2*time.Second*n <= hm.interval {
 		staggerDelay = 2 * time.Second
 	}
 
