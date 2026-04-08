@@ -418,6 +418,18 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	var gwDeactivateTimer *time.Timer
 	var gwDeactivateTimerMu sync.Mutex
 
+	// cancelGraceTimer stops and nils the pending deactivation timer (if any).
+	// Must NOT be called with gwDeactivateTimerMu already held.
+	cancelGraceTimer := func() {
+		gwDeactivateTimerMu.Lock()
+		if gwDeactivateTimer != nil {
+			gwDeactivateTimer.Stop()
+			gwDeactivateTimer = nil
+			core.Log.Infof("Core", "Gateway deactivation cancelled: tunnel reconnected during grace period")
+		}
+		gwDeactivateTimerMu.Unlock()
+	}
+
 	// Subscribe to tunnel state changes — activate/deactivate gateway dynamically.
 	bus.Subscribe(core.EventTunnelStateChanged, func(e core.Event) {
 		payload, ok := e.Payload.(core.TunnelStatePayload)
@@ -443,13 +455,7 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 
 		if vpnUp > 0 && !wasActive {
 			// Cancel any pending deactivation from grace period.
-			gwDeactivateTimerMu.Lock()
-			if gwDeactivateTimer != nil {
-				gwDeactivateTimer.Stop()
-				gwDeactivateTimer = nil
-				core.Log.Infof("Core", "Gateway deactivation cancelled: tunnel reconnected during grace period")
-			}
-			gwDeactivateTimerMu.Unlock()
+			cancelGraceTimer()
 			// Suppress network monitor during activation to prevent feedback loop
 			// from our own route modifications generating PF_ROUTE events.
 			if netMon != nil {
@@ -489,6 +495,10 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 				gwDeactivateTimer.Stop()
 			}
 			gwDeactivateTimer = time.AfterFunc(30*time.Second, func() {
+				// Timer has fired — nil it so later cancellation checks are accurate.
+				gwDeactivateTimerMu.Lock()
+				gwDeactivateTimer = nil
+				gwDeactivateTimerMu.Unlock()
 				// Re-check: if a tunnel came back up during grace period, skip deactivation.
 				vpnNow := 0
 				for _, entry := range registry.All() {
@@ -521,13 +531,7 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 			core.Log.Infof("Core", "All VPN tunnels down — gateway deactivation deferred (30s grace period)")
 		} else if vpnUp > 0 && wasActive {
 			// Cancel any pending deactivation timer (tunnel reconnected during grace period).
-			gwDeactivateTimerMu.Lock()
-			if gwDeactivateTimer != nil {
-				gwDeactivateTimer.Stop()
-				gwDeactivateTimer = nil
-				core.Log.Infof("Core", "Gateway deactivation cancelled: tunnel reconnected during grace period")
-			}
-			gwDeactivateTimerMu.Unlock()
+			cancelGraceTimer()
 
 			if cfgManager.Get().Global.KillSwitch {
 				// VPN endpoint list may have changed — refresh kill switch rules.
@@ -966,6 +970,14 @@ mainLoop:
 		if dnsResolver != nil {
 			dnsResolver.Stop()
 		}
+
+		// Cancel any pending grace-period deactivation.
+		gwDeactivateTimerMu.Lock()
+		if gwDeactivateTimer != nil {
+			gwDeactivateTimer.Stop()
+			gwDeactivateTimer = nil
+		}
+		gwDeactivateTimerMu.Unlock()
 
 		// Stop network monitor.
 		if netMon != nil {
