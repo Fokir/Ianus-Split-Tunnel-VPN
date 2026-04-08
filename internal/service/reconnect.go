@@ -162,17 +162,19 @@ func (rm *ReconnectManager) handleStateChange(e core.Event) {
 }
 
 func (rm *ReconnectManager) reconnectLoop(ctx context.Context, tunnelID string) {
-	interval := rm.getInterval()
+	baseInterval := rm.getInterval()
 	maxRetries := rm.cfg.MaxRetries
+	currentInterval := baseInterval
+	const maxInterval = 2 * time.Minute
 
-	core.Log.Infof("Core", "Reconnect: starting retry loop for %q (interval=%s)", tunnelID, interval)
+	core.Log.Infof("Core", "Reconnect: starting retry loop for %q (interval=%s)", tunnelID, baseInterval)
 
 	for attempt := 1; ; attempt++ {
 		select {
 		case <-ctx.Done():
 			core.Log.Infof("Core", "Reconnect: cancelled for %q", tunnelID)
 			return
-		case <-time.After(interval):
+		case <-time.After(currentInterval):
 		}
 
 		// Check if intent still exists.
@@ -204,12 +206,17 @@ func (rm *ReconnectManager) reconnectLoop(ctx context.Context, tunnelID string) 
 			return
 		}
 
-		core.Log.Infof("Core", "Reconnect: attempt %d for %q", attempt, tunnelID)
+		core.Log.Infof("Core", "Reconnect: attempt %d for %q (next interval=%s)", attempt, tunnelID, currentInterval)
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, 45*time.Second)
 		err := rm.ctrl.ConnectTunnel(attemptCtx, tunnelID)
 		attemptCancel()
 		if err != nil {
 			core.Log.Warnf("Core", "Reconnect: attempt %d failed for %q: %v", attempt, tunnelID, err)
+			// Exponential backoff: double interval up to maxInterval.
+			currentInterval = currentInterval * 2
+			if currentInterval > maxInterval {
+				currentInterval = maxInterval
+			}
 			continue
 		}
 
