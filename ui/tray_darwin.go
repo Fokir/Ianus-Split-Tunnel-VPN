@@ -6,22 +6,26 @@ import (
 	"context"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/dock"
 
 	vpnapi "awg-split-tunnel/api/gen"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-func setupTray(app *application.App, mainWindow *application.WebviewWindow, binding *BindingService) {
+func setupTray(app *application.App, mainWindow *application.WebviewWindow, binding *BindingService, dockService *dock.DockService) {
 	initTrayIcons()
 
 	systray := app.SystemTray.New()
 	systray.SetIcon(trayIconForStatus(trayStatusGray))
 
-	// Left-click on tray icon opens the main window.
-	systray.OnClick(func() {
+	showWindow := func() {
+		dockService.ShowAppIcon()
 		mainWindow.Show()
 		mainWindow.Focus()
-	})
+	}
+
+	// Left-click on tray icon opens the main window.
+	systray.OnClick(showWindow)
 
 	menu := app.Menu.New()
 
@@ -42,8 +46,7 @@ func setupTray(app *application.App, mainWindow *application.WebviewWindow, bind
 	for _, tab := range tabItems {
 		t := tab
 		menu.Add(t.label).OnClick(func(_ *application.Context) {
-			mainWindow.Show()
-			mainWindow.Focus()
+			showWindow()
 			app.Event.Emit("navigate", t.path)
 		})
 	}
