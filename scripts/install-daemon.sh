@@ -43,6 +43,14 @@ echo "Installing AWG Split Tunnel daemon..."
 if launchctl print "system/${LABEL}" &>/dev/null; then
     echo "  Stopping existing daemon..."
     launchctl bootout "system/${LABEL}" 2>/dev/null || true
+    # Wait for launchd to fully unload the service. Without this,
+    # the next bootstrap can race and fail with "5: Input/output error".
+    for _ in $(seq 1 30); do
+        if ! launchctl print "system/${LABEL}" &>/dev/null; then
+            break
+        fi
+        sleep 0.5
+    done
 fi
 
 # ── Copy binary ──────────────────────────────────────────────────────
@@ -97,7 +105,29 @@ EOF
 
 # ── Bootstrap daemon ──────────────────────────────────────────────────
 echo "  Starting daemon..."
-launchctl bootstrap system "$PLIST_FILE"
+# Retry bootstrap: launchd can transiently return "5: Input/output error"
+# right after a bootout, even when print no longer sees the service.
+BOOTSTRAP_OK=false
+for attempt in 1 2 3 4 5; do
+    if launchctl bootstrap system "$PLIST_FILE" 2>/tmp/awg-bootstrap.err; then
+        BOOTSTRAP_OK=true
+        break
+    fi
+    err="$(cat /tmp/awg-bootstrap.err 2>/dev/null || true)"
+    echo "  Bootstrap attempt ${attempt} failed: ${err}"
+    # If it's already loaded, treat as success.
+    if echo "$err" | grep -qi "service already loaded\|already bootstrapped"; then
+        BOOTSTRAP_OK=true
+        break
+    fi
+    launchctl bootout "system/${LABEL}" 2>/dev/null || true
+    sleep 1
+done
+rm -f /tmp/awg-bootstrap.err
+if [[ "$BOOTSTRAP_OK" != "true" ]]; then
+    echo "Error: failed to bootstrap LaunchDaemon after multiple attempts."
+    exit 1
+fi
 
 echo ""
 echo "Done! AWG Split Tunnel daemon is installed and running."
