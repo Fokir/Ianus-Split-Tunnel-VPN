@@ -229,6 +229,120 @@ func (rm *ReconnectManager) reconnectLoop(ctx context.Context, tunnelID string) 
 	}
 }
 
+// OnSystemWake is called when the PowerMonitor detects the system has
+// resumed from sleep. It cancels any in-progress retry loops (their
+// backoff state is stale), waits briefly for network connectivity to
+// recover, then forces an immediate reconnect for every intent tunnel.
+//
+// Intent tunnels requiring interactive auth (AnyConnect OTP) are skipped.
+// Tunnels that are still actually Up (keepalive survived) are skipped too.
+func (rm *ReconnectManager) OnSystemWake(gap time.Duration) {
+	rm.mu.Lock()
+	if !rm.cfg.Enabled {
+		rm.mu.Unlock()
+		return
+	}
+	// Snapshot intent ids and cancel all existing retry loops so they
+	// don't race with the forced reconnects scheduled below.
+	intents := make([]string, 0, len(rm.intentMap))
+	for id := range rm.intentMap {
+		intents = append(intents, id)
+	}
+	for id, cancelFn := range rm.retrying {
+		cancelFn()
+		delete(rm.retrying, id)
+	}
+	rm.mu.Unlock()
+
+	if len(intents) == 0 {
+		return
+	}
+
+	core.Log.Infof("Core", "Reconnect: system wake detected (slept %s), forcing reconnect for %d tunnel(s)",
+		gap.Round(time.Second), len(intents))
+
+	// Wait up to 60s for network connectivity before trying to reconnect.
+	// macOS post-wake races: captive portal detection, DHCP, Wi-Fi re-assoc.
+	// Using the real-NIC-bound resolver avoids routing through a dead tunnel.
+	if !rm.waitForNetwork(rm.ctx, 60*time.Second) {
+		core.Log.Warnf("Core", "Reconnect: network not ready after wake, falling back to normal retry loops")
+	}
+
+	for _, id := range intents {
+		if rm.requiresInteractiveAuth(id) {
+			core.Log.Infof("Core", "Reconnect: skipping wake-reconnect for %q (requires interactive auth)", id)
+			continue
+		}
+		if entry, ok := rm.registry.Get(id); ok && entry.State == core.TunnelStateUp {
+			// Unlikely after a real sleep, but possible for very short gaps.
+			// HealthMonitor will catch it later if peers are stale.
+			continue
+		}
+
+		rm.mu.Lock()
+		if _, alreadyRetrying := rm.retrying[id]; alreadyRetrying {
+			rm.mu.Unlock()
+			continue
+		}
+		retryCtx, retryCancel := context.WithCancel(rm.ctx)
+		rm.retrying[id] = retryCancel
+		rm.mu.Unlock()
+
+		go rm.wakeReconnect(retryCtx, id)
+	}
+}
+
+// wakeReconnect is a one-shot reconnect with a zero initial delay. On
+// failure it falls back into the normal reconnectLoop backoff cycle by
+// returning — handleStateChange will restart a loop on the next Error
+// event.
+func (rm *ReconnectManager) wakeReconnect(ctx context.Context, tunnelID string) {
+	defer rm.cleanup(tunnelID)
+
+	rm.mu.Lock()
+	hasIntent := rm.intentMap[tunnelID]
+	rm.mu.Unlock()
+	if !hasIntent {
+		return
+	}
+
+	core.Log.Infof("Core", "Reconnect: wake-reconnect attempt for %q", tunnelID)
+	attemptCtx, attemptCancel := context.WithTimeout(ctx, 45*time.Second)
+	err := rm.ctrl.ConnectTunnel(attemptCtx, tunnelID)
+	attemptCancel()
+	if err != nil {
+		core.Log.Warnf("Core", "Reconnect: wake-reconnect failed for %q: %v (will fall back to retry loop)", tunnelID, err)
+		// Relinquish the slot so the normal Error-driven reconnectLoop
+		// can take over without being blocked by a stale entry.
+		return
+	}
+	core.Log.Infof("Core", "Reconnect: wake-reconnect succeeded for %q", tunnelID)
+}
+
+// waitForNetwork polls hasNetworkConnectivity until it returns true or
+// the timeout expires. Returns true if connectivity was confirmed.
+func (rm *ReconnectManager) waitForNetwork(ctx context.Context, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	attempt := 0
+	for {
+		if rm.hasNetworkConnectivity() {
+			if attempt > 0 {
+				core.Log.Infof("Core", "Reconnect: network ready after %d probe(s)", attempt+1)
+			}
+			return true
+		}
+		attempt++
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 func (rm *ReconnectManager) cleanup(tunnelID string) {
 	rm.mu.Lock()
 	if cancelFn, ok := rm.retrying[tunnelID]; ok {
