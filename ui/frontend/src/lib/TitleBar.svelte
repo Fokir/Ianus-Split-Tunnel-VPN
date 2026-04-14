@@ -1,5 +1,5 @@
 <script>
-  import { Window } from '@wailsio/runtime';
+  import { Window, System } from '@wailsio/runtime';
   import { t } from './i18n';
 
   let hovered = false;
@@ -13,7 +13,14 @@
   }
 
   function close() {
-    Window.Close();
+    // On macOS we hide so the Go side can drop the Dock icon and keep the app
+    // alive in the tray. On Windows we close to destroy the WebView2 runtime
+    // and free ~200 MB; the tray re-creates the window on demand.
+    if (System.IsMac()) {
+      Window.Hide();
+    } else {
+      Window.Close();
+    }
   }
 </script>
 

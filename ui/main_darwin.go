@@ -87,12 +87,17 @@ func main() {
 		},
 	})
 
-	// Hide window instead of closing when the user clicks the X button,
-	// and remove the Dock icon so the app lives only in the tray until reopened.
-	mainWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-		mainWindow.Hide()
+	// When the window is hidden (via the frontend X button calling Window.Hide()),
+	// drop the Dock icon so the app lives only in the tray until reopened.
+	mainWindow.RegisterHook(events.Common.WindowHide, func(e *application.WindowEvent) {
 		dockService.HideAppIcon()
-		e.Cancel()
+	})
+
+	// Frameless windows are created with NSWindowStyleMaskBorderless, which
+	// omits the miniaturizable bit; without it [NSWindow miniaturize:] silently
+	// no-ops. Add the bit so the yellow titlebar button can sweep into the Dock.
+	mainWindow.RegisterHook(events.Common.WindowShow, func(e *application.WindowEvent) {
+		enableMinimiseStyle()
 	})
 
 	// Setup system tray.
