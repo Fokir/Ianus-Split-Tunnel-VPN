@@ -209,13 +209,23 @@ func (a *TUNAdapter) WritePacket(pkt []byte) error {
 	return err
 }
 
-// SetDNS is a no-op on macOS. DNS is handled entirely by intercepting all
-// port 53 traffic in the TUN packet loop (hijackDNS), so no system DNS
-// configuration via networksetup is needed.
-func (a *TUNAdapter) SetDNS(_ []netip.Addr) error { return nil }
+// SetDNS points every enabled macOS network service at our in-TUN resolver
+// (10.255.0.1) so domain_rules and FakeIP actually see application DNS
+// traffic. Original per-service servers are persisted to /var/db so a crash
+// before ClearDNS is recoverable via PreStartup on next launch.
+func (a *TUNAdapter) SetDNS(servers []netip.Addr) error {
+	dnsIP := tunIP
+	if len(servers) > 0 {
+		dnsIP = servers[0].String()
+	}
+	return applySystemDNS(dnsIP)
+}
 
-// ClearDNS is a no-op on macOS — system DNS is never modified.
-func (a *TUNAdapter) ClearDNS() error { return nil }
+// ClearDNS restores the user's original DNS servers from the on-disk backup
+// written by SetDNS, then removes the backup file.
+func (a *TUNAdapter) ClearDNS() error {
+	return restoreSystemDNS()
+}
 
 // Close tears down the utun adapter. The kernel removes the utun interface when the fd is closed.
 func (a *TUNAdapter) Close() error {
