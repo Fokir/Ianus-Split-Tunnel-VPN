@@ -66,12 +66,16 @@ func (pm *PowerMonitor) loop() {
 	ticker := time.NewTicker(pm.tick)
 	defer ticker.Stop()
 
-	last := time.Now()
+	// Strip the monotonic clock reading so Sub uses wall-clock subtraction.
+	// macOS freezes the monotonic clock during system sleep, so monotonic
+	// gaps never exceed the tick interval and we'd miss every wake event.
+	last := time.Now().Round(0)
 	for {
 		select {
 		case <-pm.done:
 			return
 		case now := <-ticker.C:
+			now = now.Round(0)
 			gap := now.Sub(last)
 			last = now
 			if gap < pm.threshold {
