@@ -179,7 +179,13 @@ func parseInterfaceKey(key, value string, cfg *ParsedConfig, uapi *strings.Build
 		}
 		cfg.MTU = mtu
 	// AmneziaWG obfuscation extensions — pass through to UAPI.
-	case "jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4":
+	// AWG 1.0 (Jc/Jmin/Jmax, S1/S2, H1-H4), AWG 1.5 (+S3/S4, +I1-I5),
+	// AWG 2.0 (H1-H4 accept "x-y" ranges, I1-I5 use tag syntax).
+	// H1-H4 and I1-I5 are passed through verbatim as strings.
+	case "jc", "jmin", "jmax",
+		"s1", "s2", "s3", "s4",
+		"h1", "h2", "h3", "h4",
+		"i1", "i2", "i3", "i4", "i5":
 		fmt.Fprintf(uapi, "%s=%s\n", strings.ToLower(key), value)
 	}
 	return nil

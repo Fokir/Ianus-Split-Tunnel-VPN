@@ -179,7 +179,10 @@ func parseInterfaceKey(key, value string, cfg *ParsedConfig, uapi *strings.Build
 		}
 		cfg.MTU = mtu
 	// AmneziaWG obfuscation fields — silently ignored for standard WireGuard.
-	case "jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4":
+	case "jc", "jmin", "jmax",
+		"s1", "s2", "s3", "s4",
+		"h1", "h2", "h3", "h4",
+		"i1", "i2", "i3", "i4", "i5":
 		// skip
 	}
 	return nil
