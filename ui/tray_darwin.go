@@ -6,20 +6,18 @@ import (
 	"context"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/services/dock"
 
 	vpnapi "awg-split-tunnel/api/gen"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-func setupTray(app *application.App, mainWindow *application.WebviewWindow, binding *BindingService, dockService *dock.DockService) {
+func setupTray(app *application.App, mainWindow *application.WebviewWindow, binding *BindingService) {
 	initTrayIcons()
 
 	systray := app.SystemTray.New()
 	systray.SetIcon(trayIconForStatus(trayStatusGray))
 
 	showWindow := func() {
-		dockService.ShowAppIcon()
 		mainWindow.Show()
 		mainWindow.Focus()
 	}

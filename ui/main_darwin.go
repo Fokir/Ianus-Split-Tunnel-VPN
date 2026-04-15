@@ -13,9 +13,10 @@ import (
 	"runtime"
 	"time"
 
+	"sync"
+
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
-	"github.com/wailsapp/wails/v3/pkg/services/dock"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -47,12 +48,6 @@ func main() {
 		log.Printf("[UI] RestoreConnections: %v", err)
 	}
 
-	// Dock service lets us toggle the macOS Dock icon at runtime so the app
-	// behaves as a standalone window (movable between Spaces, minimizable)
-	// while the window is open, and disappears from the Dock when it's closed —
-	// the tray icon remains the only entry point.
-	dockService := dock.New()
-
 	// Create Wails application.
 	app := application.New(application.Options{
 		Name:        "AWG Split Tunnel",
@@ -60,7 +55,6 @@ func main() {
 		Icon:        trayIconPNG,
 		Services: []application.Service{
 			application.NewService(binding),
-			application.NewService(dockService),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -87,21 +81,18 @@ func main() {
 		},
 	})
 
-	// When the window is hidden (via the frontend X button calling Window.Hide()),
-	// drop the Dock icon so the app lives only in the tray until reopened.
-	mainWindow.RegisterHook(events.Common.WindowHide, func(e *application.WindowEvent) {
-		dockService.HideAppIcon()
-	})
-
 	// Frameless windows are created with NSWindowStyleMaskBorderless, which
 	// omits the miniaturizable bit; without it [NSWindow miniaturize:] silently
-	// no-ops. Add the bit so the yellow titlebar button can sweep into the Dock.
+	// no-ops. Apply the bit once on the first WindowShow; toggling it on every
+	// show triggered an AppKit feedback loop that produced ~200 CPU wakes/sec
+	// and tripped the macOS wakes watchdog (45000/300s), killing the UI.
+	var minimiseOnce sync.Once
 	mainWindow.RegisterHook(events.Common.WindowShow, func(e *application.WindowEvent) {
-		enableMinimiseStyle()
+		minimiseOnce.Do(enableMinimiseStyle)
 	})
 
 	// Setup system tray.
-	setupTray(app, mainWindow, binding, dockService)
+	setupTray(app, mainWindow, binding)
 
 	// Run the application.
 	if err := app.Run(); err != nil {
