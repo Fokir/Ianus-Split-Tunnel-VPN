@@ -1339,7 +1339,7 @@ func (w *WFPManager) UnblockAllProcesses() {
 	var toDelete []wf.RuleID
 	for key, ids := range w.rules {
 		switch key {
-		case "__ipv6_block__", wfpDNSBlockKey, wfpDNSPermitSelfKey, wfpDefaultBlockKey, wfpVirtualAdapterKey:
+		case "__ipv6_block__", "__dhcp_permit__", wfpDNSBlockKey, wfpDNSPermitSelfKey, wfpDefaultBlockKey, wfpVirtualAdapterKey:
 			continue // keep these
 		}
 		toDelete = append(toDelete, ids...)
@@ -1430,6 +1430,120 @@ func (w *WFPManager) BlockAllIPv6() error {
 
 	w.rules[key] = ruleIDs
 	core.Log.Infof("WFP", "IPv6 traffic blocked (%d rules)", len(ruleIDs))
+	return nil
+}
+
+// PermitDHCP adds baseline WFP rules that allow DHCP traffic on any interface.
+// Without these rules, EnableDefaultBlock prevents DHCP lease acquisition/renewal,
+// which breaks WiFi connectivity when the service starts at boot before the
+// network interface has an IP address.
+//
+// DHCPv4: client port 68 ↔ server port 67 (UDP)
+// DHCPv6: client port 546 ↔ server port 547 (UDP)
+func (w *WFPManager) PermitDHCP() error {
+	const key = "__dhcp_permit__"
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if _, exists := w.rules[key]; exists {
+		return nil
+	}
+
+	var ruleIDs []wf.RuleID
+
+	// DHCPv4 rules (ALE Connect V4 / Recv Accept V4).
+	dhcpV4Rules := []struct {
+		name      string
+		layer     wf.LayerID
+		localPort uint16
+		remotePort uint16
+	}{
+		{"AWG permit DHCP v4 outbound", wf.LayerALEAuthConnectV4, 68, 67},
+		{"AWG permit DHCP v4 inbound", wf.LayerALEAuthRecvAcceptV4, 68, 67},
+	}
+	for _, r := range dhcpV4Rules {
+		id := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:       id,
+			Name:     r.name,
+			Layer:    r.layer,
+			Sublayer: awgSublayerID,
+			Weight:   150,
+			Conditions: []*wf.Match{
+				{
+					Field: wf.FieldIPProtocol,
+					Op:    wf.MatchTypeEqual,
+					Value: uint8(17), // UDP
+				},
+				{
+					Field: wf.FieldIPLocalPort,
+					Op:    wf.MatchTypeEqual,
+					Value: r.localPort,
+				},
+				{
+					Field: wf.FieldIPRemotePort,
+					Op:    wf.MatchTypeEqual,
+					Value: r.remotePort,
+				},
+			},
+			Action: wf.ActionPermit,
+		}); err != nil {
+			for _, prev := range ruleIDs {
+				w.session.DeleteRule(prev)
+			}
+			return fmt.Errorf("[WFP] add %s: %w", r.name, err)
+		}
+		ruleIDs = append(ruleIDs, id)
+	}
+
+	// DHCPv6 rules (ALE Connect V6 / Recv Accept V6).
+	dhcpV6Rules := []struct {
+		name      string
+		layer     wf.LayerID
+		localPort uint16
+		remotePort uint16
+	}{
+		{"AWG permit DHCP v6 outbound", wf.LayerALEAuthConnectV6, 546, 547},
+		{"AWG permit DHCP v6 inbound", wf.LayerALEAuthRecvAcceptV6, 546, 547},
+	}
+	for _, r := range dhcpV6Rules {
+		id := w.nextRuleID()
+		if err := w.session.AddRule(&wf.Rule{
+			ID:       id,
+			Name:     r.name,
+			Layer:    r.layer,
+			Sublayer: awgSublayerID,
+			Weight:   150,
+			Conditions: []*wf.Match{
+				{
+					Field: wf.FieldIPProtocol,
+					Op:    wf.MatchTypeEqual,
+					Value: uint8(17), // UDP
+				},
+				{
+					Field: wf.FieldIPLocalPort,
+					Op:    wf.MatchTypeEqual,
+					Value: r.localPort,
+				},
+				{
+					Field: wf.FieldIPRemotePort,
+					Op:    wf.MatchTypeEqual,
+					Value: r.remotePort,
+				},
+			},
+			Action: wf.ActionPermit,
+		}); err != nil {
+			for _, prev := range ruleIDs {
+				w.session.DeleteRule(prev)
+			}
+			return fmt.Errorf("[WFP] add %s: %w", r.name, err)
+		}
+		ruleIDs = append(ruleIDs, id)
+	}
+
+	w.rules[key] = ruleIDs
+	core.Log.Infof("WFP", "DHCP permit enabled (%d rules, DHCPv4+DHCPv6)", len(ruleIDs))
 	return nil
 }
 

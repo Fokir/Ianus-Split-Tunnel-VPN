@@ -373,6 +373,9 @@ func (f *ProcessFilter) rebuildDNSAnchor() error {
 	return pfctlLoadAnchor(pfAnchorDNS, rules.String())
 }
 
+// PermitDHCP is a no-op on macOS. PF does not block DHCP by default.
+func (f *ProcessFilter) PermitDHCP() error { return nil }
+
 // --- IPv6 blocking ---
 
 // BlockAllIPv6 adds PF rules to block all IPv6 traffic (except loopback).

@@ -64,6 +64,9 @@ type ProcessFilter interface {
 	PermitDNSForSelf(ifLUID uint64) error
 	// RemoveDNSPermitForSelf removes DNS self-permit rules.
 	RemoveDNSPermitForSelf()
+	// PermitDHCP adds baseline WFP rules allowing DHCP traffic (UDP 67/68, 546/547)
+	// on any interface. Prevents WiFi/DHCP breakage when default block is active.
+	PermitDHCP() error
 	// BlockAllIPv6 blocks all IPv6 traffic.
 	BlockAllIPv6() error
 	// EnableKillSwitch blocks all non-VPN traffic except loopback and VPN endpoints.

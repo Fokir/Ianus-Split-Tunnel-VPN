@@ -128,11 +128,23 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 	}
 
 	// === 3. Discover Real NIC ===
+	// At boot the network interface may not be ready yet (WiFi not associated,
+	// DHCP not completed). Retry up to 15 times with 2-second intervals,
+	// similar to how WireGuard-Windows handles boot-time adapter creation.
 	routeMgr := plat.NewRouteManager(adapter.LUID())
-	realNIC, err := routeMgr.DiscoverRealNIC()
-	if err != nil {
-		adapter.Close()
-		return fmt.Errorf("failed to discover real NIC: %w", err)
+	const nicRetries = 15
+	var realNIC platform.RealNIC
+	for attempt := 1; attempt <= nicRetries; attempt++ {
+		realNIC, err = routeMgr.DiscoverRealNIC()
+		if err == nil {
+			break
+		}
+		if attempt == nicRetries {
+			adapter.Close()
+			return fmt.Errorf("failed to discover real NIC after %d attempts: %w", nicRetries, err)
+		}
+		core.Log.Warnf("Core", "Real NIC not found (attempt %d/%d), retrying in 2s: %v", attempt, nicRetries, err)
+		time.Sleep(2 * time.Second)
 	}
 
 	// === 4. Process Filter (WFP/PF) ===
@@ -175,7 +187,13 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		plat.EnsureFirewallRules()
 	}
 
-	// === 4b. Block all IPv6 traffic ===
+	// === 4b. Permit DHCP on any interface (baseline rule) ===
+	// Must be set BEFORE any block rules to prevent WiFi/DHCP breakage at boot.
+	if err := procFilter.PermitDHCP(); err != nil {
+		core.Log.Warnf("Core", "Failed to permit DHCP: %v", err)
+	}
+
+	// === 4c. Block all IPv6 traffic ===
 	if err := procFilter.BlockAllIPv6(); err != nil {
 		core.Log.Warnf("Core", "Failed to block IPv6: %v", err)
 	}
