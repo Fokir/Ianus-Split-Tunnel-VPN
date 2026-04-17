@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"time"
 
+	"sync"
+
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"google.golang.org/grpc/codes"
@@ -58,7 +60,7 @@ func main() {
 			Handler: application.AssetFileServerFS(assets),
 		},
 		Mac: application.MacOptions{
-			ActivationPolicy: application.ActivationPolicyAccessory,
+			ActivationPolicy: application.ActivationPolicyRegular,
 		},
 	})
 
@@ -79,10 +81,14 @@ func main() {
 		},
 	})
 
-	// Hide window instead of closing when the user clicks the X button.
-	mainWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-		mainWindow.Hide()
-		e.Cancel()
+	// Frameless windows are created with NSWindowStyleMaskBorderless, which
+	// omits the miniaturizable bit; without it [NSWindow miniaturize:] silently
+	// no-ops. Apply the bit once on the first WindowShow; toggling it on every
+	// show triggered an AppKit feedback loop that produced ~200 CPU wakes/sec
+	// and tripped the macOS wakes watchdog (45000/300s), killing the UI.
+	var minimiseOnce sync.Once
+	mainWindow.RegisterHook(events.Common.WindowShow, func(e *application.WindowEvent) {
+		minimiseOnce.Do(enableMinimiseStyle)
 	})
 
 	// Setup system tray.

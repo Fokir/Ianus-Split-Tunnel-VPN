@@ -17,11 +17,13 @@ func setupTray(app *application.App, mainWindow *application.WebviewWindow, bind
 	systray := app.SystemTray.New()
 	systray.SetIcon(trayIconForStatus(trayStatusGray))
 
-	// Left-click on tray icon opens the main window.
-	systray.OnClick(func() {
+	showWindow := func() {
 		mainWindow.Show()
 		mainWindow.Focus()
-	})
+	}
+
+	// Left-click on tray icon opens the main window.
+	systray.OnClick(showWindow)
 
 	menu := app.Menu.New()
 
@@ -42,8 +44,7 @@ func setupTray(app *application.App, mainWindow *application.WebviewWindow, bind
 	for _, tab := range tabItems {
 		t := tab
 		menu.Add(t.label).OnClick(func(_ *application.Context) {
-			mainWindow.Show()
-			mainWindow.Focus()
+			showWindow()
 			app.Event.Emit("navigate", t.path)
 		})
 	}

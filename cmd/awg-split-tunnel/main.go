@@ -848,6 +848,19 @@ func runVPN(configPath string, plat *platform.Platform, stopCh <-chan struct{}, 
 		}
 	}
 
+	// === 12d. Power Monitor (sleep/wake heartbeat detector) ===
+	// Detects system sleep/wake via wall-clock gap between ticks. On wake,
+	// cancels in-flight reconnect backoff and immediately forces a reconnect
+	// of all intent tunnels (after waiting for network readiness). Works on
+	// both macOS and Windows without platform-specific APIs.
+	var powerMon *platform.PowerMonitor
+	if reconnectMgr != nil && cfg.GUI.Reconnect.Enabled {
+		powerMon = platform.NewPowerMonitor(2*time.Second, 10*time.Second, func(gap time.Duration) {
+			reconnectMgr.OnSystemWake(gap)
+		})
+		powerMon.Start()
+	}
+
 	// === 13. Start gRPC IPC server for GUI communication ===
 	svc := service.New(service.Config{
 		ConfigManager:       cfgManager,
@@ -1010,6 +1023,11 @@ mainLoop:
 			gwDeactivateTimer = nil
 		}
 		gwDeactivateTimerMu.Unlock()
+
+		// Stop power monitor (before netMon since its callback touches registry).
+		if powerMon != nil {
+			powerMon.Stop()
+		}
 
 		// Stop network monitor.
 		if netMon != nil {

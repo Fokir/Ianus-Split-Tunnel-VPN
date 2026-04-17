@@ -37,8 +37,8 @@ func NewPlatform() *platform.Platform {
 			return NewNetworkMonitor(onChange)
 		},
 
-		// PreStartup: not needed — DNS is intercepted in-band (hijackDNS), so
-		// no system DNS configuration is modified and no crash recovery required.
+		// PreStartup: restore user DNS if previous daemon crashed mid-session.
+		PreStartup: recoverStaleDNSBackup,
 
 		FlushSystemDNS: flushSystemDNS,
 	}
