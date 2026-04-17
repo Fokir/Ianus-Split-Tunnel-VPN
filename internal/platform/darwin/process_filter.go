@@ -425,6 +425,13 @@ func (f *ProcessFilter) EnableKillSwitch(tunIfName string, vpnEndpoints []netip.
 		fmt.Fprintf(&rules, "pass out quick proto udp to %s\n", ep.String())
 		fmt.Fprintf(&rules, "pass out quick proto tcp to %s\n", ep.String())
 	}
+	// Allow DHCP so WiFi can obtain/renew IP after sleep/wake.
+	// DHCPv4: client port 68 ↔ server port 67.
+	rules.WriteString("pass out quick proto udp from any port 68 to any port 67\n")
+	rules.WriteString("pass in quick proto udp from any port 67 to any port 68\n")
+	// DHCPv6: client port 546 ↔ server port 547.
+	rules.WriteString("pass out quick inet6 proto udp from any port 546 to any port 547\n")
+	rules.WriteString("pass in quick inet6 proto udp from any port 547 to any port 546\n")
 	// Block everything else.
 	rules.WriteString("block drop out quick all\n")
 	rules.WriteString("block drop in quick all\n")
